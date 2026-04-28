@@ -1,0 +1,49 @@
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+.env
+*.egg-info/
+
+# ── Node.js ───────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ── WhatsApp session credentials (NEVER commit) ───
+whatsapp/auth/
+whatsapp/sessions/
+whatsapp/baileys_store.json
+
+# ── AI model weights (too large for GitHub) ───────
+ai/classifier/model/
+ai/classifier/runs/
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+
+# ── Dataset (may contain private messages) ────────
+ai/dataset/*.xlsx
+ai/dataset/*.csv
+
+# ── Environment / secrets ─────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── OS junk ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE files ─────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
