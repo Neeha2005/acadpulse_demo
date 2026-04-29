@@ -12,11 +12,16 @@ env/
 node_modules/
 npm-debug.log*
 yarn-error.log*
+frontend/dist/
 
 # ── WhatsApp session credentials (NEVER commit) ───
 whatsapp/auth/
+whatsapp/auth_info/
+whatsapp/queue/
 whatsapp/sessions/
 whatsapp/baileys_store.json
+whatsapp/selected_groups.json
+whatsapp/*.log
 
 # ── AI model weights (too large for GitHub) ───────
 ai/classifier/model/
