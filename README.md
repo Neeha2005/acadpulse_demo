@@ -8,6 +8,7 @@ Gmail, and Google Classroom into one place.
 - **Backend:** FastAPI (Python)
 - **WhatsApp:** Node.js + Baileys
 - **AI:** XLM-RoBERTa (classifier) + Groq LLaMA (deadline extraction, chatbot)
+- **Google integration:** Gmail and Classroom APIs
 - **Database:** PostgreSQL
 
 ## Structure
