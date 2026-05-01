@@ -1,2 +1,9 @@
-# Examples 1:
-(empty — output nothing)
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Dependencies
+venv/
+.venv/
+```

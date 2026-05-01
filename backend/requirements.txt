@@ -7,3 +7,5 @@ groq>=0.13,<1.0
 python-dotenv>=1.0,<2.0
 psycopg2-binary>=2.9.9
 beautifulsoup4>=4.12.3
+rapidfuzz>=3.13.0
+dateparser>=1.4.0
