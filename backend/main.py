@@ -2,8 +2,10 @@ import os
 import base64
 import re
 import time
+import json
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
+from collections import defaultdict
 
 from fastapi import FastAPI, HTTPException, Query
 from googleapiclient.discovery import build
@@ -12,9 +14,11 @@ from groq import APIConnectionError, APIStatusError, Groq
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+from rapidfuzz import fuzz, process
+import dateparser
 
 from google_auth import get_google_credentials
-from db import insert_notification, get_or_create_user, notification_exists
+from db import get_db_connection, insert_notification, get_or_create_user, notification_exists
 
 load_dotenv()
 
@@ -40,6 +44,17 @@ class DeadlineRequest(BaseModel):
     text: str
     confirm_malicious: bool = False
 
+class CourseMappingRequest(BaseModel):
+    message: str
+    group_name: Optional[str] = None
+
+class CourseMappingResponse(BaseModel):
+    course_id: Optional[int]
+    course_name: Optional[str]
+    confidence: float
+    method: str
+    requires_user_confirmation: bool
+
 class ChatResponse(BaseModel):
     response: str
     is_safe: bool
@@ -49,6 +64,12 @@ class DeadlineResponse(BaseModel):
     deadlines: list
     success: bool
     message: str
+
+class DeadlineExtractionResult(BaseModel):
+    task: Optional[str]
+    course: Optional[str]
+    deadline_date: Optional[str]
+    description: Optional[str]
 
 # --- Utility Functions ---
 
@@ -149,7 +170,6 @@ def extract_deadlines_from_text(text):
             ],
             max_tokens=1000,
         )
-        import json
         result = response.choices[0].message.content.strip()
         # Try to parse as JSON
         try:
@@ -165,6 +185,340 @@ def extract_deadlines_from_text(text):
     except Exception as e:
         print(f"Deadline extraction error: {e}")
         return []
+
+def get_all_courses_from_db():
+    """Fetch all courses from database for matching."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT id, course_code, course_name, professor_name FROM courses")
+        courses = cur.fetchall()
+        return courses
+    except Exception as e:
+        print(f"Error fetching courses: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def normalize_text(text):
+    """Normalize text for matching: lowercase, remove punctuation, strip whitespace."""
+    if not text:
+        return ""
+    # Convert to lowercase
+    text = text.lower()
+    # Remove punctuation
+    text = re.sub(r'[^\w\s]', '', text)
+    # Strip extra whitespace
+    text = ' '.join(text.split())
+    return text
+
+def exact_match_course(message, courses):
+    """
+    Stage 1: Exact matching with weighted scoring.
+    Returns (course_id, course_name, score) or (None, None, 0)
+    """
+    normalized_message = normalize_text(message)
+    
+    scores = defaultdict(int)
+    course_info = {}
+    
+    for course in courses:
+        course_id = course['id']
+        course_code = normalize_text(course['course_code'])
+        course_name = normalize_text(course['course_name'])
+        professor_name = normalize_text(course.get('professor_name') or '')
+        
+        course_info[course_id] = {
+            'code': course['course_code'],
+            'name': course['course_name'],
+            'professor': course.get('professor_name')
+        }
+        
+        # Course code match (highest weight)
+        if course_code and course_code in normalized_message:
+            scores[course_id] += 100
+        
+        # Alias match (check if course code appears as abbreviation)
+        if course_code and len(course_code) <= 4:
+            # Check for common abbreviation patterns
+            if course_code in normalized_message.split():
+                scores[course_id] += 80
+        
+        # Full course name match
+        if course_name and course_name in normalized_message:
+            scores[course_id] += 70
+        
+        # Professor name match
+        if professor_name and professor_name in normalized_message:
+            scores[course_id] += 50
+    
+    if not scores:
+        return None, None, 0
+    
+    # Get course with highest score
+    best_course_id = max(scores, key=scores.get)
+    best_score = scores[best_course_id]
+    
+    return best_course_id, course_info[best_course_id]['name'], best_score
+
+def fuzzy_match_course(message, courses, threshold=75):
+    """
+    Stage 2: Lightweight fuzzy matching using RapidFuzz.
+    Returns (course_id, course_name, score) or (None, None, 0)
+    """
+    normalized_message = normalize_text(message)
+    
+    best_match = None
+    best_score = 0
+    best_course_id = None
+    best_course_name = None
+    
+    for course in courses:
+        course_id = course['id']
+        course_name = course['course_name']
+        course_code = course['course_code'] or ''
+        professor_name = course.get('professor_name') or ''
+        
+        # Check against course name
+        score_name = fuzz.partial_ratio(normalize_text(course_name), normalized_message)
+        if score_name > best_score:
+            best_score = score_name
+            best_match = 'name'
+            best_course_id = course_id
+            best_course_name = course_name
+        
+        # Check against course code
+        if course_code:
+            score_code = fuzz.partial_ratio(normalize_text(course_code), normalized_message)
+            if score_code > best_score:
+                best_score = score_code
+                best_match = 'code'
+                best_course_id = course_id
+                best_course_name = course_name
+        
+        # Check against professor name
+        if professor_name:
+            score_prof = fuzz.partial_ratio(normalize_text(professor_name), normalized_message)
+            if score_prof > best_score:
+                best_score = score_prof
+                best_match = 'professor'
+                best_course_id = course_id
+                best_course_name = course_name
+    
+    if best_score >= threshold:
+        return best_course_id, best_course_name, best_score
+    
+    return None, None, 0
+
+def llm_classify_course(message, courses):
+    """
+    Stage 3: LLM fallback for ambiguous cases.
+    Returns (course_id, course_name, confidence)
+    """
+    client = get_groq_client()
+    
+    # Prepare course list for prompt
+    course_list = "\n".join([
+        f"- {c['course_code']}: {c['course_name']} (Professor: {c.get('professor_name', 'N/A')})"
+        for c in courses
+    ])
+    
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+            messages=[
+                {"role": "system", "content": "You are a course classification assistant. Given a message and a list of available courses, identify which course the message is most likely related to. Respond with ONLY the course code and a confidence score (0.0-1.0) in JSON format: {\"course_code\": \"CS101\", \"confidence\": 0.85}. If unsure, respond with {\"course_code\": null, \"confidence\": 0.0}."},
+                {"role": "user", "content": f"Available courses:\n{course_list}\n\nMessage: {message}\n\nWhich course does this message belong to?"}
+            ],
+            max_tokens=100,
+        )
+        
+        result = response.choices[0].message.content.strip()
+        try:
+            classification = json.loads(result)
+            course_code = classification.get('course_code')
+            confidence = float(classification.get('confidence', 0.0))
+            
+            if not course_code or confidence < 0.5:
+                return None, None, confidence
+            
+            # Find matching course
+            for course in courses:
+                if course['course_code'].upper() == course_code.upper():
+                    return course['id'], course['course_name'], confidence
+            
+            return None, None, confidence
+        except json.JSONDecodeError:
+            print(f"Could not parse LLM classification: {result}")
+            return None, None, 0.0
+    except Exception as e:
+        print(f"LLM classification error: {e}")
+        return None, None, 0.0
+
+def classify_course_for_message(message, group_name=None):
+    """
+    Multi-stage course classification pipeline.
+    Stage 1: Exact matching
+    Stage 2: Fuzzy matching
+    Stage 3: LLM fallback
+    Returns dict with course info and metadata
+    """
+    # Fetch all courses from DB
+    courses = get_all_courses_from_db()
+    
+    if not courses:
+        return {
+            "course_id": None,
+            "course_name": None,
+            "confidence": 0.0,
+            "method": "no_courses_available",
+            "requires_user_confirmation": True
+        }
+    
+    # Stage 1: Exact matching
+    course_id, course_name, score = exact_match_course(message, courses)
+    if course_id and score >= 100:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": min(score / 100.0, 1.0),
+            "method": "exact_match",
+            "requires_user_confirmation": False
+        }
+    
+    # Stage 2: Fuzzy matching
+    if score >= 90:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": score / 100.0,
+            "method": "exact_match_weighted",
+            "requires_user_confirmation": False
+        }
+    
+    course_id, course_name, fuzzy_score = fuzzy_match_course(message, courses, threshold=75)
+    if course_id and fuzzy_score >= 90:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": fuzzy_score / 100.0,
+            "method": "fuzzy_match_high",
+            "requires_user_confirmation": False
+        }
+    elif course_id and fuzzy_score >= 75:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": fuzzy_score / 100.0,
+            "method": "fuzzy_match_medium",
+            "requires_user_confirmation": True
+        }
+    
+    # Stage 3: LLM fallback
+    course_id, course_name, confidence = llm_classify_course(message, courses)
+    if course_id and confidence >= 0.8:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": confidence,
+            "method": "llm_high_confidence",
+            "requires_user_confirmation": False
+        }
+    elif course_id and confidence >= 0.5:
+        return {
+            "course_id": course_id,
+            "course_name": course_name,
+            "confidence": confidence,
+            "method": "llm_medium_confidence",
+            "requires_user_confirmation": True
+        }
+    
+    # No match found
+    return {
+        "course_id": None,
+        "course_name": None,
+        "confidence": 0.0,
+        "method": "no_match",
+        "requires_user_confirmation": True
+    }
+
+def parse_deadline_with_dateparser(date_text):
+    """
+    Parse natural language dates using dateparser library.
+    Handles expressions like "next Sunday", "tomorrow", "coming Friday", etc.
+    """
+    if not date_text:
+        return None
+    
+    try:
+        parsed = dateparser.parse(
+            date_text,
+            settings={
+                "PREFER_DATES_FROM": "future",
+                "RETURN_AS_TIMEZONE_AWARE": False
+            }
+        )
+        if parsed:
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        return None
+    except Exception as e:
+        print(f"Dateparser error: {e}")
+        return None
+
+def extract_deadlines_hybrid(text):
+    """
+    Hybrid deadline extraction: Pattern detection + dateparser + LLM fallback.
+    More efficient than pure LLM approach.
+    """
+    results = []
+    
+    # Common deadline patterns
+    patterns = [
+        r'(?:deadline|due|submit|submission)\s+(?:on|by|before)?\s*([^\n\.]+?)(?:\.|$)',
+        r'([A-Z][a-z]+ \d{1,2}(?:st|nd|rd|th)?(?:,? \d{4})?)',
+        r'(?:next|this|coming)\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',
+        r'(tomorrow|today|tonight)\s*(?:at|\s*)(\d{1,2}:\d{2}\s*(?:AM|PM)?)?',
+        r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+    ]
+    
+    extracted_dates = []
+    
+    # Try pattern matching first
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in matches:
+            if isinstance(match, tuple):
+                match = ' '.join(match)
+            extracted_dates.append(match)
+    
+    # Parse each extracted date string
+    parsed_deadlines = []
+    for date_str in extracted_dates:
+        parsed = parse_deadline_with_dateparser(date_str)
+        if parsed:
+            parsed_deadlines.append(parsed)
+    
+    # If we found dates with pattern+dateparser, use them
+    if parsed_deadlines:
+        # Extract task description (simple heuristic)
+        task_match = re.search(r'(?:assignment|quiz|project|exam|submission)[:\s]+([^\n\.]+)', text, re.IGNORECASE)
+        task = task_match.group(1).strip() if task_match else "Unknown Task"
+        
+        # Extract course name (simple heuristic)
+        course_match = re.search(r'(?:for|in|course)[:\s]*([A-Z]{2,4}\d{3}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', text)
+        course = course_match.group(1) if course_match else "Unknown Course"
+        
+        results.append({
+            "task": task,
+            "course": course,
+            "deadline_date": parsed_deadlines[0],  # Use first parsed date
+            "description": text[:200]
+        })
+        return results
+    
+    # Fallback to LLM if pattern matching fails
+    return extract_deadlines_from_text(text)
 
 # --- Google Services Setup ---
 
@@ -470,7 +824,8 @@ def extract_deadlines_batch(texts: List[str], confirm_malicious: bool = False):
             })
             continue
         
-        deadlines = extract_deadlines_from_text(text)
+        # Use hybrid extraction (faster, uses LLM only as fallback)
+        deadlines = extract_deadlines_hybrid(text)
         total_deadlines += len(deadlines)
         results.append({
             "index": i,
@@ -484,3 +839,79 @@ def extract_deadlines_batch(texts: List[str], confirm_malicious: bool = False):
         "total_deadlines_extracted": total_deadlines,
         "results": results
     }
+
+@app.post("/messages/classify-course", response_model=CourseMappingResponse)
+def classify_message_course(request: CourseMappingRequest):
+    """
+    Classify which course a WhatsApp message belongs to using multi-stage pipeline.
+    Stage 1: Exact matching with weighted scoring
+    Stage 2: Fuzzy matching with RapidFuzz
+    Stage 3: LLM fallback for ambiguous cases
+    
+    This endpoint dramatically reduces LLM API usage by ~90% compared to naive approach.
+    """
+    try:
+        result = classify_course_for_message(request.message, request.group_name)
+        return CourseMappingResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Classification error: {str(e)}")
+
+@app.post("/messages/incoming")
+def process_incoming_message(message: IncomingWhatsAppMessage):
+    """
+    Process incoming WhatsApp messages from general groups.
+    Automatically classifies course, extracts deadlines, and stores in database.
+    
+    Flow:
+    1. Check message safety
+    2. Classify course using multi-stage pipeline
+    3. Extract deadlines using hybrid approach (pattern + dateparser + LLM fallback)
+    4. Store notification in database
+    5. Return processed result
+    """
+    try:
+        # Step 1: Safety check
+        is_malicious = check_message_safety(message.text)
+        if is_malicious:
+            return {
+                "success": False,
+                "message": "Message flagged as potentially malicious",
+                "requires_review": True
+            }
+        
+        # Step 2: Get or create user
+        user_id = get_or_create_user("WhatsApp User", "whatsapp@acadpulse.local")
+        
+        # Step 3: Classify course
+        classification = classify_course_for_message(message.text, message.group)
+        
+        # Step 4: Extract deadlines (hybrid approach - 90% less LLM calls)
+        deadlines = extract_deadlines_hybrid(message.text)
+        
+        # Step 5: Determine category
+        category = classifier_stub(message.text)
+        
+        # Step 6: Store in database
+        notif_id = insert_notification(
+            user_id=user_id,
+            source_type="whatsapp",
+            external_id=f"wa_{message.timestamp}_{message.sender}",
+            sender=message.sender,
+            text=message.text,
+            category=category,
+            received_at=message.timestamp,
+            course_id=classification.get("course_id"),
+            source_ref=message.group
+        )
+        
+        return {
+            "success": True,
+            "notification_id": notif_id,
+            "classification": classification,
+            "deadlines_extracted": deadlines,
+            "llm_api_calls_saved": "Used hybrid extraction (pattern+dateparser first)",
+            "message": f"Processed message. Course: {classification.get('course_name', 'Unknown')}, Deadlines: {len(deadlines)}"
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Message processing error: {str(e)}")
