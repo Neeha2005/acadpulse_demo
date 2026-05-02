@@ -13,6 +13,7 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name TEXT NOT NULL,
     email TEXT UNIQUE,
+    password_hash TEXT,
     whatsapp_number TEXT,
     gmail_connected BOOLEAN NOT NULL DEFAULT FALSE,
     classroom_connected BOOLEAN NOT NULL DEFAULT FALSE,

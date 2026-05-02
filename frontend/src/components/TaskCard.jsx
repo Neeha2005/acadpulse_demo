@@ -2,20 +2,20 @@ import { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function TaskCard({ task }) {
-  const { removeTask } = useAppContext();
+  const { completeTask } = useAppContext();
   const [completeState, setCompleteState] = useState('idle');
   
-  const handleComplete = (e) => {
+  const handleComplete = async (e) => {
     e.stopPropagation();
     setCompleteState('syncing');
-    console.log(`[API MOCK TETHER] PUT backend.com/api/tasks/${task.id}/complete`);
-    
-    setTimeout(() => {
+
+    try {
+      await completeTask(task);
       setCompleteState('fade');
-      setTimeout(() => {
-        removeTask(task.id);
-      }, 300);
-    }, 800);
+    } catch (error) {
+      console.error('Failed to complete task:', error);
+      setCompleteState('idle');
+    }
   };
 
   let iconFormat = task.source === 'gmail' || task.source === 'manual' ? 'fa-solid' : 'fa-brands';

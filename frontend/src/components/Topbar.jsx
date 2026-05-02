@@ -17,8 +17,8 @@ export default function Topbar({ onOpenAddTask }) {
   }
 
   return (
-    <div className="topbar">
-      <div className="search-wrap">
+    <div className="topbar glass-topbar">
+      <div className="search-wrap glass-input-wrap">
         <i className="fa-solid fa-search"></i>
         <input 
             type="text" 
@@ -29,12 +29,12 @@ export default function Topbar({ onOpenAddTask }) {
         <SearchDropdown query={searchQuery} onSelect={() => setSearchQuery('')} />
       </div>
       <div className="topbar-actions">
-        <button className="icon-btn" title="Sync integrations" onClick={reloadSync} disabled={isSyncing}>
+        <button className="icon-btn glass-icon-btn" title="Sync integrations" onClick={reloadSync} disabled={isSyncing}>
           <i className={`fa-solid fa-rotate-right ${isSyncing ? 'fa-spin text-primary' : ''}`}></i>
         </button>
         <div className="topbar-wrapper">
           <button 
-             className={`icon-btn ${notifications.length > 0 ? 'active-notif' : ''}`} 
+             className={`icon-btn glass-icon-btn ${notifications.length > 0 ? 'active-notif' : ''}`} 
              title="Notifications" 
              onClick={() => setShowNotifs(!showNotifs)}
           >
@@ -45,13 +45,13 @@ export default function Topbar({ onOpenAddTask }) {
           <div className={`notif-dropdown ${showNotifs ? 'show' : ''}`}>
              <div className="notif-drop-header">
                 <h3>Notifications</h3>
-                <span className="badge" style={{background: 'var(--primary-subtle)', color: 'var(--primary)'}}>{notifications.length} New</span>
+                <span className="badge badge-muted">{notifications.length} New</span>
              </div>
              <div className="notif-drop-list">
                 {notifications.map(n => (
                    <div className="notif-drop-item" key={n.id}>
                       <div className={`nd-icon text-${n.source}`} style={{background: `var(--${n.source}-subtle)`}}>
-                         <i className={`fa-brands ${n.icon}`}></i>
+                         <i className={`${n.iconFamily || 'fa-brands'} ${n.icon}`}></i>
                       </div>
                       <div className="nd-content">
                          <h4>{n.sender}</h4>
@@ -63,7 +63,7 @@ export default function Topbar({ onOpenAddTask }) {
              </div>
           </div>
         </div>
-        <button className="btn btn-primary" style={{marginLeft: 8}} onClick={onOpenAddTask}>
+        <button className="btn btn-primary topbar-cta" onClick={onOpenAddTask}>
             <i className="fa-solid fa-plus"></i> Add Manual Task
         </button>
       </div>

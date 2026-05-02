@@ -13,3 +13,5 @@ rapidfuzz>=2.16.1
 rapidfuzz>=3.13.0
 dateparser>=1.4.0
 pytz>=2024.1
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.1.3

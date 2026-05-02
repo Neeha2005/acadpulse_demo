@@ -2,17 +2,19 @@ import React, { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function TaskDetailsModal({ task, onClose }) {
-  const { removeTask } = useAppContext();
+  const { completeTask } = useAppContext();
   const [status, setStatus] = useState('idle');
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
     setStatus('saving');
-    console.log(`[API MOCK TETHER] PUT backend.com/api/tasks/${task.id}/complete`);
-    setTimeout(() => {
-        removeTask(task.id);
-        setStatus('idle');
-        onClose();
-    }, 800);
+    try {
+      await completeTask(task);
+      setStatus('idle');
+      onClose();
+    } catch (error) {
+      console.error('Failed to complete task:', error);
+      setStatus('idle');
+    }
   };
 
   return (

@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AcadPulse — 10-Day Live Plan</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #0d0f14;
+    --surface:   #13161e;
+    --surface2:  #1a1e29;
+    --border:    rgba(255,255,255,0.07);
+    --accent:    #6c63ff;
+    --accent3:   #43e8b0;
+    --text:      #e8eaf0;
+    --muted:     #7a7f94;
+    --faint:     rgba(255,255,255,0.04);
+
+    --cat-found: #4e9fff; --cat-found-bg: rgba(78,159,255,0.12);
+    --cat-wa:    #4cca7a; --cat-wa-bg:    rgba(76,202,122,0.12);
+    --cat-ai:    #a78bfa; --cat-ai-bg:    rgba(167,139,250,0.12);
+    --cat-llm:   #f59e0b; --cat-llm-bg:   rgba(245,158,11,0.12);
+    --cat-urg:   #f87171; --cat-urg-bg:   rgba(248,113,113,0.12);
+    --cat-gmail: #e879a0; --cat-gmail-bg: rgba(232,121,160,0.12);
+    --cat-ui:    #34d399; --cat-ui-bg:    rgba(52,211,153,0.12);
+    --cat-map:   #fb923c; --cat-map-bg:   rgba(251,146,60,0.12);
+    --cat-notif: #94a3b8; --cat-notif-bg: rgba(148,163,184,0.12);
+    --cat-chat:  #818cf8; --cat-chat-bg:  rgba(129,140,248,0.12);
+    --cat-onb:   #86efac; --cat-onb-bg:   rgba(134,239,172,0.12);
+    --cat-pol:   #fca5a5; --cat-pol-bg:   rgba(252,165,165,0.12);
+    --cat-all:   #fcd34d; --cat-all-bg:   rgba(252,211,77,0.12);
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family:'DM Mono',monospace; background:var(--bg); color:var(--text); min-height:100vh; padding:0 0 80px; }
+
+  /* ── Identity overlay ── */
+  #identity-screen { position:fixed;inset:0;z-index:999;background:var(--bg);display:flex;align-items:center;justify-content:center; }
+  .id-box { background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:40px 36px;text-align:center;max-width:340px;width:90%; }
+  .id-logo { font-family:'Syne',sans-serif;font-size:24px;font-weight:800;color:#fff;margin-bottom:6px; }
+  .id-logo span { color:var(--accent); }
+  .id-sub { font-size:12px;color:var(--muted);margin-bottom:28px;line-height:1.6; }
+  .id-label { font-size:10px;color:var(--muted);margin-bottom:12px;letter-spacing:1.5px;text-transform:uppercase; }
+  .id-btns { display:flex;gap:10px;justify-content:center; }
+  .id-btn { width:76px;height:76px;border-radius:16px;border:2px solid var(--border);background:var(--surface2);cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;transition:all 0.2s;font-family:inherit; }
+  .id-btn:hover { transform:translateY(-4px); }
+  .id-btn.av-A:hover { background:rgba(108,99,255,0.2);border-color:#a78bfa; }
+  .id-btn.av-B:hover { background:rgba(67,232,176,0.15);border-color:var(--accent3); }
+  .id-btn.av-C:hover { background:rgba(248,113,113,0.15);border-color:#f87171; }
+  .id-av-big { width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:16px;font-weight:800; }
+  .av-A .id-av-big { background:rgba(108,99,255,0.2);color:#a78bfa; }
+  .av-B .id-av-big { background:rgba(67,232,176,0.15);color:var(--accent3); }
+  .av-C .id-av-big { background:rgba(248,113,113,0.15);color:#f87171; }
+  .id-name { font-size:10px;color:var(--muted); }
+
+  /* ── Header ── */
+  .header { position:sticky;top:0;z-index:100;background:rgba(13,15,20,0.9);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);padding:13px 24px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap; }
+  .header-left { display:flex;align-items:center;gap:10px; }
+  .logo { font-family:'Syne',sans-serif;font-weight:800;font-size:18px;letter-spacing:-0.5px;color:#fff; }
+  .logo span { color:var(--accent); }
+  .badge { font-size:10px;font-weight:500;background:var(--accent);color:#fff;padding:2px 8px;border-radius:20px; }
+  .live-pill { display:flex;align-items:center;gap:5px;font-size:10px;color:var(--accent3);background:rgba(67,232,176,0.1);border:1px solid rgba(67,232,176,0.25);border-radius:20px;padding:3px 9px; }
+  .live-dot { width:6px;height:6px;border-radius:50%;background:var(--accent3);animation:pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+  .me-pill { display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer;padding:4px 10px;border:1px solid var(--border);border-radius:20px;transition:all 0.15s; }
+  .me-pill:hover { border-color:rgba(108,99,255,0.4);color:var(--text); }
+  .me-av { width:18px;height:18px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;font-family:'Syne',sans-serif; }
+  .me-av.av-A { background:rgba(108,99,255,0.2);color:#a78bfa; }
+  .me-av.av-B { background:rgba(67,232,176,0.15);color:var(--accent3); }
+  .me-av.av-C { background:rgba(248,113,113,0.15);color:#f87171; }
+  .header-right { display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+  .progress-wrap { display:flex;align-items:center;gap:9px; }
+  .progress-bar-outer { width:120px;height:4px;background:var(--surface2);border-radius:4px;overflow:hidden; }
+  .progress-bar-inner { height:100%;background:linear-gradient(90deg,var(--accent),var(--accent3));border-radius:4px;transition:width 0.4s ease; }
+  .progress-label { font-size:11px;color:var(--muted);min-width:50px;text-align:right; }
+
+  /* ── Online bar ── */
+  .online-bar { padding:0 28px 14px;display:flex;align-items:center;gap:10px; }
+  .online-label { font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px; }
+  .online-avatars { display:flex;gap:6px; }
+  .online-av-wrap { position:relative; }
+  .online-av { width:28px;height:28px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:11px;font-weight:700;border:2px solid transparent;transition:all 0.3s;opacity:0.25; }
+  .online-av.active { opacity:1; }
+  .online-av.av-A { background:rgba(108,99,255,0.2);color:#a78bfa;border-color:rgba(167,139,250,0.4); }
+  .online-av.av-B { background:rgba(67,232,176,0.15);color:var(--accent3);border-color:rgba(67,232,176,0.4); }
+  .online-av.av-C { background:rgba(248,113,113,0.15);color:#f87171;border-color:rgba(248,113,113,0.4); }
+  .online-pip { position:absolute;bottom:-2px;right:-2px;width:8px;height:8px;border-radius:50%;background:var(--accent3);border:2px solid var(--bg);display:none; }
+
+  /* ── Toast ── */
+  #toast-area { position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;pointer-events:none; }
+  .toast { background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:11px;color:var(--text);display:flex;align-items:center;gap:8px;animation:slideIn 0.25s ease;max-width:290px;box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+  .toast.fade-out { animation:fadeOut 0.3s ease forwards; }
+  @keyframes slideIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes fadeOut { to{opacity:0;transform:translateX(10px)} }
+  .toast-av { width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:'Syne',sans-serif;flex-shrink:0; }
+
+  /* ── Hero ── */
+  .hero { padding:36px 28px 22px;position:relative;overflow:hidden; }
+  .hero::before { content:'';position:absolute;inset:0;background:radial-gradient(ellipse 60% 80% at 80% 50%,rgba(108,99,255,0.12) 0%,transparent 70%),radial-gradient(ellipse 40% 60% at 10% 80%,rgba(67,232,176,0.07) 0%,transparent 60%);pointer-events:none; }
+  .hero-title { font-family:'Syne',sans-serif;font-size:clamp(26px,4vw,40px);font-weight:800;line-height:1.05;letter-spacing:-1.5px;margin-bottom:8px; }
+  .hero-title .dim { color:var(--muted); }
+  .hero-sub { font-size:12px;color:var(--muted);max-width:420px;line-height:1.7; }
+
+  /* ── Stats ── */
+  .stats-row { display:flex;gap:10px;padding:0 28px 24px;flex-wrap:wrap; }
+  .stat-card { background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 18px;flex:1;min-width:88px;position:relative;overflow:hidden; }
+  .stat-card::after { content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),var(--accent3));opacity:0.6; }
+  .stat-n { font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#fff; }
+  .stat-l { font-size:10px;color:var(--muted);margin-top:3px; }
+
+  /* ── Phase header ── */
+  .phase-header { padding:8px 28px 10px;font-family:'Syne',sans-serif;font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:10px; }
+  .phase-header::after { content:'';flex:1;height:1px;background:var(--border); }
+
+  /* ── Day cards ── */
+  .days-wrap { padding:0 28px;display:flex;flex-direction:column;gap:10px; }
+  .day-card { background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;transition:border-color 0.2s; }
+  .day-card:hover { border-color:rgba(108,99,255,0.3); }
+  .day-card.done { border-color:rgba(67,232,176,0.25); }
+  .day-header { display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;user-select:none; }
+  .day-num { font-family:'Syne',sans-serif;font-size:10px;font-weight:700;color:var(--accent);background:rgba(108,99,255,0.12);border:1px solid rgba(108,99,255,0.25);border-radius:7px;padding:3px 9px;white-space:nowrap; }
+  .day-card.done .day-num { background:rgba(67,232,176,0.12);border-color:rgba(67,232,176,0.3);color:var(--accent3); }
+  .day-note { font-size:12px;color:var(--text);opacity:0.85; }
+  .day-progress-mini { display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);white-space:nowrap; }
+  .mini-dots { display:flex;gap:3px;flex-wrap:wrap;max-width:72px; }
+  .mini-dot { width:6px;height:6px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);transition:all 0.2s; }
+  .mini-dot.checked { background:var(--accent3);border-color:var(--accent3); }
+  .chevron { font-size:11px;color:var(--muted);transition:transform 0.25s ease; }
+  .day-card.open .chevron { transform:rotate(90deg); }
+
+  /* ── Day body ── */
+  .day-body { display:none;border-top:1px solid var(--border); }
+  .day-card.open .day-body { display:block; }
+  .member-section { display:grid;grid-template-columns:44px 1fr;border-bottom:1px solid var(--border); }
+  .member-section:last-of-type { border-bottom:none; }
+  .member-col { display:flex;align-items:flex-start;justify-content:center;padding:13px 0;border-right:1px solid var(--border); }
+  .avatar { width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;flex-shrink:0; }
+  .av-A { background:rgba(108,99,255,0.2);color:#a78bfa;border:1px solid rgba(167,139,250,0.3); }
+  .av-B { background:rgba(67,232,176,0.15);color:var(--accent3);border:1px solid rgba(67,232,176,0.3); }
+  .av-C { background:rgba(248,113,113,0.15);color:#f87171;border:1px solid rgba(248,113,113,0.3); }
+  .tasks-col { padding:10px 14px;display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start; }
+
+  /* ── Task chips ── */
+  .task-chip { display:inline-flex;align-items:center;gap:5px;padding:5px 10px 5px 6px;border-radius:8px;font-size:11px;cursor:pointer;border:1px solid transparent;transition:all 0.18s; }
+  .task-chip:hover { transform:translateY(-1px);filter:brightness(1.12); }
+  .task-chip.checked { opacity:0.38;text-decoration:line-through; }
+  .task-chip.remote-flash { animation:remoteFlash 0.8s ease; }
+  @keyframes remoteFlash { 0%{box-shadow:0 0 0 4px rgba(67,232,176,0.5)} 100%{box-shadow:none} }
+  .chip-check { width:14px;height:14px;border-radius:4px;border:1.5px solid currentColor;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px;opacity:0.6;transition:all 0.15s; }
+  .task-chip.checked .chip-check { background:currentColor;opacity:1; }
+  .chip-tick { display:none;color:var(--surface);font-weight:900; }
+  .task-chip.checked .chip-tick { display:block; }
+  .chip-id { opacity:0.45;font-size:10px; }
+
+  .tc-found  { background:var(--cat-found-bg);color:var(--cat-found);border-color:rgba(78,159,255,0.2); }
+  .tc-wa     { background:var(--cat-wa-bg);color:var(--cat-wa);border-color:rgba(76,202,122,0.2); }
+  .tc-ai     { background:var(--cat-ai-bg);color:var(--cat-ai);border-color:rgba(167,139,250,0.2); }
+  .tc-llm    { background:var(--cat-llm-bg);color:var(--cat-llm);border-color:rgba(245,158,11,0.2); }
+  .tc-urg    { background:var(--cat-urg-bg);color:var(--cat-urg);border-color:rgba(248,113,113,0.2); }
+  .tc-gmail  { background:var(--cat-gmail-bg);color:var(--cat-gmail);border-color:rgba(232,121,160,0.2); }
+  .tc-ui     { background:var(--cat-ui-bg);color:var(--cat-ui);border-color:rgba(52,211,153,0.2); }
+  .tc-map    { background:var(--cat-map-bg);color:var(--cat-map);border-color:rgba(251,146,60,0.2); }
+  .tc-notif  { background:var(--cat-notif-bg);color:var(--cat-notif);border-color:rgba(148,163,184,0.2); }
+  .tc-chat   { background:var(--cat-chat-bg);color:var(--cat-chat);border-color:rgba(129,140,248,0.2); }
+  .tc-onb    { background:var(--cat-onb-bg);color:var(--cat-onb);border-color:rgba(134,239,172,0.2); }
+  .tc-pol    { background:var(--cat-pol-bg);color:var(--cat-pol);border-color:rgba(252,165,165,0.2); }
+  .tc-all    { background:var(--cat-all-bg);color:var(--cat-all);border-color:rgba(252,211,77,0.2); }
+
+  .dep-note { padding:9px 14px 10px 60px;font-size:11px;color:var(--muted);font-style:italic;line-height:1.6;border-top:1px solid var(--border);background:var(--faint); }
+  .legend { display:flex;flex-wrap:wrap;gap:5px 12px;padding:0 28px 18px; }
+  .leg-item { display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted); }
+  .leg-dot { width:7px;height:7px;border-radius:3px; }
+  .warn-banner { margin:0 28px 18px;background:rgba(252,211,77,0.07);border:1px solid rgba(252,211,77,0.2);border-radius:12px;padding:9px 14px;font-size:11px;color:#fcd34d;line-height:1.6; }
+  .phase-gap { height:18px; }
+  ::-webkit-scrollbar { width:5px; }
+  ::-webkit-scrollbar-track { background:var(--bg); }
+  ::-webkit-scrollbar-thumb { background:var(--surface2);border-radius:3px; }
+</style>
+</head>
+<body>
+
+<!-- Identity overlay -->
+<div id="identity-screen">
+  <div class="id-box">
+    <div class="id-logo">Acad<span>Pulse</span></div>
+    <p class="id-sub">Live collaborative task tracker.<br>Changes sync to all members in real-time.</p>
+    <div class="id-label">Who are you?</div>
+    <div class="id-btns">
+      <button class="id-btn av-A" onclick="selectMember('A')">
+        <div class="id-av-big">A</div>
+        <div class="id-name">Member A</div>
+      </button>
+      <button class="id-btn av-B" onclick="selectMember('B')">
+        <div class="id-av-big">B</div>
+        <div class="id-name">Member B</div>
+      </button>
+      <button class="id-btn av-C" onclick="selectMember('C')">
+        <div class="id-av-big">C</div>
+        <div class="id-name">Member C</div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="main-app" style="display:none">
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">Acad<span>Pulse</span></div>
+      <div class="badge">10-DAY SPRINT</div>
+      <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+    </div>
+    <div class="header-right">
+      <div class="me-pill" onclick="resetMember()" title="Switch member">
+        <div class="me-av" id="me-av-header"></div>
+        <span id="me-label-header">Me</span>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar-outer"><div class="progress-bar-inner" id="globalBar" style="width:0%"></div></div>
+        <div class="progress-label" id="globalLabel">0 / 0</div>
+      </div>
+    </div>
+  </header>
+
+  <section class="hero">
+    <h1 class="hero-title">Build Plan<br><span class="dim">10 Days.</span></h1>
+    <p class="hero-sub">Tick a task and your teammates see it instantly — updates sync every 4 seconds across all three members.</p>
+  </section>
+
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-n">10</div><div class="stat-l">days total</div></div>
+    <div class="stat-card"><div class="stat-n" id="totalTasksStat">—</div><div class="stat-l">tasks</div></div>
+    <div class="stat-card"><div class="stat-n">3</div><div class="stat-l">members</div></div>
+    <div class="stat-card"><div class="stat-n">~5h</div><div class="stat-l">per person/day</div></div>
+  </div>
+
+  <div class="online-bar">
+    <span class="online-label">Online now:</span>
+    <div class="online-avatars">
+      <div class="online-av-wrap"><div class="online-av av-A" id="online-A">A<div class="online-pip" id="pip-A"></div></div></div>
+      <div class="online-av-wrap"><div class="online-av av-B" id="online-B">B<div class="online-pip" id="pip-B"></div></div></div>
+      <div class="online-av-wrap"><div class="online-av av-C" id="online-C">C<div class="online-pip" id="pip-C"></div></div></div>
+    </div>
+  </div>
+
+  <div id="app"></div>
+</div>
+
+<div id="toast-area"></div>
+
+<script>
+/* ══════════════════════════════════════════
+   PLAN DATA
+══════════════════════════════════════════ */
+const DAYS = [
+  { label:"Day 1", note:"Project setup + WhatsApp core",
+    rows:[
+      {m:"A",tasks:[{id:1,l:"Folder structure",c:"tc-found"},{id:4,l:"React app shell",c:"tc-found"},{id:7,l:"QR code scanning",c:"tc-wa"}]},
+      {m:"B",tasks:[{id:2,l:"PostgreSQL install",c:"tc-found"},{id:3,l:"DB schema",c:"tc-found"},{id:8,l:"Receive & log WA msgs",c:"tc-wa"}]},
+      {m:"C",tasks:[{id:5,l:"FastAPI + test endpoint",c:"tc-found"},{id:6,l:"Install Baileys",c:"tc-wa"},{id:9,l:"Node→FastAPI REST bridge",c:"tc-wa"}]},
+    ], dep:"Full setup + WA bridge in one day. C finishes Baileys first so A can scan QR. Stagger: C→A→B for WA tasks." },
+  { label:"Day 2", note:"Gmail/Classroom APIs + Groq LLM setup",
+    rows:[
+      {m:"A",tasks:[{id:23,l:"Google Cloud project",c:"tc-gmail"},{id:24,l:"OAuth login flow",c:"tc-gmail"},{id:26,l:"Gmail→classifier stub",c:"tc-gmail"}]},
+      {m:"B",tasks:[{id:25,l:"Fetch Gmail emails",c:"tc-gmail"},{id:27,l:"Enable Classroom API",c:"tc-gmail"},{id:28,l:"Fetch Classroom content",c:"tc-gmail"}]},
+      {m:"C",tasks:[{id:16,l:"Groq API setup",c:"tc-llm"},{id:17,l:"Groq deadline prompt",c:"tc-llm"},{id:18,l:"Call Llama for msgs",c:"tc-llm"}]},
+    ], dep:"A sets up Google Cloud first (23→24→26). B piggybacks off 24+27. C handles all LLM plumbing independently." },
+  { label:"Day 3", note:"ALL-HANDS: data collection + labelling",
+    rows:[
+      {m:"A",tasks:[{id:10,l:"Collect WA messages (A)",c:"tc-all"},{id:11,l:"Label messages (A's batch)",c:"tc-all"}]},
+      {m:"B",tasks:[{id:10,l:"Collect WA messages (B)",c:"tc-all"},{id:11,l:"Label messages (B's batch)",c:"tc-all"}]},
+      {m:"C",tasks:[{id:10,l:"Collect WA messages (C)",c:"tc-all"},{id:11,l:"Label messages (C's batch)",c:"tc-all"}]},
+    ], dep:"Target 300–500 messages into shared spreadsheet. Each labels own batch. Cross-check 10% overlap for consistency." },
+  { label:"Day 4", note:"Fine-tune XLM-RoBERTa + LLM pipeline",
+    rows:[
+      {m:"A",tasks:[{id:12,l:"Fine-tune XLM-RoBERTa (Colab)",c:"tc-ai"},{id:13,l:"Save fine-tuned model",c:"tc-ai"}]},
+      {m:"B",tasks:[{id:19,l:"Parse LLM JSON→DB",c:"tc-llm"},{id:20,l:"Urgency score fn",c:"tc-urg"},{id:21,l:"Urgency levels logic",c:"tc-urg"}]},
+      {m:"C",tasks:[{id:29,l:"Classroom→pipeline stub",c:"tc-gmail"},{id:53,l:"WA reconnection logic",c:"tc-pol"},{id:54,l:"LLM rate limit handling",c:"tc-pol"}]},
+    ], dep:"A runs Colab fine-tune (can run overnight). B wires LLM JSON into DB and urgency. C handles pipeline stubs + polish." },
+  { label:"Day 5", note:"Model integration + Dashboard UI begins",
+    rows:[
+      {m:"A",tasks:[{id:14,l:"Load model in FastAPI",c:"tc-ai"},{id:15,l:"Connect classifier to WA msgs",c:"tc-ai"},{id:30,l:"Home tab UI",c:"tc-ui"}]},
+      {m:"B",tasks:[{id:22,l:"Urgency on dashboard load",c:"tc-urg"},{id:31,l:"Assignments & Quizzes tab",c:"tc-ui"},{id:34,l:"Events tab",c:"tc-ui"}]},
+      {m:"C",tasks:[{id:36,l:"WA groups→courses mapping UI",c:"tc-map"},{id:37,l:"Classroom→courses mapping UI",c:"tc-map"},{id:55,l:"Missing deadline handling",c:"tc-pol"}]},
+    ], dep:"14 needs 13 (A done Day 4). 15 needs 14+9. Dashboard tabs are fully parallel. C does mapping system." },
+  { label:"Day 6", note:"Remaining dashboard + mapping + notifications",
+    rows:[
+      {m:"A",tasks:[{id:32,l:"Announcements tab",c:"tc-ui"},{id:33,l:"Materials tab",c:"tc-ui"},{id:42,l:"Desktop popup (plyer)",c:"tc-notif"}]},
+      {m:"B",tasks:[{id:35,l:"Timetable tab",c:"tc-ui"},{id:43,l:"WA self-message (Critical)",c:"tc-notif"},{id:44,l:"Morning digest cron job",c:"tc-notif"}]},
+      {m:"C",tasks:[{id:38,l:"Abbreviation dictionary",c:"tc-map"},{id:39,l:"Ambiguity resolution flow",c:"tc-map"},{id:40,l:"Manual add form (UI)",c:"tc-notif"}]},
+    ], dep:"Tabs are independent UI work. 43 needs WA bridge (Day 1). 44 needs 43 — B stagger. 38+39 need mapping from Day 5." },
+  { label:"Day 7", note:"Chatbot + Onboarding + Gmail full pipeline",
+    rows:[
+      {m:"A",tasks:[{id:45,l:"Load DB as JSON to LLM",c:"tc-chat"},{id:46,l:"Function calling (CRUD)",c:"tc-chat"},{id:47,l:"Test Roman Urdu queries",c:"tc-chat"}]},
+      {m:"B",tasks:[{id:48,l:"Connect chatbot to dashboard",c:"tc-chat"},{id:49,l:"Onboarding step-by-step UI",c:"tc-onb"},{id:50,l:"Save onboarding status",c:"tc-onb"}]},
+      {m:"C",tasks:[{id:41,l:"Tag manual items",c:"tc-notif"},{id:51,l:"Archive semester button",c:"tc-onb"},{id:52,l:"Fresh slate + browse archives",c:"tc-onb"}]},
+    ], dep:"45→46→47→48 chain for A then B. 50 needs 49 — B stagger. C handles tagging + archive features." },
+  { label:"Day 8", note:"Full Gmail pipeline + end-to-end integration",
+    rows:[
+      {m:"A",tasks:[{id:null,l:"Wire Gmail classifier full pipeline",c:"tc-gmail"},{id:null,l:"Test WA→classify→deadline→dashboard",c:"tc-found"}]},
+      {m:"B",tasks:[{id:56,l:"Node↔Python error handling",c:"tc-pol"},{id:null,l:"Test Gmail + Classroom end-to-end",c:"tc-found"}]},
+      {m:"C",tasks:[{id:null,l:"Test chatbot CRUD + notifications",c:"tc-found"},{id:null,l:"Log all bugs in shared list",c:"tc-found"}]},
+    ], dep:"Each member owns a system slice. Log bugs in shared doc immediately. No new features today." },
+  { label:"Day 9", note:"Bug fixes + UI polish + demo data",
+    rows:[
+      {m:"A",tasks:[{id:null,l:"Fix WA pipeline bugs",c:"tc-wa"},{id:null,l:"UI polish — dashboard tabs",c:"tc-ui"}]},
+      {m:"B",tasks:[{id:null,l:"Fix Gmail/Classroom bugs",c:"tc-gmail"},{id:null,l:"Polish onboarding flow UX",c:"tc-onb"}]},
+      {m:"C",tasks:[{id:null,l:"Fix chatbot + notification bugs",c:"tc-notif"},{id:null,l:"Seed full semester demo data",c:"tc-found"}]},
+    ], dep:"Dedicated fix + polish day. C seeds realistic demo data while A+B fix screens the evaluator will see." },
+  { label:"Day 10", note:"Demo prep + dry run + final cleanup",
+    rows:[
+      {m:"A",tasks:[{id:null,l:"Write demo script (WA + classifier)",c:"tc-found"},{id:null,l:"Full dry run — present segment",c:"tc-found"},{id:null,l:"Final code cleanup + README",c:"tc-found"}]},
+      {m:"B",tasks:[{id:null,l:"Write demo script (chatbot actions)",c:"tc-found"},{id:null,l:"Full dry run — present segment",c:"tc-found"},{id:null,l:"Final code cleanup + README",c:"tc-found"}]},
+      {m:"C",tasks:[{id:null,l:"Write demo script (notifs + dashboard)",c:"tc-found"},{id:null,l:"Live-fix during dry run",c:"tc-pol"},{id:null,l:"Final code cleanup + README",c:"tc-found"}]},
+    ], dep:"Each member owns their demo segment. Rehearse end-to-end once. C is live-fixer during dry run." },
+];
+
+const PHASES = [
+  {label:"Phase 1 — Foundation & APIs", days:[0,1,2]},
+  {label:"Phase 2 — AI & Pipelines",    days:[3,4]},
+  {label:"Phase 3 — Features",          days:[5,6]},
+  {label:"Phase 4 — Integration & Demo",days:[7,8,9]},
+];
+
+const LEGEND = [
+  {color:"var(--cat-found)",l:"Foundation"},{color:"var(--cat-wa)",l:"WhatsApp"},
+  {color:"var(--cat-ai)",l:"AI/ML"},{color:"var(--cat-llm)",l:"LLM/Groq"},
+  {color:"var(--cat-urg)",l:"Urgency"},{color:"var(--cat-gmail)",l:"Gmail/Class"},
+  {color:"var(--cat-ui)",l:"Dashboard UI"},{color:"var(--cat-map)",l:"Mapping"},
+  {color:"var(--cat-notif)",l:"Notifications"},{color:"var(--cat-chat)",l:"Chatbot"},
+  {color:"var(--cat-onb)",l:"Onboarding"},{color:"var(--cat-pol)",l:"Polish"},
+  {color:"var(--cat-all)",l:"All-Hands"},
+];
+
+const COMPLETED_TASK_IDS = new Set([
+  1, 3, 4, 5, 6, 7, 8, 9,
+  16, 17, 18, 19, 20, 21, 22,
+  40, 41, 42,
+  24, 25, 26, 28, 29,
+  53, 54, 55, 56
+]);
+
+function buildSeedTaskState() {
+  const seed = {};
+  DAYS.forEach((day, di) => {
+    day.rows.forEach((row, ri) => {
+      row.tasks.forEach((task, ti) => {
+        if (task.id && COMPLETED_TASK_IDS.has(task.id)) {
+          seed[`${di}_${ri}_${ti}`] = { done: true, by: 'SYS', at: 1 };
+        }
+      });
+    });
+  });
+  return seed;
+}
+
+/* ══════════════════════════════════════════
+   STATE
+══════════════════════════════════════════ */
+let ME = null;
+let sharedState = {}; // key -> { done, by, at }
+let chipMap = {};     // key -> { chipEl, dotEl, cntEl, cardEl, keys, label }
+let totalTasks = 0;
+let pollTimer, hbTimer;
+
+const TASKS_KEY = 'ap10_tasks';
+const HB_KEY    = m => 'ap10_hb_' + m;
+const ONLINE_TTL = 28000;
+const POLL_INTERVAL = 3000;
+const HEARTBEAT_INTERVAL = 12000;
+
+const AV_STYLE = {
+  A: {bg:'rgba(108,99,255,0.2)',  color:'#a78bfa'},
+  B: {bg:'rgba(67,232,176,0.15)', color:'#43e8b0'},
+  C: {bg:'rgba(248,113,113,0.15)',color:'#f87171'},
+};
+
+/* ══════════════════════════════════════════
+   STORAGE HELPERS
+══════════════════════════════════════════ */
+const storageBackend = window.storage || {
+  get: async (key) => ({ value: localStorage.getItem(key) }),
+  set: async (key, value) => { localStorage.setItem(key, value); },
+};
+
+async function loadTasks() {
+  try {
+    const r = await storageBackend.get(TASKS_KEY);
+    const saved = r && r.value ? JSON.parse(r.value) : {};
+    return { ...buildSeedTaskState(), ...saved };
+  } catch {
+    return buildSeedTaskState();
+  }
+}
+async function saveTasks(s) {
+  try {
+    await storageBackend.set(TASKS_KEY, JSON.stringify(s));
+  } catch {}
+}
+async function sendHeartbeat() {
+  try {
+    await storageBackend.set(HB_KEY(ME), String(Date.now()));
+  } catch {}
+}
+async function refreshOnline() {
+  const now = Date.now();
+  for (const m of ['A','B','C']) {
+    try {
+      const r = await storageBackend.get(HB_KEY(m));
+      const alive = r && r.value && (now - parseInt(r.value)) < ONLINE_TTL;
+      document.getElementById('online-' + m).classList.toggle('active', alive);
+      document.getElementById('pip-' + m).style.display = alive ? 'block' : 'none';
+    } catch {}
+  }
+}
+
+/* ══════════════════════════════════════════
+   IDENTITY
+══════════════════════════════════════════ */
+function selectMember(m) {
+  ME = m;
+  sessionStorage.setItem('ap10_me', m);
+  document.getElementById('identity-screen').style.display = 'none';
+  document.getElementById('main-app').style.display = 'block';
+  const av = document.getElementById('me-av-header');
+  av.textContent = m; av.className = 'me-av av-' + m;
+  document.getElementById('me-label-header').textContent = 'Member ' + m + ' (you)';
+  initApp();
+}
+function resetMember() {
+  sessionStorage.removeItem('ap10_me');
+  clearInterval(pollTimer); clearInterval(hbTimer);
+  document.getElementById('main-app').style.display = 'none';
+  document.getElementById('identity-screen').style.display = 'flex';
+}
+
+/* ══════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════ */
+function showToast(member, label, done) {
+  const area = document.getElementById('toast-area');
+  const t = document.createElement('div');
+  t.className = 'toast';
+  const s = AV_STYLE[member];
+  t.innerHTML = `<div class="toast-av" style="background:${s.bg};color:${s.color}">${member}</div>
+    <span><strong>Member ${member}</strong> ${done ? '✓ completed' : '↩ unchecked'} <em>"${label}"</em></span>`;
+  area.appendChild(t);
+  setTimeout(() => { t.classList.add('fade-out'); setTimeout(() => t.remove(), 350); }, 3500);
+}
+
+/* ══════════════════════════════════════════
+   APPLY STATE DIFF → DOM
+══════════════════════════════════════════ */
+function applyDiff(newState, remote) {
+  const prev = sharedState;
+  sharedState = newState;
+
+  // Check all keys in both old and new
+  const allKeys = new Set([...Object.keys(prev), ...Object.keys(newState)]);
+  allKeys.forEach(key => {
+    const wasD = prev[key]?.done || false;
+    const isD  = newState[key]?.done || false;
+    if (wasD === isD) return;
+
+    const ref = chipMap[key];
+    if (!ref) return;
+
+    ref.chipEl.classList.toggle('checked', isD);
+    if (ref.dotEl) ref.dotEl.classList.toggle('checked', isD);
+
+    if (remote && newState[key]?.by !== ME) {
+      ref.chipEl.classList.remove('remote-flash');
+      void ref.chipEl.offsetWidth;
+      ref.chipEl.classList.add('remote-flash');
+      showToast(newState[key]?.by || '?', ref.label, isD);
+    }
+
+    // update day counter
+    const dc = ref.keys.filter(k => sharedState[k]?.done).length;
+    ref.cntEl.textContent = dc + '/' + ref.keys.length;
+    ref.cardEl.classList.toggle('done', dc === ref.keys.length);
+  });
+
+  updateGlobal();
+}
+
+function updateGlobal() {
+  const done = Object.values(sharedState).filter(v => v.done).length;
+  const pct  = totalTasks ? Math.round(done / totalTasks * 100) : 0;
+  document.getElementById('globalBar').style.width = pct + '%';
+  document.getElementById('globalLabel').textContent = done + ' / ' + totalTasks;
+}
+
+/* ══════════════════════════════════════════
+   TOGGLE
+══════════════════════════════════════════ */
+async function toggleTask(key, label) {
+  const cur = sharedState[key]?.done || false;
+  const next = !cur;
+  const ns = { ...sharedState, [key]: { done: next, by: ME, at: Date.now() } };
+  applyDiff(ns, false);
+  await saveTasks(ns);
+}
+
+/* ══════════════════════════════════════════
+   MERGE / POLL
+══════════════════════════════════════════ */
+function mergeStates(localState, remoteState) {
+  const merged = { ...localState };
+  const allKeys = new Set([...Object.keys(localState), ...Object.keys(remoteState)]);
+  allKeys.forEach(key => {
+    const local = localState[key];
+    const remote = remoteState[key];
+    if (!local) {
+      merged[key] = remote;
+      return;
+    }
+    if (!remote) {
+      merged[key] = local;
+      return;
+    }
+    const lat = local.at || 0;
+    const rat = remote.at || 0;
+    merged[key] = lat >= rat ? local : remote;
+  });
+  return merged;
+}
+
+async function poll() {
+  const ns = await loadTasks();
+  const merged = mergeStates(sharedState, ns);
+  applyDiff(merged, true);
+  await refreshOnline();
+}
+
+/* ══════════════════════════════════════════
+   BUILD DOM
+══════════════════════════════════════════ */
+function buildDOM() {
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  chipMap = {};
+  totalTasks = 0;
+
+  // Legend
+  const leg = document.createElement('div'); leg.className = 'legend';
+  LEGEND.forEach(({color,l}) => leg.innerHTML += `<div class="leg-item"><div class="leg-dot" style="background:${color}"></div>${l}</div>`);
+  app.appendChild(leg);
+
+  // Warning
+  const wb = document.createElement('div'); wb.className = 'warn-banner';
+  wb.innerHTML = '<strong>Day 3 — All-Hands:</strong> Everyone collects & labels data together. All other work paused.';
+  app.appendChild(wb);
+
+  PHASES.forEach(phase => {
+    const ph = document.createElement('div'); ph.className = 'phase-header'; ph.textContent = phase.label;
+    app.appendChild(ph);
+    const wrap = document.createElement('div'); wrap.className = 'days-wrap';
+
+    phase.days.forEach(di => {
+      const day = DAYS[di];
+      const card = document.createElement('div'); card.className = 'day-card';
+
+      const keys = [];
+      day.rows.forEach((row, ri) => row.tasks.forEach((_, ti) => keys.push(`${di}_${ri}_${ti}`)));
+      totalTasks += keys.length;
+
+      const dc = () => keys.filter(k => sharedState[k]?.done).length;
+
+      // Header
+      const hdr = document.createElement('div'); hdr.className = 'day-header';
+      hdr.innerHTML = `
+        <div class="day-num">${day.label}</div>
+        <div class="day-note">${day.note}</div>
+        <div class="day-progress-mini">
+          <div class="mini-dots">${keys.map(k=>`<div class="mini-dot" data-dot="${k}"></div>`).join('')}</div>
+          <span class="day-cnt">${dc()}/${keys.length}</span>
+        </div>
+        <div class="chevron">&#9654;</div>`;
+      card.appendChild(hdr);
+
+      // Body
+      const body = document.createElement('div'); body.className = 'day-body';
+      day.rows.forEach((row, ri) => {
+        const sec = document.createElement('div'); sec.className = 'member-section';
+        const mc = document.createElement('div'); mc.className = 'member-col';
+        mc.innerHTML = `<div class="avatar av-${row.m}">${row.m}</div>`;
+        sec.appendChild(mc);
+        const tc = document.createElement('div'); tc.className = 'tasks-col';
+
+        row.tasks.forEach((task, ti) => {
+          const key = `${di}_${ri}_${ti}`;
+          const isDone = sharedState[key]?.done || false;
+          const chip = document.createElement('div');
+          chip.className = `task-chip ${task.c}${isDone?' checked':''}`;
+          chip.innerHTML = `<div class="chip-check"><span class="chip-tick">✓</span></div>${task.id?`<span class="chip-id">#${task.id}</span>`:''}${task.l}`;
+          chip.addEventListener('click', e => { e.stopPropagation(); toggleTask(key, task.l); });
+
+          const dotEl = hdr.querySelector(`[data-dot="${key}"]`);
+          if (isDone && dotEl) dotEl.classList.add('checked');
+
+          chipMap[key] = { chipEl:chip, dotEl, cntEl:hdr.querySelector('.day-cnt'), cardEl:card, keys, label:task.l };
+          tc.appendChild(chip);
+        });
+        sec.appendChild(tc); body.appendChild(sec);
+      });
+
+      const dep = document.createElement('div'); dep.className = 'dep-note'; dep.textContent = day.dep;
+      body.appendChild(dep);
+      card.appendChild(body);
+
+      hdr.addEventListener('click', () => card.classList.toggle('open'));
+      if (di === 0) card.classList.add('open');
+      if (dc() === keys.length && keys.length > 0) card.classList.add('done');
+
+      wrap.appendChild(card);
+    });
+
+    app.appendChild(wrap);
+    const gap = document.createElement('div'); gap.className='phase-gap'; app.appendChild(gap);
+  });
+
+  document.getElementById('totalTasksStat').textContent = totalTasks;
+  updateGlobal();
+}
+
+/* ══════════════════════════════════════════
+   INIT
+══════════════════════════════════════════ */
+async function initApp() {
+  sharedState = await loadTasks();
+  buildDOM();
+  await sendHeartbeat();
+  await refreshOnline();
+  pollTimer = setInterval(poll, POLL_INTERVAL);
+  hbTimer   = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
+}
+
+// Restore session on reload
+const saved = sessionStorage.getItem('ap10_me');
+if (saved) selectMember(saved);
+</script>
+</body>
+</html>

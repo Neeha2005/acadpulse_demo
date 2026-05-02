@@ -5,15 +5,23 @@ import time
 import json
 import logging
 import asyncio
+import secrets
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
+from urllib.parse import quote_plus
 
-from fastapi import FastAPI, HTTPException, Query
+import bcrypt
+from fastapi import FastAPI, HTTPException, Query, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.security import OAuth2PasswordBearer
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from groq import APIConnectionError, APIStatusError, Groq
+from jose import JWTError, jwt
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -35,15 +43,26 @@ from db import (
     update_notification_urgency,
     update_notification_category,
     get_notification_id_by_source,
+    get_user_by_email,
+    get_user_by_id,
+    create_user_account,
+    get_notification_by_id,
+    list_notifications,
+    update_notification_completion,
 )
 from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_flusher, stop_whatsapp_buffer_flusher
 import uuid
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 logger = logging.getLogger(__name__)
 PAKISTAN_TZ = pytz.timezone("Asia/Karachi")
 URGENCY_REFRESH_INTERVAL_SECONDS = 3 * 60 * 60
 urgency_refresh_task = None
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-acadpulse-dev-secret")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRE_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "7"))
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5173")
 GROQ_DAILY_WARNING_REQUEST_LIMIT = int(os.getenv("GROQ_DAILY_WARNING_REQUEST_LIMIT", "14400"))
 groq_status = {
     "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
@@ -63,6 +82,19 @@ app = FastAPI(
     title="AcadPulse API",
     description="Backend API for AcadPulse academic notification system",
     version="1.1.0",
+)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        FRONTEND_URL,
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.on_event("startup")
@@ -121,6 +153,28 @@ class CourseMappingResponse(BaseModel):
     method: str
     requires_user_confirmation: bool
 
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ManualNotificationRequest(BaseModel):
+    user_id: Optional[str] = None
+    title: str
+    course: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = "assignment"
+    deadline: Optional[str] = None
+    due_date: Optional[str] = None
+    due_time: Optional[str] = None
+
+class NotificationCompletionRequest(BaseModel):
+    completed: bool = True
+
 class ChatResponse(BaseModel):
     response: str
     is_safe: bool
@@ -138,6 +192,65 @@ class DeadlineExtractionResult(BaseModel):
     description: Optional[str]
 
 # --- Utility Functions ---
+
+def validate_email_address(email: str) -> bool:
+    return bool(email and EMAIL_REGEX.match(email.strip()))
+
+def normalize_auth_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(password: str, password_hash: Optional[str]) -> bool:
+    if not password_hash:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
+        return False
+
+def serialize_user(user_row: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "id": str(user_row["id"]),
+        "name": user_row["full_name"],
+        "email": user_row["email"],
+    }
+
+def create_access_token(user_row: Dict[str, Any]) -> str:
+    expires_at = datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRE_DAYS)
+    payload = {
+        "sub": str(user_row["id"]),
+        "email": user_row["email"],
+        "name": user_row["full_name"],
+        "exp": expires_at,
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def decode_access_token(token: str) -> Dict[str, Any]:
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token",
+        ) from exc
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    payload = decode_access_token(token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+        )
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated user no longer exists",
+        )
+    return user
 
 def clean_html(html_content):
     """Strip HTML tags and return clean text."""
@@ -326,6 +439,63 @@ def normalize_received_at(value):
     if isinstance(value, str) and value.strip().isdigit():
         return datetime.fromtimestamp(int(value), tz=timezone.utc)
     return value
+
+def parse_manual_deadline(deadline=None, due_date=None, due_time=None):
+    """
+    Parse manual deadline input from either an ISO datetime string or split date/time fields.
+    Returns a timezone-aware datetime in Pakistan time, or None when absent/unparseable.
+    """
+    if deadline:
+        try:
+            parsed = datetime.fromisoformat(str(deadline).strip().replace("Z", "+00:00"))
+            return ensure_timezone_aware(parsed)
+        except ValueError:
+            logger.warning("Manual notification deadline could not be parsed: %s", deadline)
+            return None
+
+    if due_date:
+        candidate = str(due_date).strip()
+        if due_time:
+            candidate = f"{candidate} {str(due_time).strip()}"
+        try:
+            parsed = datetime.fromisoformat(candidate.replace(" ", "T", 1))
+            return ensure_timezone_aware(parsed)
+        except ValueError:
+            logger.warning(
+                "Manual notification due_date/due_time could not be parsed: %s %s",
+                due_date,
+                due_time,
+            )
+            return None
+
+    return None
+
+def normalize_manual_category(raw_value):
+    value = (raw_value or "assignment").strip().lower().replace("-", "_").replace(" ", "_")
+    allowed = {"assignment", "quiz", "announcement", "material", "event", "exam_schedule", "noise"}
+    return value if value in allowed else "assignment"
+
+def serialize_notification_row(row):
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]) if row.get("user_id") else None,
+        "course_id": str(row["course_id"]) if row.get("course_id") else None,
+        "source_type": row.get("source_type"),
+        "source_reference_id": row.get("source_reference_id"),
+        "external_message_id": row.get("external_message_id"),
+        "sender_name": row.get("sender_name"),
+        "message_text": row.get("message_text"),
+        "category": row.get("category"),
+        "deadline": row["deadline"].isoformat() if row.get("deadline") else None,
+        "urgency_score": row.get("urgency_score"),
+        "urgency_label": row.get("urgency_label"),
+        "urgency_level": row.get("urgency_level"),
+        "is_completed": row.get("is_completed"),
+        "received_at": row["received_at"].isoformat() if row.get("received_at") else None,
+        "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+    }
 
 def ensure_timezone_aware(value):
     if value is None:
@@ -1545,6 +1715,102 @@ def execute_google_api_call(request):
 
 # --- Endpoints ---
 
+@app.post("/auth/register")
+def register_user(request: RegisterRequest):
+    name = (request.name or "").strip()
+    email = normalize_auth_email(request.email)
+    password = request.password or ""
+
+    if not name:
+        raise HTTPException(status_code=422, detail="Name is required")
+    if not validate_email_address(email):
+        raise HTTPException(status_code=422, detail="Invalid email address")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if get_user_by_email(email):
+        raise HTTPException(status_code=400, detail="Email already exists")
+
+    try:
+        create_user_account(name, email, hash_password(password))
+    except Exception as exc:
+        logger.exception("Account registration failed for %s", email)
+        raise HTTPException(status_code=500, detail="Unable to create account") from exc
+
+    return {"status": "success", "message": "Account created"}
+
+@app.post("/auth/login")
+def login_user(request: LoginRequest):
+    email = normalize_auth_email(request.email)
+    password = request.password or ""
+
+    if not validate_email_address(email):
+        raise HTTPException(status_code=422, detail="Invalid email address")
+    if not password:
+        raise HTTPException(status_code=422, detail="Password is required")
+
+    user = get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email")
+    if not verify_password(password, user.get("password_hash")):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    return {
+        "status": "success",
+        "token": create_access_token(user),
+        "user": serialize_user(user),
+    }
+
+@app.get("/auth/me")
+def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "user": serialize_user(current_user),
+    }
+
+@app.get("/auth/google")
+def login_with_google():
+    try:
+        credentials = get_google_credentials_safe()
+        email = ""
+        name = ""
+
+        try:
+            oauth_service = build("oauth2", "v2", credentials=credentials)
+            profile = execute_google_api_call(oauth_service.userinfo().get())
+            email = normalize_auth_email(profile.get("email"))
+            name = (profile.get("name") or "").strip()
+        except Exception:
+            logger.info("OAuth userinfo unavailable with current scopes, falling back to Gmail profile")
+
+        if not email:
+            gmail_service = build("gmail", "v1", credentials=credentials)
+            gmail_profile = execute_google_api_call(gmail_service.users().getProfile(userId="me"))
+            email = normalize_auth_email(gmail_profile.get("emailAddress"))
+
+        if not name:
+            name = email.split("@")[0].replace(".", " ").title() if email else "Google User"
+
+        user = get_user_by_email(email)
+        if not user:
+            user_id = create_user_account(name, email, hash_password(secrets.token_urlsafe(32)))
+            user = get_user_by_id(user_id)
+
+        token = create_access_token(user)
+        redirect_url = (
+            f"{FRONTEND_URL}/login"
+            f"?oauth_token={quote_plus(token)}"
+            f"&oauth_name={quote_plus(user['full_name'])}"
+            f"&oauth_email={quote_plus(user['email'])}"
+        )
+        return RedirectResponse(redirect_url)
+    except HTTPException as exc:
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(str(exc.detail))}"
+        return RedirectResponse(redirect_url)
+    except Exception as exc:
+        logger.exception("Google login failed")
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed')}"
+        return RedirectResponse(redirect_url)
+
 @app.get("/")
 def home():
     return {"message": "AcadPulse API v1.1.0 is online", "status": "success"}
@@ -1552,6 +1818,100 @@ def home():
 @app.get("/test")
 def test_endpoint():
     return {"status": "success", "data": "Backend logic ready"}
+
+@app.get("/notifications")
+def get_notifications(
+    user_id: Optional[str] = Query(default=None),
+    include_completed: bool = Query(default=False),
+    source_type: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    try:
+        rows = list_notifications(
+            user_id=user_id,
+            include_completed=include_completed,
+            source_type=source_type,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch notifications")
+        raise HTTPException(status_code=500, detail="Unable to fetch notifications") from exc
+
+    return {
+        "status": "success",
+        "count": len(rows),
+        "notifications": [serialize_notification_row(row) for row in rows],
+    }
+
+@app.post("/notifications/manual")
+def create_manual_notification(request: ManualNotificationRequest):
+    title = (request.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title is required")
+
+    category = normalize_manual_category(request.type)
+    deadline_dt = parse_manual_deadline(
+        deadline=request.deadline,
+        due_date=request.due_date,
+        due_time=request.due_time,
+    )
+
+    if any([request.deadline, request.due_date]) and deadline_dt is None:
+        raise HTTPException(status_code=422, detail="Deadline format is invalid")
+
+    user_id = request.user_id or get_or_create_user("Manual User", "manual@acadpulse.local")
+    description = (request.description or "").strip()
+    course = (request.course or "").strip()
+
+    message_parts = [title]
+    if course:
+        message_parts.append(f"Course: {course}")
+    if description:
+        message_parts.append(description)
+    message_text = "\n\n".join(message_parts)
+
+    received_at = datetime.now(PAKISTAN_TZ)
+    notification_id = insert_notification(
+        user_id=user_id,
+        source_type="manual",
+        external_id=None,
+        sender="Manual Task",
+        text=message_text,
+        category=category,
+        received_at=received_at,
+        deadline=deadline_dt,
+    )
+
+    if not notification_id:
+        raise HTTPException(status_code=500, detail="Unable to create manual notification")
+
+    urgency = calculate_urgency(deadline_dt) if deadline_dt else {"score": 0, "label": "none", "color": "grey"}
+    if deadline_dt:
+        update_notification_urgency(notification_id, urgency["score"], urgency["label"])
+
+    notification = get_notification_by_id(notification_id)
+
+    return {
+        "status": "success",
+        "message": "Manual notification created",
+        "notification": {
+            **serialize_notification_row(notification),
+            "manual_course": course or None,
+        },
+        "urgency": urgency,
+    }
+
+@app.patch("/notifications/{notification_id}/complete")
+def complete_notification(notification_id: str, request: NotificationCompletionRequest):
+    updated = update_notification_completion(notification_id, request.completed)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    return {
+        "status": "success",
+        "message": "Notification completion updated",
+        "notification": serialize_notification_row(updated),
+    }
 
 @app.get("/urgency/refresh")
 def refresh_urgency_endpoint(user_id: str = Query(...)):

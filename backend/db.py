@@ -1,9 +1,10 @@
 import os
+from pathlib import Path
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 def get_db_connection():
     """Establish a connection to the Supabase PostgreSQL database."""
@@ -16,7 +17,6 @@ def get_db_connection():
         sslmode="require"  # Supabase requires SSL for remote connections
     )
     return conn
-
 def insert_notification(
     user_id,
     source_type,
@@ -193,6 +193,144 @@ def update_notification_urgency(notification_id, score, label):
         cur.close()
         conn.close()
 
+def update_notification_completion(notification_id, completed=True):
+    """Update completion status. Returns the updated row or None if not found."""
+    if not notification_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            UPDATE notifications
+            SET is_completed = %s
+            WHERE id = %s
+            RETURNING
+                id,
+                user_id,
+                source_type,
+                sender_name,
+                message_text,
+                category,
+                deadline,
+                urgency_score,
+                urgency_label,
+                is_completed,
+                received_at,
+                created_at;
+            """,
+            (completed, notification_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception as e:
+        conn.rollback()
+        print(f"Database completion update error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def get_notification_by_id(notification_id):
+    """Fetch one notification row by ID."""
+    if not notification_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                course_id,
+                source_type,
+                source_reference_id,
+                external_message_id,
+                sender_name,
+                message_text,
+                category,
+                deadline,
+                urgency_score,
+                urgency_label,
+                urgency_level,
+                is_completed,
+                received_at,
+                created_at
+            FROM notifications
+            WHERE id = %s
+            LIMIT 1;
+            """,
+            (notification_id,),
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def list_notifications(user_id=None, include_completed=False, source_type=None, limit=100):
+    """Fetch notifications with optional filters for dashboard sync."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        clauses = []
+        params = []
+
+        if user_id:
+            clauses.append("user_id = %s")
+            params.append(user_id)
+
+        if not include_completed:
+            clauses.append("is_completed = FALSE")
+
+        if source_type:
+            clauses.append("LOWER(source_type) = LOWER(%s)")
+            params.append(source_type)
+
+        where_sql = ""
+        if clauses:
+            where_sql = "WHERE " + " AND ".join(clauses)
+
+        params.append(limit)
+
+        cur.execute(
+            f"""
+            SELECT
+                id,
+                user_id,
+                course_id,
+                source_type,
+                source_reference_id,
+                external_message_id,
+                sender_name,
+                message_text,
+                category,
+                deadline,
+                urgency_score,
+                urgency_label,
+                urgency_level,
+                is_completed,
+                received_at,
+                created_at
+            FROM notifications
+            {where_sql}
+            ORDER BY
+                CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
+                deadline ASC NULLS LAST,
+                received_at DESC NULLS LAST,
+                created_at DESC
+            LIMIT %s;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
 def get_or_create_user(full_name, email):
     """Get user ID by email or create a new user."""
     conn = get_db_connection()
@@ -210,6 +348,64 @@ def get_or_create_user(full_name, email):
         new_user = cur.fetchone()
         conn.commit()
         return new_user[0]
+    finally:
+        cur.close()
+        conn.close()
+
+def get_user_by_email(email):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, full_name, email, password_hash
+            FROM users
+            WHERE email = %s
+            LIMIT 1
+            """,
+            (email,),
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_user_by_id(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, full_name, email, password_hash
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def create_user_account(full_name, email, password_hash):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO users (full_name, email, password_hash)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (full_name, email, password_hash),
+        )
+        user_id = cur.fetchone()[0]
+        conn.commit()
+        return user_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         cur.close()
         conn.close()

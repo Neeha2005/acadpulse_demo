@@ -8,17 +8,22 @@ export default function Sidebar({ onOpenAccount, collapsed, onToggle }) {
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
-        <div className="logo">
-          <i className="fa-solid fa-graduation-cap logo-icon"></i>
-          <span className="logo-text">AcadPulse</span>
+        <div className="logo-wrap">
+          <div className="logo-mark">
+            <i className="fa-solid fa-graduation-cap logo-icon"></i>
+          </div>
+          <div className="logo">
+            <span className="logo-text gradient-logo">AcadPulse</span>
+            <span className="logo-subtitle">Student Command Center</span>
+          </div>
         </div>
         <button className="sidebar-toggle" onClick={onToggle} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
           <i className={`fa-solid ${collapsed ? 'fa-angles-right' : 'fa-angles-left'}`}></i>
         </button>
       </div>
       <nav className="sidebar-nav">
-        <div className="nav-section">Main</div>
-        <NavLink to="/" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Dashboard">
+        <div className="nav-section nav-section-accent">Main</div>
+        <NavLink to="/dashboard" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Dashboard">
           <i className="fa-solid fa-house"></i> <span className="nav-label">Dashboard</span>
         </NavLink>
         <NavLink to="/timetable" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Timetable">
@@ -28,28 +33,41 @@ export default function Sidebar({ onOpenAccount, collapsed, onToggle }) {
           <i className="fa-solid fa-book"></i> <span className="nav-label">Courses</span>
         </NavLink>
 
-        <div className="nav-section">Integrations</div>
-        <NavLink to="/integrations/whatsapp" className="nav-item" title="WhatsApp">
-          <div className="has-badge" style={{display:'flex', width:'100%'}}>
-            <span style={{display: 'flex', alignItems:'center', gap: '12px'}}><i className="fa-brands fa-whatsapp text-whatsapp"></i> <span className="nav-label">WhatsApp</span></span>
-            <span className="badge badge-success nav-label">Active</span>
+        <div className="sidebar-divider"></div>
+        <div className="nav-section nav-section-accent">Integrations</div>
+        <NavLink to="/integrations/whatsapp" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="WhatsApp">
+          <div className="has-badge nav-badge-row">
+            <span className="nav-icon-label">
+              <span className="nav-icon-glass nav-icon-whatsapp"><i className="fa-brands fa-whatsapp"></i></span>
+              <span className="nav-label">WhatsApp</span>
+            </span>
+            <span className="nav-status-pill status-pill-unknown nav-label">unknown</span>
           </div>
         </NavLink>
-        <NavLink to="/integrations/classroom" className="nav-item" title="Classroom">
-          <div className="has-badge" style={{display:'flex', width:'100%'}}>
-            <span style={{display: 'flex', alignItems:'center', gap: '12px'}}><i className="fa-brands fa-google text-warning"></i> <span className="nav-label">Classroom</span></span>
-            <span className="badge badge-warning nav-label">Syncing</span>
+        <NavLink to="/integrations/classroom" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Classroom">
+          <div className="has-badge nav-badge-row">
+            <span className="nav-icon-label">
+              <span className="nav-icon-glass nav-icon-classroom"><i className="fa-brands fa-google"></i></span>
+              <span className="nav-label">Classroom</span>
+            </span>
+            <span className="nav-status-pill status-pill-syncing nav-label">
+              <span className="status-badge-spinner"></span>
+              Syncing
+            </span>
           </div>
         </NavLink>
-        <NavLink to="/integrations/gmail" className="nav-item" title="Gmail">
-           <div className="has-badge" style={{display:'flex', width:'100%'}}>
-            <span style={{display: 'flex', alignItems:'center', gap: '12px'}}><i className="fa-regular fa-envelope"></i> <span className="nav-label">Gmail</span></span>
-            <span className="badge nav-label" style={{background: 'rgba(198, 172, 143, 0.08)'}}>2h ago</span>
+        <NavLink to="/integrations/gmail" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Gmail">
+           <div className="has-badge nav-badge-row">
+            <span className="nav-icon-label">
+              <span className="nav-icon-glass nav-icon-gmail"><i className="fa-regular fa-envelope"></i></span>
+              <span className="nav-label">Gmail</span>
+            </span>
+            <span className="nav-status-pill status-pill-muted nav-label">2h ago</span>
           </div>
         </NavLink>
       </nav>
       <div className="sidebar-footer">
-        <div className="user-profile" onClick={onOpenAccount} title="Account Settings">
+        <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings">
           <div className="avatar">{initials}</div>
           <div className="user-info nav-label">
             <div className="user-name">{user.fullName}</div>

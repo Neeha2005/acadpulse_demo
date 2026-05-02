@@ -50,7 +50,7 @@ export default function SearchDropdown({ query, onSelect }) {
       rawNotif: n,
       title: n.title,
       subtitle: `Notification Match • ${n.sender}`,
-      iconClass: `fa-brands ${n.icon} ${colorCls}`
+      iconClass: `${n.iconFamily || 'fa-brands'} ${n.icon} ${colorCls}`
     };
   });
 

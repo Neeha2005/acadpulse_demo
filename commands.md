@@ -185,6 +185,51 @@ npm run preview
 
 Runs the production build locally after `npm run build`.
 
+### Check dashboard notification sync
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8001/notifications?include_completed=false&limit=20" | ConvertTo-Json -Depth 6
+```
+
+Fetches the live notification list that now powers the dashboard task cards and notification stream.
+
+### Create a manual task
+
+```powershell
+$body = @{
+  title = "Prepare final presentation"
+  course = "CS-401"
+  description = "Finish slides and talking points"
+  due_date = "2026-05-10"
+  due_time = "23:59"
+  type = "assignment"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8001/notifications/manual" -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 8
+```
+
+Creates a real manual notification, stores urgency when a deadline is provided, and returns the created notification row.
+
+### Mark a notification complete
+
+```powershell
+$notificationId = "PUT-NOTIFICATION-ID-HERE"
+$body = @{ completed = $true } | ConvertTo-Json
+
+Invoke-RestMethod -Method Patch -Uri "http://127.0.0.1:8001/notifications/$notificationId/complete" -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
+```
+
+Marks the selected notification as completed so it disappears from the default dashboard sync response.
+
+### Desktop popup check
+
+1. Open `http://127.0.0.1:5173/dashboard`
+2. Allow browser notification permission when prompted
+3. Create a manual task with a near deadline so it becomes `high` or `critical`
+4. Refresh the dashboard if needed
+
+You should receive a browser desktop notification for `high` and `critical` urgency tasks.
+
 ## 6. WhatsApp Setup
 
 ```powershell

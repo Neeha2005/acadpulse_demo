@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function AddTaskModal({ onClose }) {
-  const { addTask } = useAppContext();
+  const { createManualTask } = useAppContext();
   const [formData, setFormData] = useState({ title: '', course: '', dueDate: '', dueTime: '', content: '' });
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     // Validation Constraints
@@ -24,28 +24,15 @@ export default function AddTaskModal({ onClose }) {
 
     setErrorMsg('');
     setStatus('saving');
-    
-    // Create Date Template match ('eg: 1 Jan, 12:12 pm')
-    const finalFormattedDue = `${selectedDateTime.getDate()} ${selectedDateTime.toLocaleString('default', { month: 'short' })}, ${selectedDateTime.toLocaleString('en-US', { hour: 'numeric', minute:'2-digit', hour12:true })}`;
 
-    setTimeout(() => {
-      const newTask = {
-        id: 't_' + Math.random().toString(36).substr(2, 9),
-        title: formData.title,
-        course: formData.course || 'Independent Study',
-        due: finalFormattedDue,
-        content: formData.content,
-        urgency: 'warning',
-        source: 'manual',
-        sourceLabel: 'Manual Task',
-        icon: 'fa-thumbtack'
-      };
-      
-      console.log("[API MOCK TETHER] POST backend.com/api/tasks", newTask);
-      addTask(newTask);
+    try {
+      await createManualTask(formData);
       setStatus('idle');
       onClose();
-    }, 600);
+    } catch (error) {
+      setStatus('idle');
+      setErrorMsg(error.message || 'Unable to create manual task right now.');
+    }
   };
 
   return (
