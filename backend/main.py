@@ -3,7 +3,10 @@ import base64
 import re
 import time
 import json
-from datetime import datetime
+import logging
+import asyncio
+from contextlib import suppress
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
 
@@ -17,11 +20,42 @@ from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from psycopg2.extras import RealDictCursor
 import dateparser
+import pytz
+import httpx
 
 from google_auth import get_google_credentials
-from db import get_db_connection, insert_notification, get_or_create_user, notification_exists
+from db import (
+    get_db_connection,
+    insert_notification,
+    get_or_create_user,
+    notification_exists,
+    update_notification_deadline,
+    get_pending_deadline_notifications,
+    get_users_with_pending_deadlines,
+    update_notification_urgency,
+    update_notification_category,
+    get_notification_id_by_source,
+)
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+PAKISTAN_TZ = pytz.timezone("Asia/Karachi")
+URGENCY_REFRESH_INTERVAL_SECONDS = 3 * 60 * 60
+urgency_refresh_task = None
+GROQ_DAILY_WARNING_REQUEST_LIMIT = int(os.getenv("GROQ_DAILY_WARNING_REQUEST_LIMIT", "14400"))
+groq_status = {
+    "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+    "session_calls": 0,
+    "tokens_used_today": 0,
+    "daily_warning_threshold_crossed": False,
+    "last_error": None,
+    "token_day": datetime.now(PAKISTAN_TZ).date().isoformat(),
+}
+whatsapp_status_state = {
+    "status": "unknown",
+    "reason": None,
+    "updated_at": None,
+}
 
 app = FastAPI(
     title="AcadPulse API",
@@ -29,11 +63,27 @@ app = FastAPI(
     version="1.1.0",
 )
 
+@app.on_event("startup")
+async def start_urgency_refresh_scheduler():
+    global urgency_refresh_task
+    if urgency_refresh_task is None:
+        urgency_refresh_task = asyncio.create_task(scheduled_urgency_refresh_loop())
+
+@app.on_event("shutdown")
+async def stop_urgency_refresh_scheduler():
+    global urgency_refresh_task
+    if urgency_refresh_task:
+        urgency_refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await urgency_refresh_task
+        urgency_refresh_task = None
+
 # --- Models ---
 
 class IncomingWhatsAppMessage(BaseModel):
     text: str
     sender: str
+    message_id: Optional[str] = None
     user_id: Optional[str] = None
     group: Optional[str] = None
     group_id: Optional[str] = None
@@ -49,6 +99,11 @@ class ChatRequest(BaseModel):
 class DeadlineRequest(BaseModel):
     text: str
     confirm_malicious: bool = False
+
+class WhatsAppStatusUpdate(BaseModel):
+    status: str
+    reason: Optional[str] = None
+    user_id: Optional[str] = None
 
 class CourseMappingRequest(BaseModel):
     message: str
@@ -136,33 +191,120 @@ def get_groq_client():
         raise HTTPException(status_code=500, detail="GROQ_API_KEY not set")
     return Groq(api_key=api_key)
 
-def create_groq_chat(prompt_messages):
-    client = get_groq_client()
-    try:
-        response = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-            messages=prompt_messages,
+def reset_groq_daily_counter_if_needed():
+    today = datetime.now(PAKISTAN_TZ).date().isoformat()
+    if groq_status["token_day"] != today:
+        groq_status["token_day"] = today
+        groq_status["tokens_used_today"] = 0
+        groq_status["daily_warning_threshold_crossed"] = False
+
+def groq_safe_fallback(prompt_messages):
+    system_text = " ".join(
+        message.get("content", "")
+        for message in prompt_messages
+        if isinstance(message, dict) and message.get("role") == "system"
+    ).lower()
+
+    if "deadline" in system_text or "json" in system_text:
+        return '{"has_deadline": false, "deadline": null}'
+    if "course classification" in system_text or "course_id" in system_text:
+        return '{"course_id": null, "course_code": null, "confidence": 0.0}'
+    if "safe" in system_text or "malicious" in system_text:
+        return "SAFE"
+    return "Abhi thoda busy hoon — please 1-2 minutes mein dobara try karo"
+
+def retry_after_seconds(error, fallback_wait):
+    headers = getattr(getattr(error, "response", None), "headers", {}) or {}
+    retry_after = headers.get("retry-after") or headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0, int(float(retry_after)))
+        except ValueError:
+            return fallback_wait
+    return fallback_wait
+
+def record_groq_usage(response):
+    reset_groq_daily_counter_if_needed()
+    groq_status["session_calls"] += 1
+    usage = getattr(response, "usage", None)
+    total_tokens = getattr(usage, "total_tokens", 0) or 0
+    groq_status["tokens_used_today"] += total_tokens
+
+    warning_threshold = int(GROQ_DAILY_WARNING_REQUEST_LIMIT * 0.8)
+    if groq_status["tokens_used_today"] >= warning_threshold:
+        groq_status["daily_warning_threshold_crossed"] = True
+        logger.warning(
+            "Groq daily warning threshold crossed: %s tokens/calls used today",
+            groq_status["tokens_used_today"],
         )
-        return response.choices[0].message.content
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Groq API error: {str(e)}")
+
+def call_groq_with_retry(prompt_messages: list, max_retries: int = 3) -> str:
+    reset_groq_daily_counter_if_needed()
+    client = get_groq_client()
+    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    groq_status["model"] = model
+    internal_error_retried = False
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=prompt_messages,
+            )
+            record_groq_usage(response)
+            groq_status["last_error"] = None
+            return response.choices[0].message.content
+        except APIStatusError as e:
+            status_code = getattr(e, "status_code", None)
+            groq_status["last_error"] = f"HTTP {status_code}: {str(e)}"
+
+            if status_code == 401:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Groq API key invalid. Check GROQ_API_KEY in backend/.env.",
+                )
+
+            if status_code in {429, 503} and attempt < max_retries:
+                wait_time = retry_after_seconds(e, 5 * (2 ** attempt))
+                logger.warning("Groq HTTP %s. Retry %s/%s in %ss", status_code, attempt + 1, max_retries, wait_time)
+                time.sleep(wait_time)
+                continue
+
+            if status_code == 500 and not internal_error_retried:
+                internal_error_retried = True
+                logger.warning("Groq HTTP 500. Retrying once in 5s")
+                time.sleep(5)
+                continue
+
+            logger.warning("Groq retries exhausted or non-retryable error: %s", e)
+            return groq_safe_fallback(prompt_messages)
+        except (APIConnectionError, httpx.TimeoutException, httpx.ConnectError) as e:
+            groq_status["last_error"] = f"Connection error: {str(e)}"
+            if attempt < max_retries:
+                logger.warning("Groq connection error. Retry %s/%s in 5s", attempt + 1, max_retries)
+                time.sleep(5)
+                continue
+            return groq_safe_fallback(prompt_messages)
+        except Exception as e:
+            groq_status["last_error"] = str(e)
+            logger.warning("Unexpected Groq error: %s", e)
+            return groq_safe_fallback(prompt_messages)
+
+    return groq_safe_fallback(prompt_messages)
+
+def create_groq_chat(prompt_messages):
+    return call_groq_with_retry(prompt_messages)
 
 def check_message_safety(text):
     """Check if message contains potentially malicious content."""
-    client = get_groq_client()
     try:
-        response = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-            messages=[
-                {"role": "system", "content": "You are a content safety checker. Analyze the following text and determine if it contains malicious, harmful, or inappropriate content. Respond with ONLY 'SAFE' or 'MALICIOUS'."},
-                {"role": "user", "content": text}
-            ],
-            max_tokens=10,
-        )
-        result = response.choices[0].message.content.strip().upper()
+        result = call_groq_with_retry([
+            {"role": "system", "content": "You are a content safety checker. Analyze the following text and determine if it contains malicious, harmful, or inappropriate content. Respond with ONLY 'SAFE' or 'MALICIOUS'."},
+            {"role": "user", "content": text}
+        ]).strip().upper()
         return "MALICIOUS" in result
     except Exception as e:
-        print(f"Safety check error: {e}")
+        logger.warning("Safety check error: %s", e)
         return False  # Default to safe if check fails
 
 def env_flag(name, default=False):
@@ -171,19 +313,312 @@ def env_flag(name, default=False):
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+def normalize_received_at(value):
+    """Convert source timestamps into values PostgreSQL can store as TIMESTAMPTZ."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    if isinstance(value, str) and value.strip().isdigit():
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return value
+
+def ensure_timezone_aware(value):
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return PAKISTAN_TZ.localize(value)
+    return value.astimezone(PAKISTAN_TZ)
+
+def calculate_urgency(deadline: datetime) -> dict:
+    """
+    Return urgency metadata for a deadline.
+    Boundary policy:
+    - exactly 7 days away is medium
+    - exactly 72 hours away is medium
+    - exactly 24 hours away is high
+    - already passed is overdue
+    """
+    return _calculate_urgency(deadline, now=datetime.now(PAKISTAN_TZ))
+
+def _calculate_urgency(deadline: datetime, now: datetime) -> dict:
+    if deadline is None:
+        return {"score": 0, "label": "none", "color": "grey"}
+
+    aware_deadline = ensure_timezone_aware(deadline)
+    aware_now = ensure_timezone_aware(now)
+    hours_until_deadline = (aware_deadline - aware_now).total_seconds() / 3600
+
+    if hours_until_deadline < 0:
+        return {"score": 5, "label": "overdue", "color": "black"}
+    if hours_until_deadline < 24:
+        return {"score": 4, "label": "critical", "color": "red"}
+    if hours_until_deadline <= 72:
+        return {"score": 3, "label": "high", "color": "orange"}
+    if hours_until_deadline <= 168:
+        return {"score": 2, "label": "medium", "color": "yellow"}
+    return {"score": 1, "label": "low", "color": "green"}
+
+def refresh_urgency_for_user(user_id: int):
+    """
+    Recalculate urgency for all pending deadline-bearing notifications for one user.
+    The database uses UUID user IDs today; the annotation follows the task wording,
+    and psycopg2 accepts the runtime ID value passed by the endpoint or scheduler.
+    """
+    notifications = get_pending_deadline_notifications(user_id)
+    summary = {
+        "user_id": str(user_id),
+        "updated": 0,
+        "moved_to_overdue": 0,
+        "urgency_changes": [],
+    }
+
+    for notification in notifications:
+        urgency = calculate_urgency(notification["deadline"])
+        previous_label = notification.get("urgency_label")
+        new_label = urgency["label"]
+        changed = previous_label != new_label
+
+        if update_notification_urgency(notification["id"], urgency["score"], new_label):
+            summary["updated"] += 1
+
+            if changed:
+                if new_label == "overdue":
+                    summary["moved_to_overdue"] += 1
+                summary["urgency_changes"].append({
+                    "notification_id": str(notification["id"]),
+                    "previous_label": previous_label,
+                    "new_label": new_label,
+                    "score": urgency["score"],
+                    "color": urgency["color"],
+                    "urgency_changed": True,
+                })
+
+    summary["pending_with_deadlines"] = len(notifications)
+    return summary
+
+def refresh_urgency_for_all_users():
+    summaries = []
+    for user_id in get_users_with_pending_deadlines():
+        summaries.append(refresh_urgency_for_user(user_id))
+    return summaries
+
+async def scheduled_urgency_refresh_loop():
+    while True:
+        try:
+            await asyncio.to_thread(refresh_urgency_for_all_users)
+        except Exception as e:
+            logger.exception("Scheduled urgency refresh failed; will retry on next interval: %s", e)
+
+        await asyncio.sleep(URGENCY_REFRESH_INTERVAL_SECONDS)
+
+def first_deadline_date(deadlines):
+    for deadline in deadlines:
+        value = deadline.get("deadline_date") if isinstance(deadline, dict) else None
+        if value:
+            return value
+    return None
+
+DEADLINE_CATEGORIES = {"assignment", "quiz", "exam_schedule"}
+
+def parse_structured_classroom_due_date(due_date, due_time=None):
+    if not due_date:
+        return None
+    due_time = due_time or {"hours": 23, "minutes": 59}
+    return datetime(
+        int(due_date["year"]),
+        int(due_date["month"]),
+        int(due_date["day"]),
+        int(due_time.get("hours", 23)),
+        int(due_time.get("minutes", 59)),
+        tzinfo=timezone.utc,
+    )
+
+def run_pipeline(text: str, notification_id: int, source_type: str, structured_deadline=None) -> dict:
+    """
+    Unified notification pipeline for WhatsApp, Gmail, Classroom, and future sources.
+    Saves category, optional deadline, and urgency onto an existing notification row.
+    """
+    if not text or not text.strip():
+        return {
+            "notification_id": str(notification_id) if notification_id else None,
+            "source_type": source_type,
+            "success": False,
+            "error": "empty_text",
+            "category": None,
+            "deadline_found": False,
+            "deadline": None,
+            "urgency_label": "none",
+        }
+
+    category = classifier_stub(text)
+    update_notification_category(notification_id, category)
+
+    result = {
+        "notification_id": str(notification_id) if notification_id else None,
+        "source_type": source_type,
+        "success": True,
+        "item_id": str(notification_id) if notification_id else None,
+        "category": category,
+        "deadline_found": False,
+        "deadline": None,
+        "deadline_source": None,
+        "urgency_label": "none",
+        "urgency_score": 0,
+        "urgency_color": "grey",
+        "llm_called": False,
+    }
+
+    if category == "noise":
+        update_notification_urgency(notification_id, 0, "none")
+        result["skipped"] = "noise"
+        return result
+
+    deadline_datetime = structured_deadline
+    if deadline_datetime:
+        result["deadline_source"] = "structured"
+    elif category in DEADLINE_CATEGORIES:
+        result["llm_called"] = True
+        try:
+            parsed_deadline = parse_deadline_response(extract_deadline_json_from_text(text))
+        except Exception as e:
+            logger.warning("Pipeline deadline extraction failed for notification %s: %s", notification_id, e)
+            parsed_deadline = {"has_deadline": False, "deadline": None}
+
+        if parsed_deadline["has_deadline"] and parsed_deadline["deadline"]:
+            deadline_datetime = parsed_deadline["deadline"]
+            result["deadline_source"] = "llm"
+
+    if deadline_datetime:
+        update_notification_deadline(notification_id, deadline_datetime)
+        urgency = calculate_urgency(deadline_datetime)
+        result.update({
+            "deadline_found": True,
+            "deadline": deadline_datetime.isoformat(),
+            "urgency_label": urgency["label"],
+            "urgency_score": urgency["score"],
+            "urgency_color": urgency["color"],
+        })
+    else:
+        urgency = calculate_urgency(None)
+        result.update({
+            "urgency_label": urgency["label"],
+            "urgency_score": urgency["score"],
+            "urgency_color": urgency["color"],
+        })
+
+    update_notification_urgency(notification_id, urgency["score"], urgency["label"])
+    return result
+
+def strip_markdown_code_fence(text):
+    text = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    return fenced.group(1).strip() if fenced else text
+
+def extract_json_object(text):
+    text = strip_markdown_code_fence(text)
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    return match.group(0).strip() if match else text
+
+def parse_strict_deadline_datetime(value):
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    if not isinstance(value, str):
+        logger.warning("Deadline value has unsupported type: %r", value)
+        return None
+
+    raw_value = value.strip()
+    if raw_value.lower() in {"", "null", "none", "n/a", "na"}:
+        return None
+
+    normalized = raw_value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        pass
+
+    for date_format in (
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d",
+    ):
+        try:
+            parsed = datetime.strptime(raw_value, date_format)
+            if date_format in {"%Y-%m-%d", "%Y/%m/%d"}:
+                return parsed.replace(hour=23, minute=59)
+            return parsed
+        except ValueError:
+            continue
+
+    logger.warning("Could not parse LLM deadline value: %r", raw_value)
+    return None
+
+def parse_deadline_response(llm_output: str):
+    """
+    Parse Groq deadline JSON safely.
+    Expected shape: {"has_deadline": true, "deadline": "2025-11-17 23:59"}
+    """
+    fallback = {"has_deadline": False, "deadline": None}
+
+    if not llm_output or not str(llm_output).strip():
+        return fallback
+
+    json_text = extract_json_object(str(llm_output))
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        logger.warning("Invalid LLM deadline JSON output: %r", llm_output)
+        return fallback
+
+    if not isinstance(payload, dict):
+        logger.warning("LLM deadline response was not an object: %r", payload)
+        return fallback
+
+    has_deadline = payload.get("has_deadline", False)
+    if isinstance(has_deadline, str):
+        has_deadline = has_deadline.strip().lower() in {"true", "1", "yes", "y"}
+    else:
+        has_deadline = bool(has_deadline)
+
+    deadline_value = payload.get("deadline")
+    deadline_datetime = parse_strict_deadline_datetime(deadline_value)
+
+    if not deadline_datetime:
+        return fallback
+
+    return {"has_deadline": has_deadline, "deadline": deadline_datetime}
+
+def extract_deadline_json_from_text(text):
+    """Ask Groq for the compact deadline object used by the DB update path."""
+    return call_groq_with_retry([
+        {
+            "role": "system",
+            "content": (
+                "Extract the academic deadline from the message. "
+                "Return ONLY JSON in this exact shape: "
+                "{\"has_deadline\": true, \"deadline\": \"YYYY-MM-DD HH:MM\"}. "
+                "If no clear deadline exists, return "
+                "{\"has_deadline\": false, \"deadline\": null}. "
+                "Do not include markdown or explanation."
+            ),
+        },
+        {"role": "user", "content": text},
+    ]).strip()
+
 def extract_deadlines_from_text(text):
     """Extract deadline information from text using Groq AI."""
-    client = get_groq_client()
     try:
-        response = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-            messages=[
-                {"role": "system", "content": "You are a deadline extraction assistant. Extract all assignment deadlines from the given text. Return a JSON array of objects with fields: 'task', 'course', 'deadline_date', 'description'. If no deadlines found, return empty array. Format: [{\"task\": \"Assignment 1\", \"course\": \"Math\", \"deadline_date\": \"2024-01-15\", \"description\": \"Submit chapter 5 exercises\"}]"},
-                {"role": "user", "content": f"Extract deadlines from this text:\n\n{text}"}
-            ],
-            max_tokens=1000,
-        )
-        result = response.choices[0].message.content.strip()
+        result = call_groq_with_retry([
+            {"role": "system", "content": "You are a deadline extraction assistant. Extract all assignment deadlines from the given text. Return a JSON array of objects with fields: 'task', 'course', 'deadline_date', 'description'. If no deadlines found, return empty array. Format: [{\"task\": \"Assignment 1\", \"course\": \"Math\", \"deadline_date\": \"2024-01-15\", \"description\": \"Submit chapter 5 exercises\"}]"},
+            {"role": "user", "content": f"Extract deadlines from this text:\n\n{text}"}
+        ]).strip()
         # Try to parse as JSON
         try:
             deadlines = json.loads(result)
@@ -341,8 +776,6 @@ def llm_classify_course(message, courses):
     Stage 3: LLM fallback for ambiguous cases.
     Returns (course_id, course_name, confidence)
     """
-    client = get_groq_client()
-    
     # Prepare course list for prompt
     course_list = "\n".join([
         (
@@ -354,16 +787,10 @@ def llm_classify_course(message, courses):
     ])
     
     try:
-        response = client.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-            messages=[
-                {"role": "system", "content": "You are a course classification assistant. Given a message and a list of available courses, identify which course the message is most likely related to. Respond with ONLY JSON: {\"course_id\": \"uuid\", \"course_code\": \"CS101\", \"confidence\": 0.85}. If unsure, respond with {\"course_id\": null, \"course_code\": null, \"confidence\": 0.0}."},
-                {"role": "user", "content": f"Available courses:\n{course_list}\n\nMessage: {message}\n\nWhich course does this message belong to?"}
-            ],
-            max_tokens=100,
-        )
-        
-        result = response.choices[0].message.content.strip()
+        result = call_groq_with_retry([
+            {"role": "system", "content": "You are a course classification assistant. Given a message and a list of available courses, identify which course the message is most likely related to. Respond with ONLY JSON: {\"course_id\": \"uuid\", \"course_code\": \"CS101\", \"confidence\": 0.85}. If unsure, respond with {\"course_id\": null, \"course_code\": null, \"confidence\": 0.0}."},
+            {"role": "user", "content": f"Available courses:\n{course_list}\n\nMessage: {message}\n\nWhich course does this message belong to?"}
+        ]).strip()
         try:
             classification = json.loads(result.strip("` \n").removeprefix("json").strip())
             course_id = classification.get("course_id")
@@ -598,6 +1025,41 @@ def home():
 def test_endpoint():
     return {"status": "success", "data": "Backend logic ready"}
 
+@app.get("/urgency/refresh")
+def refresh_urgency_endpoint(user_id: str = Query(...)):
+    """Recalculate urgency for one user immediately."""
+    try:
+        return {
+            "status": "success",
+            **refresh_urgency_for_user(user_id),
+        }
+    except Exception as e:
+        logger.exception("Urgency refresh failed for user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail=f"Urgency refresh failed: {str(e)}")
+
+@app.post("/whatsapp/status")
+def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
+    whatsapp_status_state.update({
+        "status": status_update.status,
+        "reason": status_update.reason,
+        "user_id": status_update.user_id,
+        "updated_at": datetime.now(PAKISTAN_TZ).isoformat(),
+    })
+    return {"status": "success", "whatsapp": whatsapp_status_state}
+
+@app.get("/whatsapp/status")
+def get_whatsapp_status():
+    return {"status": "success", "whatsapp": whatsapp_status_state}
+
+@app.get("/whatsapp/health")
+def whatsapp_health():
+    return {"status": "ok", "service": "FastAPI", "timestamp": datetime.now(PAKISTAN_TZ).isoformat()}
+
+@app.get("/groq/status")
+def get_groq_status():
+    reset_groq_daily_counter_if_needed()
+    return {"status": "success", **groq_status}
+
 # Task #25: Fetch Gmail Emails (Proper Implementation)
 @app.get("/gmail/fetch")
 def fetch_gmail_emails(max_results: int = 10):
@@ -611,6 +1073,7 @@ def fetch_gmail_emails(max_results: int = 10):
     user_id = get_or_create_user("Default Student", "student@example.com") # Placeholder user
     fetched_count = 0
     new_count = 0
+    pipeline_results = []
 
     for msg in messages:
         fetched_count += 1
@@ -629,28 +1092,31 @@ def fetch_gmail_emails(max_results: int = 10):
         # Decode body
         body = decode_gmail_body(full_msg.get("payload", {}))
         
-        # Classification
-        category = classifier_stub(subject + " " + body)
+        notification_text = f"Subject: {subject}\n\n{body[:500]}..."
+        category = classifier_stub(notification_text)
         
-        # Store in DB
-        if not notification_exists(msg["id"], "gmail"):
+        notif_id = get_notification_id_by_source(msg["id"], "gmail")
+        if not notif_id:
             notif_id = insert_notification(
                 user_id=user_id,
                 source_type="gmail",
                 external_id=msg["id"],
                 sender=sender_name,
-                text=f"Subject: {subject}\n\n{body[:500]}...", # Truncate for display
+                text=notification_text,
                 category=category,
-                received_at=date_raw,
+                received_at=normalize_received_at(date_raw),
                 source_ref=sender_email
             )
             if notif_id:
                 new_count += 1
+        if notif_id:
+            pipeline_results.append(run_pipeline(notification_text, notif_id, "gmail"))
 
     return {
         "status": "success",
         "total_fetched": fetched_count,
-        "new_notifications_saved": new_count
+        "new_notifications_saved": new_count,
+        "pipeline_results": pipeline_results
     }
 
 # Task #28: Fetch Google Classroom Content
@@ -668,6 +1134,7 @@ def fetch_classroom_all():
         raise HTTPException(status_code=502, detail=f"Classroom API error: {e}")
 
     stats = {"courses_processed": 0, "announcements": 0, "coursework": 0, "materials": 0}
+    pipeline_results = []
 
     for course in courses:
         course_id = course["id"]
@@ -678,20 +1145,23 @@ def fetch_classroom_all():
         try:
             announcements = execute_google_api_call(service.courses().announcements().list(courseId=course_id)).get("announcements", [])
             for ann in announcements:
-                if notification_exists(ann["id"], "classroom"):
-                    continue
-                category = classifier_stub(ann.get("text", ""))
-                saved = insert_notification(
-                    user_id=user_id,
-                    source_type="classroom",
-                    external_id=ann["id"],
-                    sender=course_name,
-                    text=ann.get("text", "No text"),
-                    category=category,
-                    received_at=ann["creationTime"],
-                    source_ref=course_id
-                )
-                if saved: stats["announcements"] += 1
+                text = ann.get("text", "No text")
+                category = classifier_stub(text)
+                saved = get_notification_id_by_source(ann["id"], "classroom")
+                if not saved:
+                    saved = insert_notification(
+                        user_id=user_id,
+                        source_type="classroom",
+                        external_id=ann["id"],
+                        sender=course_name,
+                        text=text,
+                        category=category,
+                        received_at=normalize_received_at(ann["creationTime"]),
+                        source_ref=course_id
+                    )
+                if saved:
+                    stats["announcements"] += 1
+                    pipeline_results.append(run_pipeline(text, saved, "classroom"))
         except HttpError as e:
             print(f"Error fetching announcements for {course_name}: {e}")
 
@@ -699,29 +1169,33 @@ def fetch_classroom_all():
         try:
             coursework = execute_google_api_call(service.courses().courseWork().list(courseId=course_id)).get("courseWork", [])
             for cw in coursework:
-                if notification_exists(cw["id"], "classroom"):
-                    continue
                 text = f"Title: {cw.get('title')}\nDescription: {cw.get('description', 'N/A')}"
                 category = classifier_stub(text)
                 
                 # Extract due date if present
-                due_date = None
+                structured_deadline = None
                 if cw.get("dueDate"):
-                    d = cw["dueDate"]
-                    t = cw.get("dueTime", {"hours": 23, "minutes": 59})
-                    due_date = f"{d['year']}-{d['month']:02d}-{d['day']:02d}T{t.get('hours', 0):02d}:{t.get('minutes', 0):02d}:00Z"
+                    structured_deadline = parse_structured_classroom_due_date(
+                        cw["dueDate"],
+                        cw.get("dueTime", {"hours": 23, "minutes": 59}),
+                    )
 
-                saved = insert_notification(
-                    user_id=user_id,
-                    source_type="classroom",
-                    external_id=cw["id"],
-                    sender=course_name,
-                    text=text,
-                    category="assignment" if cw.get("workType") == "ASSIGNMENT" else category,
-                    received_at=cw["creationTime"],
-                    source_ref=course_id
-                )
-                if saved: stats["coursework"] += 1
+                saved = get_notification_id_by_source(cw["id"], "classroom")
+                if not saved:
+                    saved = insert_notification(
+                        user_id=user_id,
+                        source_type="classroom",
+                        external_id=cw["id"],
+                        sender=course_name,
+                        text=text,
+                        category="assignment" if cw.get("workType") == "ASSIGNMENT" else category,
+                        received_at=normalize_received_at(cw["creationTime"]),
+                        source_ref=course_id,
+                        deadline=structured_deadline
+                    )
+                if saved:
+                    stats["coursework"] += 1
+                    pipeline_results.append(run_pipeline(text, saved, "classroom", structured_deadline=structured_deadline))
         except HttpError as e:
             print(f"Error fetching coursework for {course_name}: {e}")
 
@@ -730,9 +1204,6 @@ def fetch_classroom_all():
             materials_result = execute_google_api_call(service.courses().courseWorkMaterials().list(courseId=course_id))
             materials = materials_result.get("courseWorkMaterials", [])
             for mat in materials:
-                if notification_exists(mat["id"], "classroom"):
-                    continue
-                
                 # Extract attachments
                 attachments_info = []
                 for attachment in mat.get("materials", []):
@@ -744,17 +1215,21 @@ def fetch_classroom_all():
                 text = f"Title: {mat.get('title')}\nDescription: {mat.get('description', '')}\nAttachments: {', '.join(attachments_info)}"
                 category = classifier_stub(text)
                 
-                saved = insert_notification(
-                    user_id=user_id,
-                    source_type="classroom",
-                    external_id=mat["id"],
-                    sender=course_name,
-                    text=text,
-                    category="material",
-                    received_at=mat["creationTime"],
-                    source_ref=course_id
-                )
-                if saved: stats["materials"] += 1
+                saved = get_notification_id_by_source(mat["id"], "classroom")
+                if not saved:
+                    saved = insert_notification(
+                        user_id=user_id,
+                        source_type="classroom",
+                        external_id=mat["id"],
+                        sender=course_name,
+                        text=text,
+                        category="material",
+                        received_at=normalize_received_at(mat["creationTime"]),
+                        source_ref=course_id
+                    )
+                if saved:
+                    stats["materials"] += 1
+                    pipeline_results.append(run_pipeline(text, saved, "classroom"))
         except HttpError as e:
             if e.resp.status == 403:
                 print(f"Permission denied for materials in {course_name} (403). Skipping.")
@@ -763,7 +1238,8 @@ def fetch_classroom_all():
 
     return {
         "status": "success",
-        "stats": stats
+        "stats": stats,
+        "pipeline_results": pipeline_results
     }
 
 @app.get("/demo/sync")
@@ -808,7 +1284,7 @@ def chat_with_bot(request: ChatRequest):
         return ChatResponse(
             response=response_text,
             is_safe=True,
-            warning=None
+            warning=groq_status["last_error"] if response_text.startswith("Abhi thoda busy hoon") else None
         )
     except HTTPException as e:
         raise e
@@ -906,9 +1382,10 @@ def process_incoming_message(message: IncomingWhatsAppMessage):
     Flow:
     1. Check message safety
     2. Classify course using multi-stage pipeline
-    3. Extract deadlines using hybrid approach (pattern + dateparser + LLM fallback)
+    3. Call Groq for deadline extraction and parse the JSON response
     4. Store notification in database
-    5. Return processed result
+    5. Update the notification deadline when a valid datetime was extracted
+    6. Return processed result
     """
     try:
         group_ref = message.group or message.group_name or message.group_id or "unknown"
@@ -929,32 +1406,40 @@ def process_incoming_message(message: IncomingWhatsAppMessage):
         # Step 3: Classify course
         classification = classify_course_for_message(message.text, group_ref)
         
-        # Step 4: Extract deadlines (hybrid approach - 90% less LLM calls)
-        deadlines = extract_deadlines_hybrid(message.text)
-        
-        # Step 5: Determine category
         category = classifier_stub(message.text)
         
-        # Step 6: Store in database
         notif_id = insert_notification(
             user_id=user_id,
             source_type="whatsapp",
-            external_id=f"wa_{message.timestamp}_{message.sender}",
+            external_id=message.message_id or f"wa_{message.timestamp}_{message.sender}",
             sender=sender_ref,
             text=message.text,
             category=category,
-            received_at=message.timestamp,
+            received_at=normalize_received_at(message.timestamp),
             course_id=classification.get("course_id"),
             source_ref=group_ref
         )
+
+        pipeline_result = run_pipeline(message.text, notif_id, "whatsapp")
         
         return {
             "success": True,
             "notification_id": notif_id,
+            "user_id": str(user_id),
             "classification": classification,
-            "deadlines_extracted": deadlines,
-            "llm_api_calls_saved": "Used hybrid extraction (pattern+dateparser first)",
-            "message": f"Processed message. Course: {classification.get('course_name', 'Unknown')}, Deadlines: {len(deadlines)}"
+            "pipeline_result": pipeline_result,
+            "deadline_extraction": {
+                "has_deadline": pipeline_result["deadline_found"],
+                "deadline": pipeline_result["deadline"],
+                "deadline_saved": pipeline_result["deadline_found"],
+            },
+            "urgency": {
+                "score": pipeline_result["urgency_score"],
+                "label": pipeline_result["urgency_label"],
+                "color": pipeline_result["urgency_color"],
+            },
+            "urgency_saved": True,
+            "message": f"Processed message. Course: {classification.get('course_name', 'Unknown')}, Category: {pipeline_result['category']}, Urgency: {pipeline_result['urgency_label']}"
         }
     
     except Exception as e:

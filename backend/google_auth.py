@@ -17,6 +17,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.announcements.readonly",
     "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
     "https://www.googleapis.com/auth/classroom.coursework.students.readonly",
+    "https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
     "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly",
 ]
 
@@ -29,6 +30,9 @@ def get_google_credentials():
     if TOKEN_FILE.exists():
         try:
             credentials = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            if not credentials.has_scopes(SCOPES):
+                TOKEN_FILE.unlink()
+                credentials = None
         except ValueError:
             # If scopes have changed, delete the old token and force re-auth
             TOKEN_FILE.unlink()

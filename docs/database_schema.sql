@@ -162,13 +162,30 @@ CREATE TABLE notifications (
                 'announcement',
                 'material',
                 'event',
-                'exam_schedule'
+                'exam_schedule',
+                'noise'
             )
         ),
     -- Notification classification.
 
     deadline TIMESTAMPTZ,
     -- Extracted deadline, if any.
+
+    urgency_score INTEGER NOT NULL DEFAULT 0,
+    -- Numeric urgency score: 0 none, 1 low, 2 medium, 3 high, 4 critical, 5 overdue.
+
+    urgency_label TEXT NOT NULL DEFAULT 'none'
+        CHECK (
+            urgency_label IN (
+                'none',
+                'low',
+                'medium',
+                'high',
+                'critical',
+                'overdue'
+            )
+        ),
+    -- Calculated urgency label used by the frontend.
 
     urgency_level TEXT
         CHECK (

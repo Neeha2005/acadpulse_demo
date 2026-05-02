@@ -1,200 +1,22 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AcadPulse | Student Hub</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="styles/main.css">
-</head>
-<body>
-  
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="logo">
-        <i class="fa-solid fa-graduation-cap logo-icon"></i>
-        Acad<span>Pulse</span>
-      </div>
-    </div>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AcadPulse Dashboard</title>
     
-    <nav class="sidebar-nav">
-      <div class="nav-section">MAIN</div>
-      <a href="index.html" class="nav-item active" id="nav-dashboard"><i class="fa-solid fa-shapes"></i> Dashboard</a>
-      <a href="timetable.html" class="nav-item" id="nav-timetable"><i class="fa-solid fa-calendar-day"></i> Timetable</a>
-      <a href="courses.html" class="nav-item" id="nav-courses"><i class="fa-solid fa-book-open"></i> Courses</a>
-      
-      <div class="nav-section">INTEGRATIONS</div>
-      <a href="integrations.html" class="nav-item has-badge" id="nav-int-whatsapp"><i class="fa-brands fa-whatsapp"></i> WhatsApp <span class="badge badge-success" id="badge-whatsapp">Active</span></a>
-      <a href="integrations.html" class="nav-item has-badge" id="nav-int-classroom"><i class="fa-brands fa-google"></i> Classroom <span class="badge badge-warning" id="badge-classroom">Syncing</span></a>
-      <a href="integrations.html" class="nav-item has-badge" id="nav-int-gmail"><i class="fa-solid fa-envelope"></i> Gmail <span class="badge badge-success" id="badge-gmail">Active</span></a>
-    </nav>
-
-    <div class="sidebar-footer">
-      <div class="user-profile">
-        <div class="avatar">SI</div>
-        <div class="user-info">
-          <div class="user-name">Student Account</div>
-          <div class="status-indicator"><div class="dot online"></div> Online</div>
-        </div>
-      </div>
-    </div>
-  </aside>
-
-  <!-- Main Content -->
-  <main class="main-content">
+    <!-- AcadPulse Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- Topbar -->
-    <header class="topbar">
-      <div class="search-wrap">
-        <i class="fa-solid fa-search"></i>
-        <input type="text" placeholder="Search assignments, messages, or materials...">
-      </div>
-      <div class="topbar-actions">
-        <button class="icon-btn" title="Sync integrations"><i class="fa-solid fa-rotate-right"></i></button>
-        <button class="icon-btn active-notif" title="Notifications"><i class="fa-regular fa-bell"></i><div class="pip"></div></button>
-        <button class="btn btn-primary" id="btn-open-add-task"><i class="fa-solid fa-plus"></i> Add Manual Task</button>
-      </div>
-    </header>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
-    <!-- Main Scroll Area -->
-    <div class="dashboard-scroll">
-      
-      <!-- Dashboard View -->
-      <div id="view-dashboard" class="view-section active">
-        <div class="hero-stats">
-        <div class="welcome-text">
-          <h1>Welcome back, <span class="accent">Scholar</span>.</h1>
-          <p>You have <strong class="text-urgent">2</strong> active deadlines and <strong class="text-white">5</strong> new messages across your platforms.</p>
-        </div>
-      </div>
-
-      <!-- Overview Cards -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-header">
-            <div class="stat-icon bg-urgent-subtle text-urgent"><i class="fa-solid fa-fire"></i></div>
-            <div class="stat-trend trend-down"><i class="fa-solid fa-arrow-down"></i> 1 from yesterday</div>
-          </div>
-          <div class="stat-value">2</div>
-          <div class="stat-label">Urgent Deadlines</div>
-        </div>
-        
-        <div class="stat-card">
-          <div class="stat-header">
-            <div class="stat-icon bg-primary-subtle text-primary"><i class="fa-solid fa-clock-rotate-left"></i></div>
-            <div class="stat-trend trend-up"><i class="fa-solid fa-arrow-up"></i> 12 waiting</div>
-          </div>
-          <div class="stat-value">4</div>
-          <div class="stat-label">Pending Assignments</div>
-        </div>
-        
-        <div class="stat-card">
-          <div class="stat-header">
-            <div class="stat-icon bg-whatsapp-subtle text-whatsapp"><i class="fa-brands fa-whatsapp"></i></div>
-            <div class="stat-trend neutral">Last sync: 2m ago</div>
-          </div>
-          <div class="stat-value">15</div>
-          <div class="stat-label">Unread Messages</div>
-        </div>
-      </div>
-
-      <div class="content-grid">
-        
-        <!-- Action Required Column -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2 class="panel-title"><i class="fa-solid fa-bolt text-warning"></i> Action Required</h2>
-            <button class="text-btn">View All</button>
-          </div>
-          <div class="tasks-list" id="urgent-tasks">
-            <!-- Will be populated by JS -->
-          </div>
-        </div>
-
-        <!-- Latest Notifications Stream -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2 class="panel-title"><i class="fa-solid fa-stream text-primary"></i> Unified Notification Stream</h2>
-            <div class="filters">
-              <button class="filter-btn active" data-filter="all">All</button>
-              <button class="filter-btn" data-filter="whatsapp">WhatsApp</button>
-              <button class="filter-btn" data-filter="classroom">Classroom</button>
-            </div>
-          </div>
-          <div class="notification-stream" id="notification-stream">
-            <!-- Will be populated by JS -->
-          </div>
-        </div>
-
-      </div>
-      </div> <!-- End Dashboard View -->
-
-    </div>
-  </main>
-
-  <!-- Modal Template -->
-  <div class="modal-overlay" id="task-modal" style="display:none;">
-    <div class="modal-container">
-      <div class="modal-header">
-        <div class="modal-source" id="modal-source"><i class="fa-brands fa-whatsapp"></i> WhatsApp Group</div>
-        <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
-      </div>
-      <div class="modal-body">
-        <h2 id="modal-title" class="modal-maintitle">AI Assignment 2 Due Tomorrow</h2>
-        <div class="modal-meta">
-          <span class="meta-item"><i class="fa-solid fa-book"></i> <span id="modal-course">CS 401 - Artificial Intelligence</span></span>
-          <span class="meta-item"><i class="fa-regular fa-clock"></i> <span id="modal-deadline">Tomorrow, 11:59 PM</span></span>
-        </div>
-        <div class="modal-content-box" id="modal-content">
-          "Hey everyone, just a reminder that Assignment 2 has been updated with the new requirements. It's due tomorrow midnight. Good luck!"
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-outline" id="modal-btn-dismiss">Dismiss</button>
-        <button class="btn btn-primary" id="modal-btn-action">Mark as Completed <i class="fa-solid fa-check"></i></button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Add Task Modal -->
-  <div class="modal-overlay" id="add-task-modal" style="display:none;">
-    <div class="modal-container">
-      <div class="modal-header">
-        <h2 class="panel-title"><i class="fa-solid fa-plus text-primary"></i> Add Manual Task</h2>
-        <button class="icon-btn close-add-modal"><i class="fa-solid fa-xmark"></i></button>
-      </div>
-      <form id="add-task-form">
-        <div class="modal-body" style="display: flex; flex-direction: column; gap: 16px;">
-          <div>
-            <label style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px; display: block;">Task Title</label>
-            <input type="text" id="new-task-title" required style="width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); color: var(--text);" placeholder="e.g. Read Chapter 5">
-          </div>
-          <div>
-            <label style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px; display: block;">Course / Context</label>
-            <input type="text" id="new-task-course" required style="width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); color: var(--text);" placeholder="e.g. CS 401">
-          </div>
-          <div>
-            <label style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px; display: block;">Deadline</label>
-            <input type="datetime-local" id="new-task-deadline" required style="width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); color: var(--text); font-family: var(--font-body);">
-          </div>
-          <div>
-            <label style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px; display: block;">Details</label>
-            <textarea id="new-task-details" style="width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); color: var(--text); min-height: 80px;" placeholder="Optional instructions..."></textarea>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-outline close-add-modal" id="btn-cancel-add">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="btn-save-task">Save Task</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <script src="js/global.js"></script>
-  <script src="js/dashboard.js"></script>
-</body>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>

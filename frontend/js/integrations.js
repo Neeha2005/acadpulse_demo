@@ -1,5 +1,10 @@
 // integrations.js
 document.addEventListener('DOMContentLoaded', () => {
+    const API_BASE_URL = window.ACADPULSE_API_BASE_URL || 'http://localhost:8000';
+    const syncEndpoints = {
+        gmail: '/gmail/fetch',
+        classroom: '/classroom/fetch'
+    };
 
     let integrations = [
         { id: 'whatsapp', platform: 'WhatsApp', icon: 'fa-whatsapp', colorCls: 'text-whatsapp', bgCls: 'bg-whatsapp-subtle', status: 'Active', statusCls: 'text-success', detail: '+1 (555) 123-4567', lastSync: '2 mins ago' },
@@ -40,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div style="font-size: 13px; color: var(--text);">${intg.lastSync}</div>
                     </div>
                     <div style="margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border); display:flex; gap:12px;">
-                        <button class="btn btn-outline btn-sync" data-id="${intg.id}" style="flex:1;"><i class="fa-solid fa-rotate-right"></i> Force Sync</button>
+                        <button class="btn btn-outline btn-sync" data-id="${intg.id}" style="flex:1;" ${syncEndpoints[intg.id] ? '' : 'disabled'}><i class="fa-solid fa-rotate-right"></i> ${syncEndpoints[intg.id] ? 'Force Sync' : 'Bridge Active'}</button>
                         <button class="btn btn-outline btn-unlink" data-id="${intg.id}" style="color: var(--urgent); border-color: var(--urgent-subtle);"><i class="fa-solid fa-unlink"></i></button>
                     </div>
                 </div>
@@ -51,8 +56,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderIntegrations();
 
+    async function syncIntegration(intg) {
+        const endpoint = syncEndpoints[intg.id];
+        if (!endpoint) return;
+
+        intg.status = 'Syncing';
+        intg.statusCls = 'text-warning';
+        intg.lastSync = 'Currently syncing...';
+        renderIntegrations();
+
+        try {
+            const response = await fetch(`${API_BASE_URL}${endpoint}`);
+            const body = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(body.detail || `HTTP ${response.status}`);
+            }
+
+            intg.status = 'Active';
+            intg.statusCls = 'text-success';
+            intg.lastSync = 'Just now';
+        } catch (error) {
+            intg.status = 'Error';
+            intg.statusCls = 'text-urgent';
+            intg.lastSync = error.message;
+        }
+
+        renderIntegrations();
+    }
+
     // Event Delegation for action buttons
-    document.getElementById('integrations-list').addEventListener('click', (e) => {
+    document.getElementById('integrations-list').addEventListener('click', async (e) => {
         const syncBtn = e.target.closest('.btn-sync');
         const unlinkBtn = e.target.closest('.btn-unlink');
         
@@ -60,27 +94,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const id = syncBtn.dataset.id;
             const intg = integrations.find(i => i.id === id);
             if(intg && intg.status !== 'Syncing') {
-                intg.status = 'Syncing';
-                intg.statusCls = 'text-warning';
-                intg.lastSync = 'Currently syncing...';
-                renderIntegrations();
-                
-                // MOCK API FETCH
-                console.log(`[API MOCK] POST backend.com/api/sync/${id}`);
-                setTimeout(() => {
-                    intg.status = 'Active';
-                    intg.statusCls = 'text-success';
-                    intg.lastSync = 'Just now';
-                    renderIntegrations();
-                }, 2000);
+                await syncIntegration(intg);
             }
         }
         
         if (unlinkBtn) {
             const id = unlinkBtn.dataset.id;
             if(confirm('Are you sure you want to disconnect this platform? You will stop receiving its notifications via AcadPulse.')) {
-                // MOCK API DELETE
-                console.log(`[API MOCK] DELETE backend.com/api/integrations/${id}`);
                 integrations = integrations.filter(i => i.id !== id);
                 renderIntegrations();
             }

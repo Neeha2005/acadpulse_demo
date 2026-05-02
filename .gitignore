@@ -25,6 +25,7 @@ whatsapp/sessions/
 whatsapp/baileys_store.json
 whatsapp/selected_groups.json
 whatsapp/*.log
+frontend-vite.*.log
 
 # ── AI model weights (too large for GitHub) ───────
 ai/classifier/model/
