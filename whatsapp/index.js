@@ -1,283 +1,173 @@
 import makeWASocket, {
   DisconnectReason,
-  Browsers,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import {
+  getStealthSocketConfig,
+  rampPresenceAfterConnect,
+  wrapSocket,
+} from "baileys-antiban";
+import "dotenv/config";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
-import axios from "axios";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { sendToFastAPI } from "./sender.js";
 
-const AUTH_DIR = "./auth_info";
-const SELECTED_GROUPS_FILE = "./selected_groups.json";
-const BACKEND_RECEIVE_MESSAGE_URL = "http://127.0.0.1:8000/receive-message";
+const SESSION_ROOT = process.env.WHATSAPP_SESSION_PATH || "./sessions";
+const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "test-user";
+const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const RECONNECT_DELAY_MS = 5_000;
+const MIN_PROCESSING_DELAY_MS = 700;
+const MAX_PROCESSING_DELAY_MS = 3_500;
 
-// Keep Baileys quiet unless something important happens in the socket layer.
-const logger = pino({ level: "silent" });
-let selectedGroupIds = new Set();
-let groupSelectionReady = false;
-let shouldReplaceSelectedGroups = false;
+const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+const activeSessions = new Map();
+const connectionTimes = new Map();
+const presenceControllers = new Map();
 
-async function startWhatsAppListener() {
-  // useMultiFileAuthState stores WhatsApp Web credentials as multiple files.
-  // Reusing this folder lets the bot reconnect without scanning a QR every run.
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+async function startSession(userId) {
+  const sessionPath = path.join(SESSION_ROOT, userId);
+  await mkdir(sessionPath, { recursive: true });
+
+  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
   const { version } = await fetchLatestBaileysVersion();
+  const presenceController = new AbortController();
 
-  const sock = makeWASocket({
+  presenceControllers.get(userId)?.abort();
+  presenceControllers.set(userId, presenceController);
+
+  const rawSock = makeWASocket({
+    ...getStealthSocketConfig({ os: "AcadPulse" }),
     auth: state,
     version,
-    browser: Browsers.macOS("AcadPulse"),
-    logger,
+    logger: logger.child({ module: "baileys", userId }),
     printQRInTerminal: false,
+    syncFullHistory: false,
   });
 
-  // Persist credentials whenever Baileys refreshes them.
+  const sock = wrapSocket(rawSock, {
+    preset: "conservative",
+    persist: path.join(sessionPath, "antiban-state.json"),
+    logging: true,
+  });
+
+  connectionTimes.set(userId, Date.now());
+  activeSessions.set(userId, sock);
+
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    // When WhatsApp requires login, Baileys gives us a QR string to render.
+  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      shouldReplaceSelectedGroups = true;
-      console.log("Scan this QR code with WhatsApp:");
+      logger.info({ userId }, "Scan this QR code with WhatsApp");
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === "open") {
-      console.log("WhatsApp connected successfully");
-      setupSelectedGroups(sock, { replaceSavedGroups: shouldReplaceSelectedGroups }).catch((error) => {
-        console.error("Could not load/select WhatsApp groups:", error);
+      connectionTimes.set(userId, Date.now());
+      logger.info({ userId }, "WhatsApp connected successfully");
+      rampPresenceAfterConnect(sock, {
+        minDelayMs: 30_000,
+        maxDelayMs: 90_000,
+        signal: presenceController.signal,
+      }).catch((error) => {
+        if (error?.name !== "AbortError") {
+          logger.warn({ userId, error: error.message }, "Presence ramp failed");
+        }
       });
-      shouldReplaceSelectedGroups = false;
     }
 
     if (connection === "close") {
+      presenceController.abort();
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const errorMessage = lastDisconnect?.error?.message || "Unknown disconnect reason";
-      const loggedOut = statusCode === DisconnectReason.loggedOut;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      if (loggedOut) {
-        console.log("WhatsApp logged out. Clearing old session and generating a new QR...");
-        resetWhatsAppSession().catch((error) => {
-          console.error("Failed to reset WhatsApp session:", error);
-        });
-        return;
+      logger.warn(
+        { userId, statusCode, shouldReconnect },
+        "WhatsApp connection closed",
+      );
+
+      if (shouldReconnect) {
+        setTimeout(() => {
+          startSessionWithMonitor(userId).catch((error) => {
+            logger.error({ userId, error }, "Failed to reconnect WhatsApp session");
+          });
+        }, RECONNECT_DELAY_MS);
+      } else {
+        activeSessions.delete(userId);
+        connectionTimes.delete(userId);
+        logger.warn({ userId, sessionPath }, "Logged out. Delete session folder and scan again.");
       }
-
-      console.log("WhatsApp disconnected. Reconnecting...", {
-        statusCode,
-        error: errorMessage,
-      });
-
-      setTimeout(() => {
-        startWhatsAppListener().catch((error) => {
-          console.error("Failed to reconnect WhatsApp:", error);
-        });
-      }, 5_000);
     }
   });
 
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    for (const rawMessage of messages) {
-      await handleIncomingMessage(rawMessage);
-    }
-  });
-}
-
-async function resetWhatsAppSession() {
-  await rm(AUTH_DIR, { recursive: true, force: true });
-  await resetSelectedGroups();
-
-  setTimeout(() => {
-    startWhatsAppListener().catch((error) => {
-      console.error("Failed to restart WhatsApp for QR login:", error);
-    });
-  }, 3_000);
-}
-
-async function setupSelectedGroups(sock, { replaceSavedGroups = false } = {}) {
-  if (groupSelectionReady && !replaceSavedGroups) {
-    return;
-  }
-
-  if (!replaceSavedGroups) {
-    const savedGroupIds = await loadSelectedGroupIds();
-
-    if (savedGroupIds.length > 0) {
-      selectedGroupIds = new Set(savedGroupIds);
-      groupSelectionReady = true;
-      console.log("Using saved WhatsApp study groups:");
-      for (const groupId of savedGroupIds) {
-        console.log("-", groupId);
-      }
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") {
       return;
     }
-  } else {
-    console.log("New WhatsApp login detected. Select groups again to replace saved groups.");
-  }
 
-  const groups = await fetchParticipatingGroups(sock);
-
-  if (groups.length === 0) {
-    console.log("No WhatsApp groups found for this account.");
-    return;
-  }
-
-  console.log("\nSelect study group(s) for AcadPulse:");
-  groups.forEach((group, index) => {
-    console.log(`${index + 1}. ${group.subject} (${group.id})`);
+    for (const message of messages) {
+      await handleIncomingMessage(sock, userId, message);
+    }
   });
 
-  const rl = createInterface({ input, output });
-  const answer = await rl.question(
-    "\nEnter group number(s), comma-separated if multiple, then press Enter: ",
-  );
-  rl.close();
+  return sock;
+}
 
-  const selectedGroups = parseGroupSelection(answer, groups);
+async function startSessionWithMonitor(userId) {
+  activeSessions.set(userId, await startSession(userId));
+}
 
-  if (selectedGroups.length === 0) {
-    console.log("No valid group selected. Restart and select at least one group.");
+async function handleIncomingMessage(sock, userId, message) {
+  if (!message.message || message.key?.fromMe) {
     return;
   }
 
-  selectedGroupIds = new Set(selectedGroups.map((group) => group.id));
-  groupSelectionReady = true;
-
-  await saveSelectedGroups(selectedGroups);
-
-  console.log("\nSelected study group(s):");
-  for (const group of selectedGroups) {
-    console.log("-", `${group.subject} (${group.id})`);
-  }
-}
-
-async function fetchParticipatingGroups(sock) {
-  const groupMap = await sock.groupFetchAllParticipating();
-
-  return Object.values(groupMap)
-    .map((group) => ({
-      id: group.id,
-      subject: group.subject || "Unnamed group",
-    }))
-    .sort((a, b) => a.subject.localeCompare(b.subject));
-}
-
-function parseGroupSelection(answer, groups) {
-  const selectedIndexes = answer
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isInteger(value) && value >= 1 && value <= groups.length);
-
-  const uniqueIndexes = [...new Set(selectedIndexes)];
-  return uniqueIndexes.map((index) => groups[index - 1]);
-}
-
-async function loadSelectedGroupIds() {
-  try {
-    const content = await readFile(SELECTED_GROUPS_FILE, "utf8");
-    const savedGroups = JSON.parse(content);
-
-    if (!Array.isArray(savedGroups)) {
-      return [];
-    }
-
-    return savedGroups
-      .map((group) => group.id)
-      .filter((id) => typeof id === "string" && id.endsWith("@g.us"));
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return [];
-    }
-
-    throw error;
-  }
-}
-
-async function saveSelectedGroups(groups) {
-  const content = JSON.stringify(groups, null, 2);
-  await writeFile(SELECTED_GROUPS_FILE, `${content}\n`);
-}
-
-async function resetSelectedGroups() {
-  selectedGroupIds = new Set();
-  groupSelectionReady = false;
-  shouldReplaceSelectedGroups = true;
-  await rm(SELECTED_GROUPS_FILE, { force: true });
-}
-
-async function handleIncomingMessage(rawMessage) {
-  const { key, message, messageTimestamp } = rawMessage;
-  const remoteJid = key?.remoteJid;
-
-  // Ignore messages sent by this WhatsApp account.
-  if (key?.fromMe) {
-    return;
-  }
-
-  // Only process WhatsApp group messages.
+  const remoteJid = message.key?.remoteJid;
   if (!remoteJid?.endsWith("@g.us")) {
     return;
   }
 
-  // Only process groups selected during first-time setup.
-  if (!groupSelectionReady || !selectedGroupIds.has(remoteJid)) {
+  const msgTimestampMs = Number(message.messageTimestamp || 0) * 1000;
+  const connectedAt = connectionTimes.get(userId) || 0;
+  if (msgTimestampMs && msgTimestampMs < connectedAt) {
+    logger.debug({ userId, remoteJid }, "Skipped pre-connection WhatsApp message");
     return;
   }
 
-  const senderId = key?.participant || "unknown";
-  const messageText = extractMessageText(message);
-  const timestamp = Number(messageTimestamp || Math.floor(Date.now() / 1000));
+  const text = extractText(message.message);
+  if (!text) {
+    return;
+  }
 
-  console.log("Incoming WhatsApp group message");
-  console.log("Group ID:", remoteJid);
-  console.log("Sender ID:", senderId);
-  console.log("Message text:", messageText || "Non-text message received");
-  console.log("Timestamp:", timestamp);
-  console.log("Full raw message object:");
-  console.dir(rawMessage, { depth: null });
+  await sleep(gaussianJitter(MIN_PROCESSING_DELAY_MS, MAX_PROCESSING_DELAY_MS));
 
-  // Send the extracted group message data to the FastAPI backend.
-  await sendMessageToBackend({
-    text: messageText,
-    sender: senderId,
-    group: remoteJid,
-    timestamp: new Date().toISOString(),
+  const groupName = await resolveGroupName(sock, remoteJid);
+  const sender = message.key.participant || remoteJid;
+
+  logger.info(
+    {
+      userId,
+      group: groupName,
+      preview: text.slice(0, 80),
+    },
+    "Forwarding WhatsApp group message to FastAPI",
+  );
+
+  await sendToFastAPI({
+    user_id: userId,
+    group_id: cleanJid(remoteJid),
+    group_name: groupName,
+    group_type: "general",
+    sender: cleanJid(sender),
+    sender_name: message.pushName || cleanJid(sender),
+    text,
+    timestamp: Number(message.messageTimestamp || Math.floor(Date.now() / 1000)),
   });
 }
 
-async function sendMessageToBackend(payload) {
-  try {
-    await axios.post(BACKEND_RECEIVE_MESSAGE_URL, payload, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    console.log("Message sent to backend successfully");
-  } catch (error) {
-    const status = error.response?.status;
-    const responseData = error.response?.data;
-    const message = error.message || "Unknown backend error";
-
-    console.error("Failed to send message to backend", {
-      status,
-      response: responseData,
-      error: message,
-    });
-  }
-}
-
-function extractMessageText(message) {
-  if (!message) {
-    return "";
-  }
-
+function extractText(message) {
   const content = unwrapMessage(message);
 
   return (
@@ -285,12 +175,14 @@ function extractMessageText(message) {
     content.extendedTextMessage?.text ||
     content.imageMessage?.caption ||
     content.videoMessage?.caption ||
+    content.documentMessage?.caption ||
+    content.buttonsResponseMessage?.selectedDisplayText ||
+    content.listResponseMessage?.title ||
     ""
   ).trim();
 }
 
 function unwrapMessage(message) {
-  // Some WhatsApp messages are wrapped by ephemeral/view-once containers.
   return (
     message.ephemeralMessage?.message ||
     message.viewOnceMessage?.message ||
@@ -299,7 +191,55 @@ function unwrapMessage(message) {
   );
 }
 
-startWhatsAppListener().catch((error) => {
-  console.error("WhatsApp listener failed to start:", error);
+async function resolveGroupName(sock, groupJid) {
+  try {
+    const metadata = await sock.groupMetadata(groupJid);
+    return metadata?.subject || cleanJid(groupJid);
+  } catch {
+    return cleanJid(groupJid);
+  }
+}
+
+function cleanJid(jid) {
+  return jid.split("@")[0].split(":")[0];
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function gaussianJitter(minMs, maxMs) {
+  const mean = (minMs + maxMs) / 2;
+  const stdDev = (maxMs - minMs) / 6;
+  let value = mean;
+
+  for (let i = 0; i < 6; i += 1) {
+    value += (Math.random() - 0.5) * stdDev;
+  }
+
+  return Math.max(minMs, Math.min(maxMs, Math.round(value)));
+}
+
+setInterval(() => {
+  for (const [userId, sock] of activeSessions.entries()) {
+    const readyState = sock?.ws?.readyState;
+
+    if (readyState !== 1) {
+      logger.warn({ userId, readyState }, "WhatsApp session appears dead; restarting");
+      startSessionWithMonitor(userId).catch((error) => {
+        logger.error({ userId, error }, "Failed to restart dead WhatsApp session");
+      });
+      continue;
+    }
+
+    const stats = sock.antiban?.getStats?.();
+    if (stats) {
+      logger.info({ userId, antiban: stats }, "WhatsApp antiban health stats");
+    }
+  }
+}, HEALTH_CHECK_INTERVAL_MS).unref();
+
+startSessionWithMonitor(DEFAULT_USER_ID).catch((error) => {
+  logger.error({ error }, "WhatsApp service failed to start");
   process.exitCode = 1;
 });
