@@ -28,6 +28,7 @@ def insert_notification(
     course_id=None,
     source_ref=None,
     deadline=None,
+    urgency_level=None,
 ):
     """Insert a notification into the database, ignoring duplicates."""
     conn = get_db_connection()
@@ -37,8 +38,8 @@ def insert_notification(
             """
             INSERT INTO notifications (
                 user_id, source_type, external_message_id, sender_name, 
-                message_text, category, received_at, course_id, source_reference_id, deadline
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                message_text, category, received_at, course_id, source_reference_id, deadline, urgency_level
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
             RETURNING id;
             """,
@@ -53,6 +54,7 @@ def insert_notification(
                 course_id,
                 source_ref,
                 deadline,
+                urgency_level,
             )
         )
         result = cur.fetchone()
@@ -212,15 +214,25 @@ def get_or_create_user(full_name, email):
         cur.close()
         conn.close()
 
-def notification_exists(external_id, source_type):
-    """Check if a notification with the given external ID and source type exists."""
+def notification_exists(external_id, source_type, user_id=None):
+    """Check if a notification with the given source identity exists.
+
+    When user_id is provided, the lookup is scoped to that user. Otherwise,
+    it falls back to the legacy global source lookup by external ID and source type.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute(
-            "SELECT 1 FROM notifications WHERE external_message_id = %s AND source_type = %s",
-            (external_id, source_type)
-        )
+        if user_id is None:
+            cur.execute(
+                "SELECT 1 FROM notifications WHERE external_message_id = %s AND source_type = %s",
+                (external_id, source_type),
+            )
+        else:
+            cur.execute(
+                "SELECT 1 FROM notifications WHERE user_id = %s AND external_message_id = %s AND source_type = %s",
+                (user_id, external_id, source_type),
+            )
         return cur.fetchone() is not None
     finally:
         cur.close()

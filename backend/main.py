@@ -36,6 +36,8 @@ from db import (
     update_notification_category,
     get_notification_id_by_source,
 )
+from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_flusher, stop_whatsapp_buffer_flusher
+import uuid
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -68,6 +70,7 @@ async def start_urgency_refresh_scheduler():
     global urgency_refresh_task
     if urgency_refresh_task is None:
         urgency_refresh_task = asyncio.create_task(scheduled_urgency_refresh_loop())
+    await start_whatsapp_buffer_flusher()
 
 @app.on_event("shutdown")
 async def stop_urgency_refresh_scheduler():
@@ -77,6 +80,7 @@ async def stop_urgency_refresh_scheduler():
         with suppress(asyncio.CancelledError):
             await urgency_refresh_task
         urgency_refresh_task = None
+    await stop_whatsapp_buffer_flusher()
 
 # --- Models ---
 
@@ -253,7 +257,7 @@ def call_groq_with_retry(prompt_messages: list, max_retries: int = 3) -> str:
             )
             record_groq_usage(response)
             groq_status["last_error"] = None
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
         except APIStatusError as e:
             status_code = getattr(e, "status_code", None)
             groq_status["last_error"] = f"HTTP {status_code}: {str(e)}"
@@ -330,7 +334,7 @@ def ensure_timezone_aware(value):
         return PAKISTAN_TZ.localize(value)
     return value.astimezone(PAKISTAN_TZ)
 
-def calculate_urgency(deadline: datetime) -> dict:
+def calculate_urgency(deadline: Optional[datetime]) -> dict:
     """
     Return urgency metadata for a deadline.
     Boundary policy:
@@ -341,12 +345,14 @@ def calculate_urgency(deadline: datetime) -> dict:
     """
     return _calculate_urgency(deadline, now=datetime.now(PAKISTAN_TZ))
 
-def _calculate_urgency(deadline: datetime, now: datetime) -> dict:
+def _calculate_urgency(deadline: Optional[datetime], now: Optional[datetime]) -> dict:
     if deadline is None:
         return {"score": 0, "label": "none", "color": "grey"}
 
     aware_deadline = ensure_timezone_aware(deadline)
     aware_now = ensure_timezone_aware(now)
+    if aware_deadline is None or aware_now is None:
+        return {"score": 0, "label": "none", "color": "grey"}
     hours_until_deadline = (aware_deadline - aware_now).total_seconds() / 3600
 
     if hours_until_deadline < 0:
@@ -359,7 +365,7 @@ def _calculate_urgency(deadline: datetime, now: datetime) -> dict:
         return {"score": 2, "label": "medium", "color": "yellow"}
     return {"score": 1, "label": "low", "color": "green"}
 
-def refresh_urgency_for_user(user_id: int):
+def refresh_urgency_for_user(user_id: str):
     """
     Recalculate urgency for all pending deadline-bearing notifications for one user.
     The database uses UUID user IDs today; the annotation follows the task wording,
@@ -400,7 +406,7 @@ def refresh_urgency_for_user(user_id: int):
 def refresh_urgency_for_all_users():
     summaries = []
     for user_id in get_users_with_pending_deadlines():
-        summaries.append(refresh_urgency_for_user(user_id))
+        summaries.append(refresh_urgency_for_user(str(user_id)))
     return summaries
 
 async def scheduled_urgency_refresh_loop():
@@ -434,7 +440,7 @@ def parse_structured_classroom_due_date(due_date, due_time=None):
         tzinfo=timezone.utc,
     )
 
-def run_pipeline(text: str, notification_id: int, source_type: str, structured_deadline=None) -> dict:
+def run_pipeline(text: str, notification_id: Optional[int], source_type: str, structured_deadline=None) -> dict:
     """
     Unified notification pipeline for WhatsApp, Gmail, Classroom, and future sources.
     Saves category, optional deadline, and urgency onto an existing notification row.
@@ -731,7 +737,7 @@ def exact_match_course(message, courses):
         return None, None, 0
     
     # Get course with highest score
-    best_course_id = max(scores, key=scores.get)
+    best_course_id = max(scores, key=lambda course_id: scores[course_id])
     best_score = scores[best_course_id]
     
     return best_course_id, course_info[best_course_id]['name'], best_score
@@ -993,6 +999,528 @@ def extract_deadlines_hybrid(text):
 
     return extract_deadlines_from_text(text)
 
+
+def classify_classroom_resource(text: str, resource_type: str, work_type: Optional[str] = None, has_attachments: bool = False) -> str:
+    """
+    Deterministic classification for Classroom resources.
+    
+    Supports all 5 Classroom categories: announcement, assignment, quiz, material, event.
+    
+    This classifier is essential because the Hugging Face model does NOT support "material".
+    
+    Classification strategy (in order):
+    1. Native guaranteed mapping: QUIZ_ASSIGNMENT → quiz, ASSIGNMENT → assignment
+    2. Deterministic keyword/pattern matching for all 5 categories
+    3. Fallback to attachment presence: if has_attachments → material
+    4. Final fallback: announcement
+    
+    Args:
+        text: normalized text combining title, description, etc.
+        resource_type: Classroom resource type (announcement, courseWork, courseWorkMaterial)
+        work_type: for courseWork, the workType field (e.g., "ASSIGNMENT", "QUIZ_ASSIGNMENT")
+        has_attachments: whether resource has attachments
+    
+    Returns:
+        One of: 'announcement', 'assignment', 'quiz', 'material', 'event'
+    
+    Example:
+        category = classify_classroom_resource(
+            "Assignment 1 due Friday",
+            resource_type="courseWork",
+            work_type="ASSIGNMENT",
+            has_attachments=False
+        )
+        # Returns: "assignment"
+    """
+    text_lower = text.lower()
+    
+    # Stage 1: Native guaranteed mapping based on workType
+    if work_type == "QUIZ_ASSIGNMENT":
+        return "quiz"
+    if work_type == "ASSIGNMENT":
+        return "assignment"
+    
+    # For materials with no/minimal text, classify as material
+    if resource_type == "courseWorkMaterial" and not text.strip():
+        return "material"
+    
+    # Stage 2: Deterministic keyword matching
+    
+    # Quiz indicators
+    quiz_keywords = ["quiz", "test", "exam", "mcq", "multiple choice", "short answer"]
+    if any(kw in text_lower for kw in quiz_keywords):
+        return "quiz"
+    
+    # Assignment indicators
+    assignment_keywords = ["assignment", "homework", "submit", "deadline", "hand in", "project", "lab", "problem set"]
+    if any(kw in text_lower for kw in assignment_keywords):
+        return "assignment"
+    
+    # Event indicators
+    event_keywords = ["event", "meeting", "workshop", "seminar", "conference", "webinar", "session", "class", "lecture"]
+    if any(kw in text_lower for kw in event_keywords):
+        return "event"
+    
+    # Material indicators
+    material_keywords = ["material", "slides", "pdf", "book", "notes", "resource", "document", "reference", "reading"]
+    if any(kw in text_lower for kw in material_keywords):
+        return "material"
+    
+    # Announcement indicators (catch-all for these)
+    announcement_keywords = ["announcement", "notice", "update", "reminder", "information", "cancel", "postpone", "room", "venue"]
+    if any(kw in text_lower for kw in announcement_keywords):
+        return "announcement"
+    
+    # Stage 3: Fallback based on attachments
+    if has_attachments:
+        return "material"
+    
+    # Stage 4: Final fallback
+    return "announcement"
+
+
+def extract_classroom_attachment_metadata(materials: list) -> list:
+    """
+    Extract attachment metadata from Classroom course work materials.
+    
+    Converts Classroom materials (Drive files, links, YouTube videos, etc.)
+    into a normalized structure matching Gmail attachment format.
+    
+    Args:
+        materials: list of material objects from Classroom API
+    
+    Returns:
+        List of dicts with keys: filename, file_type, attachment_id, file_size
+    
+    Example:
+        attachments = extract_classroom_attachment_metadata(
+            mat.get("materials", [])
+        )
+    """
+    attachments = []
+    
+    for material in materials or []:
+        if "driveFile" in material:
+            drive_file = material.get("driveFile", {}).get("driveFile", {})
+            attachments.append({
+                "filename": drive_file.get("title", "Unknown Drive File"),
+                "file_type": "application/vnd.google-apps.document",  # Normalized MIME
+                "attachment_id": drive_file.get("id", "unknown"),
+                "file_size": None,  # Classroom API does not provide file size
+            })
+        elif "link" in material:
+            link = material.get("link", {})
+            attachments.append({
+                "filename": link.get("title", "Unknown Link"),
+                "file_type": "text/url",
+                "attachment_id": link.get("url", "unknown"),
+                "file_size": None,
+            })
+        elif "youtubeVideo" in material:
+            video = material.get("youtubeVideo", {})
+            attachments.append({
+                "filename": video.get("title", "Unknown Video"),
+                "file_type": "video/youtube",
+                "attachment_id": video.get("id", "unknown"),
+                "file_size": None,
+            })
+    
+    return attachments
+
+
+async def process_classroom_resource(
+    user_id: uuid.UUID,
+    resource: dict,
+    resource_type: str,
+    local_course_id: Optional[uuid.UUID] = None,
+    course_name: Optional[str] = None
+) -> Optional[uuid.UUID]:
+    """
+    Process a single Classroom resource (announcement, courseWork, or material) into a notification.
+    
+    This function implements the full production-grade pipeline for Classroom:
+    - Normalize resource into Gmail-compatible structure
+    - Deduplicate using existing helpers
+    - Multi-stage category determination (native → deterministic → HF → Groq → fallback)
+    - Extract deadlines (structured or hybrid)
+    - Calculate urgency
+    - Insert into DB using existing helper
+    - Run unified pipeline
+    
+    Args:
+        user_id: UUID of owning user
+        resource: Classroom API resource object (announcement, courseWork, or courseWorkMaterial)
+        resource_type: type of resource ("announcement", "courseWork", "courseWorkMaterial")
+        local_course_id: UUID of course in DB (optional; if None, no course link)
+        course_name: name of course for sender field
+    
+    Returns:
+        notification_id if inserted successfully, None if skipped (duplicate, noise, etc.)
+    
+    Example:
+        notif_id = await process_classroom_resource(
+            user_id,
+            announcement_dict,
+            "announcement",
+            local_course_id=course_uuid,
+            course_name="CS101"
+        )
+    """
+    try:
+        # Extract resource ID and basic fields
+        resource_id = resource.get("id")
+        created_time = resource.get("creationTime")
+        
+        # Normalize based on resource type
+        if resource_type == "announcement":
+            title = resource.get("text", "")[:100] or "Announcement"
+            body = resource.get("text", "")
+            work_type = None
+            structured_deadline = None
+            materials = []
+        
+        elif resource_type == "courseWork":
+            title = resource.get("title", "")[:100] or "Assignment"
+            description = resource.get("description", "N/A")
+            body = f"Title: {title}\nDescription: {description}"
+            work_type = resource.get("workType")
+            structured_deadline = None
+            
+            # Extract structured deadline if present
+            if resource.get("dueDate"):
+                structured_deadline = parse_structured_classroom_due_date(
+                    resource["dueDate"],
+                    resource.get("dueTime", {"hours": 23, "minutes": 59}),
+                )
+            
+            materials = resource.get("materials", [])
+        
+        elif resource_type == "courseWorkMaterial":
+            title = resource.get("title", "")[:100] or "Material"
+            description = resource.get("description", "")
+            body = f"Title: {title}\nDescription: {description}" if description else title
+            work_type = None
+            structured_deadline = None
+            materials = resource.get("materials", [])
+        
+        else:
+            logger.warning("Unknown Classroom resource type: %s", resource_type)
+            return None
+        
+        # Extract attachments metadata (Classroom-compatible)
+        attachments = extract_classroom_attachment_metadata(materials)
+        has_attachments = len(attachments) > 0
+        
+        if attachments:
+            logger.info("Classroom %s %s has %d attachment(s)", resource_type, resource_id, len(attachments))
+        
+        # Deduplication: check if already exists
+        existing = get_notification_id_by_source(resource_id, "classroom")
+        if existing:
+            logger.info("Classroom resource %s already exists as notification %s, skipping", resource_id, existing)
+            return None
+        
+        # Multi-stage category determination
+        # Stage 1: Deterministic classifier (supports all 5 categories including "material")
+        category = classify_classroom_resource(
+            body,
+            resource_type=resource_type,
+            work_type=work_type,
+            has_attachments=has_attachments
+        )
+        
+        # Stage 2: If deterministic gave "announcement" and we have better info, try HF
+        # But ONLY if not already classified as assignment/quiz via deterministic
+        if category == "announcement" and body.strip():
+            try:
+                hf_category = await classify_with_fallback(title + "\n\n" + body)
+                # Accept HF result if it's not "noise" and it's one of our valid categories
+                if hf_category and hf_category != "noise" and hf_category in {"announcement", "assignment", "event", "quiz"}:
+                    category = hf_category
+                    logger.debug("HF classifier upgraded Classroom %s to %s", resource_id, category)
+            except Exception as e:
+                logger.debug("HF classifier fallback for Classroom %s: %s", resource_id, e)
+        
+        # Prepare notification text (same format as Gmail)
+        notification_text = f"Title: {title}\n\n{body[:500]}..."
+        
+        # Extract deadline
+        deadline = structured_deadline
+        
+        # If no structured deadline but category suggests deadline-bearing resource,
+        # try hybrid extraction
+        if deadline is None and category in {"assignment", "quiz", "announcement", "event"}:
+            deadline_candidates = extract_deadlines_hybrid(body)
+            first_deadline = first_deadline_date(deadline_candidates)
+            if first_deadline:
+                deadline = parse_strict_deadline_datetime(first_deadline)
+        
+        # Insert into DB using existing helper
+        notif_id = insert_notification(
+            user_id=user_id,
+            source_type="classroom",
+            external_id=resource_id,
+            sender=course_name or "Classroom",
+            text=notification_text,
+            category=category,
+            received_at=normalize_received_at(created_time),
+            course_id=local_course_id,
+            source_ref=resource_id,  # source reference is the resource ID itself
+            deadline=deadline,
+        )
+        
+        if not notif_id:
+            logger.warning("Failed to insert notification for Classroom %s", resource_id)
+            return None
+        
+        # Calculate urgency if applicable
+        if category in {"assignment", "quiz"} and deadline is not None:
+            urgency = calculate_urgency(deadline)
+            update_notification_urgency(notif_id, urgency["score"], urgency["label"])
+        
+        logger.info(
+            "Processed Classroom %s %s (id=%s) with category=%s, %d attachment(s)",
+            resource_type,
+            title[:50],
+            resource_id,
+            category,
+            len(attachments),
+        )
+        
+        return notif_id
+    
+    except Exception as e:
+        logger.exception("Error processing Classroom resource: %s", e)
+        return None
+
+
+def extract_gmail_attachment_metadata(parts):
+    """Recursively collect Gmail attachment metadata without downloading files."""
+    attachments = []
+
+    for part in parts or []:
+        filename = part.get("filename")
+        body_info = part.get("body", {}) or {}
+        mime_type = part.get("mimeType")
+        attachment_id = body_info.get("attachmentId")
+        file_size = body_info.get("size") or body_info.get("attachmentSize") or None
+
+        if filename and attachment_id:
+            attachments.append({
+                "filename": filename,
+                "file_type": mime_type,
+                "attachment_id": attachment_id,
+                "file_size": file_size,
+            })
+
+        nested_parts = part.get("parts") or []
+        if nested_parts:
+            attachments.extend(extract_gmail_attachment_metadata(nested_parts))
+
+    return attachments
+
+
+async def classify_with_fallback(text: str) -> str:
+    """
+    Classify academic text using Hugging Face Inference API first,
+    then Groq (LLM) if HF confidence is low or HF is unavailable.
+
+    Args:
+        text: Cleaned academic email text.
+
+    Returns:
+        Final category label as one of: 'announcement', 'assignment', 'event', 'quiz', 'noise'
+
+    Example:
+        label = await classify_with_fallback(email_text)
+    """
+    hf_model = os.getenv("HF_MODEL_NAME")
+    hf_token = os.getenv("HF_TOKEN")
+    labels = ["announcement", "assignment", "event", "quiz", "noise"]
+
+    # Try Hugging Face Inference API
+    if hf_model and hf_token:
+        try:
+            url = f"https://api-inference.huggingface.co/models/{hf_model}"
+            async with httpx.AsyncClient(timeout=20) as client:
+                headers = {"Authorization": f"Bearer {hf_token}"}
+                payload = {"inputs": text}
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                        # Expecting list of {label,score} or a dict - normalize
+                        if isinstance(data, list) and len(data) > 0 and "label" in data[0]:
+                            best = max(data, key=lambda x: x.get("score", 0))
+                            label = best.get("label")
+                            score = float(best.get("score", 0))
+                            label = str(label).lower()
+                            # Some HF models return labels like 'LABEL_0' — normalize to expected labels when possible
+                            for expected in labels:
+                                if expected in label:
+                                    if score >= 0.75:
+                                        return expected
+                                    break
+                        # If response shape unexpected, fallthrough to Groq
+                    except Exception:
+                        pass
+                else:
+                    logger.warning("HF inference returned status %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Hugging Face inference error: %s", e)
+
+    # Fallback to Groq (existing LLM path)
+    try:
+        prompt = [
+            {"role": "system", "content": "You are an assistant that must classify the following message into one of: announcement, assignment, event, quiz, noise. Respond with ONLY the single label string."},
+            {"role": "user", "content": text},
+        ]
+        result = call_groq_with_retry(prompt).strip().lower()
+        # Extract one of expected labels if present
+        for expected in labels:
+            if expected in result:
+                return expected
+    except Exception as e:
+        logger.warning("Groq fallback classification error: %s", e)
+
+    # Final fallback to keyword stub
+    return classifier_stub(text)
+
+
+async def process_gmail_message(user_id: uuid.UUID, gmail_message: dict) -> Optional[uuid.UUID]:
+    """
+    Process a single Gmail API message dict and insert a notification record.
+
+    Purpose:
+        - Extract required Gmail fields (id, threadId, headers, body, snippet, attachments metadata).
+        - Skip messages from no-reply@classroom.google.com to avoid duplication.
+        - Build classification text and classify using Hugging Face with Groq fallback.
+        - Reuse existing multi-stage course classifier to determine `course_id`.
+        - Insert into `notifications` table using the existing `insert_notification` helper.
+        - Run the unified pipeline to extract deadlines and compute urgency.
+
+    Args:
+        user_id: UUID of the owning user in the DB.
+        gmail_message: The Gmail message object returned by `service.users().messages().get(..., format='full')`.
+
+    Returns:
+        The `notification_id` if stored, or `None` if skipped (duplicate, noise, or filtered).
+
+    Example:
+        notif_id = await process_gmail_message(user_id, full_msg)
+    """
+    try:
+        msg_id = gmail_message.get("id")
+        thread_id = gmail_message.get("threadId")
+        internal_date = gmail_message.get("internalDate")
+        snippet = gmail_message.get("snippet", "")
+
+        payload = gmail_message.get("payload", {}) or {}
+        headers = payload.get("headers", [])
+        subject = get_header(headers, "Subject")
+        from_full = get_header(headers, "From")
+        date_raw = get_header(headers, "Date")
+
+        # Extract sender name and email
+        sender_match = re.search(r"(.*)<(.*)>", from_full)
+        sender_name = sender_match.group(1).strip() if sender_match else from_full
+        sender_email = sender_match.group(2).strip() if sender_match else from_full
+
+        # Skip Classroom notification emails to avoid duplication.
+        if isinstance(sender_email, str) and sender_email.lower() == "no-reply@classroom.google.com":
+            logger.info("Skipping Google Classroom email %s from %s", msg_id, sender_email)
+            return None
+
+        # Extract body text (decode, clean HTML)
+        body = decode_gmail_body(payload)
+        body_text = body.strip() if body else ""
+
+        # Attachments metadata extraction (in memory only).
+        attachments = extract_gmail_attachment_metadata(payload.get("parts", []))
+
+        if attachments:
+            logger.info("Gmail %s has %d attachment(s)", msg_id, len(attachments))
+
+        # Fallback: if body_text empty, use snippet for classification.
+        cleaned_body = body_text
+        classification_text = subject + "\n\n" + (cleaned_body if cleaned_body else snippet)
+
+        # Classification (HF -> Groq -> stub)
+        category = await classify_with_fallback(classification_text)
+        if category == "noise":
+            # silently discard
+            logger.info("Gmail message %s classified as noise, skipping", msg_id)
+            return None
+
+        # Course classification (reuse existing pipeline).
+        try:
+            course_info = classify_course_for_message(
+                f"{sender_name} {subject}\n\n{cleaned_body or snippet}",
+                sender_name,
+                str(user_id),
+            )
+            course_id = course_info.get("course_id")
+        except Exception as e:
+            logger.warning("Course classification failed for %s: %s", msg_id, e)
+            course_id = None
+
+        # Deduplication: check existing notification by source
+        existing = get_notification_id_by_source(msg_id, "gmail")
+        if existing:
+            logger.info("Gmail message %s already exists as notification %s, skipping", msg_id, existing)
+            return None
+
+        # Prepare notification_text to store (truncate body for DB display like existing logic)
+        notification_text = f"Subject: {subject}\n\n{(cleaned_body or snippet)[:500]}..."
+
+        # Insert into DB (reuse helper). Do not set deadline/urgency here — pipeline will update them.
+        received_at_value = normalize_received_at(date_raw or internal_date)
+        notif_id = insert_notification(
+            user_id=user_id,
+            source_type="gmail",
+            external_id=msg_id,
+            sender=sender_name,
+            text=notification_text,
+            category=category,
+            received_at=received_at_value,
+            course_id=course_id,
+            source_ref=sender_email,
+            deadline=None,
+        )
+
+        if not notif_id:
+            logger.warning("Failed to insert notification for Gmail %s", msg_id)
+            return None
+
+        # Gmail-only deadline and urgency updates.
+        deadline = None
+        if category in {"assignment", "quiz", "announcement", "event"}:
+            deadline_candidates = extract_deadlines_hybrid(classification_text)
+            first_deadline = first_deadline_date(deadline_candidates)
+            if first_deadline:
+                deadline = parse_strict_deadline_datetime(first_deadline)
+                if deadline:
+                    update_notification_deadline(notif_id, deadline)
+
+        if category in {"assignment", "quiz"} and deadline is not None:
+            urgency = calculate_urgency(deadline)
+            update_notification_urgency(notif_id, urgency["score"], urgency["label"])
+
+        # TODO: Persist attachments metadata to `attachments` table if insertion helper exists.
+        logger.info(
+            "Processed Gmail message %s (thread %s) with %d attachment(s)",
+            msg_id,
+            thread_id,
+            len(attachments),
+        )
+
+        # Return the inserted notification id
+        return notif_id
+
+    except Exception as e:
+        logger.exception("Error processing Gmail message: %s", e)
+        return None
+
 # --- Google Services Setup ---
 
 def get_google_credentials_safe():
@@ -1062,7 +1590,7 @@ def get_groq_status():
 
 # Task #25: Fetch Gmail Emails (Proper Implementation)
 @app.get("/gmail/fetch")
-def fetch_gmail_emails(max_results: int = 10):
+async def fetch_gmail_emails(max_results: int = 10):
     creds = get_google_credentials_safe()
     service = build("gmail", "v1", credentials=creds)
     
@@ -1073,68 +1601,77 @@ def fetch_gmail_emails(max_results: int = 10):
     user_id = get_or_create_user("Default Student", "student@example.com") # Placeholder user
     fetched_count = 0
     new_count = 0
-    pipeline_results = []
+    processed_notifications = []
 
     for msg in messages:
         fetched_count += 1
         full_msg = execute_google_api_call(service.users().messages().get(userId="me", id=msg["id"], format="full"))
-        
-        headers = full_msg.get("payload", {}).get("headers", [])
-        subject = get_header(headers, "Subject")
-        sender_full = get_header(headers, "From")
-        date_raw = get_header(headers, "Date")
-        
-        # Extract sender name and email
-        sender_match = re.search(r'(.*)<(.*)>', sender_full)
-        sender_name = sender_match.group(1).strip() if sender_match else sender_full
-        sender_email = sender_match.group(2).strip() if sender_match else sender_full
 
-        # Decode body
-        body = decode_gmail_body(full_msg.get("payload", {}))
-        
-        notification_text = f"Subject: {subject}\n\n{body[:500]}..."
-        category = classifier_stub(notification_text)
-        
-        notif_id = get_notification_id_by_source(msg["id"], "gmail")
-        if not notif_id:
-            notif_id = insert_notification(
-                user_id=user_id,
-                source_type="gmail",
-                external_id=msg["id"],
-                sender=sender_name,
-                text=notification_text,
-                category=category,
-                received_at=normalize_received_at(date_raw),
-                source_ref=sender_email
-            )
-            if notif_id:
-                new_count += 1
+        notif_id = await process_gmail_message(user_id, full_msg)
         if notif_id:
-            pipeline_results.append(run_pipeline(notification_text, notif_id, "gmail"))
+            new_count += 1
+            processed_notifications.append(str(notif_id))
 
     return {
         "status": "success",
         "total_fetched": fetched_count,
         "new_notifications_saved": new_count,
-        "pipeline_results": pipeline_results
+        "processed_notifications": processed_notifications,
     }
 
-# Task #28: Fetch Google Classroom Content
+# Task #28: Fetch Google Classroom Content (Upgraded)
 @app.get("/classroom/fetch")
-def fetch_classroom_all():
+async def fetch_classroom_all():
+    """
+    Fetch and process all Classroom content from active enrolled courses.
+    
+    This endpoint uses the production-grade pipeline shared with Gmail and WhatsApp:
+    - Fetches announcements, coursework, and course materials
+    - Normalizes each resource into a unified structure
+    - Uses multi-stage category determination (deterministic → HF → Groq → fallback)
+    - Extracts deadlines from structured fields or text
+    - Calculates urgency for assignments/quizzes
+    - Inserts into the unified notification system
+    
+    Returns:
+        {
+            "status": "success",
+            "stats": {
+                "courses_processed": int,
+                "announcements_processed": int,
+                "coursework_processed": int,
+                "materials_processed": int,
+                "new_notifications_saved": int
+            },
+            "skipped": {
+                "duplicates": int,
+                "errors": int
+            }
+        }
+    """
     creds = get_google_credentials_safe()
     service = build("classroom", "v1", credentials=creds)
     
     user_id = get_or_create_user("Default Student", "student@example.com")
     
+    # Fetch only ACTIVE courses
     try:
-        courses_result = execute_google_api_call(service.courses().list(courseStates="ACTIVE"))
+        courses_result = execute_google_api_call(service.courses().list(courseStates=["ACTIVE"]))
         courses = courses_result.get("courses", [])
     except HttpError as e:
         raise HTTPException(status_code=502, detail=f"Classroom API error: {e}")
 
-    stats = {"courses_processed": 0, "announcements": 0, "coursework": 0, "materials": 0}
-    pipeline_results = []
+    stats = {
+        "courses_processed": 0,
+        "announcements_processed": 0,
+        "coursework_processed": 0,
+        "materials_processed": 0,
+        "new_notifications_saved": 0,
+    }
+    skipped = {
+        "duplicates": 0,
+        "errors": 0,
+    }
 
     for course in courses:
         course_id = course["id"]
@@ -1143,109 +1680,95 @@ def fetch_classroom_all():
         
         # 1. Fetch Announcements
         try:
-            announcements = execute_google_api_call(service.courses().announcements().list(courseId=course_id)).get("announcements", [])
+            announcements = execute_google_api_call(
+                service.courses().announcements().list(courseId=course_id)
+            ).get("announcements", [])
+            
             for ann in announcements:
-                text = ann.get("text", "No text")
-                category = classifier_stub(text)
-                saved = get_notification_id_by_source(ann["id"], "classroom")
-                if not saved:
-                    saved = insert_notification(
-                        user_id=user_id,
-                        source_type="classroom",
-                        external_id=ann["id"],
-                        sender=course_name,
-                        text=text,
-                        category=category,
-                        received_at=normalize_received_at(ann["creationTime"]),
-                        source_ref=course_id
-                    )
-                if saved:
-                    stats["announcements"] += 1
-                    pipeline_results.append(run_pipeline(text, saved, "classroom"))
+                notif_id = await process_classroom_resource(
+                    user_id,
+                    ann,
+                    resource_type="announcement",
+                    local_course_id=None,  # Announcement course_id is optional
+                    course_name=course_name,
+                )
+                if notif_id:
+                    stats["announcements_processed"] += 1
+                    stats["new_notifications_saved"] += 1
+                else:
+                    skipped["duplicates"] += 1
+        
         except HttpError as e:
-            print(f"Error fetching announcements for {course_name}: {e}")
+            logger.warning("Error fetching announcements for %s: %s", course_name, e)
+            skipped["errors"] += 1
 
-        # 2. Fetch Coursework (Assignments)
+        # 2. Fetch Coursework (Assignments, Quizzes, etc.)
         try:
-            coursework = execute_google_api_call(service.courses().courseWork().list(courseId=course_id)).get("courseWork", [])
+            coursework = execute_google_api_call(
+                service.courses().courseWork().list(courseId=course_id)
+            ).get("courseWork", [])
+            
             for cw in coursework:
-                text = f"Title: {cw.get('title')}\nDescription: {cw.get('description', 'N/A')}"
-                category = classifier_stub(text)
+                # Skip question types (SHORT_ANSWER_QUESTION, MULTIPLE_CHOICE_QUESTION)
+                if cw.get("workType") in {"SHORT_ANSWER_QUESTION", "MULTIPLE_CHOICE_QUESTION"}:
+                    logger.debug("Skipping question-type coursework: %s", cw.get("workType"))
+                    continue
                 
-                # Extract due date if present
-                structured_deadline = None
-                if cw.get("dueDate"):
-                    structured_deadline = parse_structured_classroom_due_date(
-                        cw["dueDate"],
-                        cw.get("dueTime", {"hours": 23, "minutes": 59}),
-                    )
-
-                saved = get_notification_id_by_source(cw["id"], "classroom")
-                if not saved:
-                    saved = insert_notification(
-                        user_id=user_id,
-                        source_type="classroom",
-                        external_id=cw["id"],
-                        sender=course_name,
-                        text=text,
-                        category="assignment" if cw.get("workType") == "ASSIGNMENT" else category,
-                        received_at=normalize_received_at(cw["creationTime"]),
-                        source_ref=course_id,
-                        deadline=structured_deadline
-                    )
-                if saved:
-                    stats["coursework"] += 1
-                    pipeline_results.append(run_pipeline(text, saved, "classroom", structured_deadline=structured_deadline))
+                notif_id = await process_classroom_resource(
+                    user_id,
+                    cw,
+                    resource_type="courseWork",
+                    local_course_id=None,  # Coursework course_id is optional in this version
+                    course_name=course_name,
+                )
+                if notif_id:
+                    stats["coursework_processed"] += 1
+                    stats["new_notifications_saved"] += 1
+                else:
+                    skipped["duplicates"] += 1
+        
         except HttpError as e:
-            print(f"Error fetching coursework for {course_name}: {e}")
+            logger.warning("Error fetching coursework for %s: %s", course_name, e)
+            skipped["errors"] += 1
 
-        # 3. Fetch Course Materials (Gap 1)
+        # 3. Fetch Course Materials
         try:
-            materials_result = execute_google_api_call(service.courses().courseWorkMaterials().list(courseId=course_id))
+            materials_result = execute_google_api_call(
+                service.courses().courseWorkMaterials().list(courseId=course_id)
+            )
             materials = materials_result.get("courseWorkMaterials", [])
+            
             for mat in materials:
-                # Extract attachments
-                attachments_info = []
-                for attachment in mat.get("materials", []):
-                    if "driveFile" in attachment:
-                        attachments_info.append(f"Drive File: {attachment['driveFile']['driveFile'].get('title', 'Unknown')}")
-                    elif "link" in attachment:
-                        attachments_info.append(f"Link: {attachment['link'].get('title', 'Unknown Link')}")
-
-                text = f"Title: {mat.get('title')}\nDescription: {mat.get('description', '')}\nAttachments: {', '.join(attachments_info)}"
-                category = classifier_stub(text)
-                
-                saved = get_notification_id_by_source(mat["id"], "classroom")
-                if not saved:
-                    saved = insert_notification(
-                        user_id=user_id,
-                        source_type="classroom",
-                        external_id=mat["id"],
-                        sender=course_name,
-                        text=text,
-                        category="material",
-                        received_at=normalize_received_at(mat["creationTime"]),
-                        source_ref=course_id
-                    )
-                if saved:
-                    stats["materials"] += 1
-                    pipeline_results.append(run_pipeline(text, saved, "classroom"))
+                notif_id = await process_classroom_resource(
+                    user_id,
+                    mat,
+                    resource_type="courseWorkMaterial",
+                    local_course_id=None,  # Material course_id is optional
+                    course_name=course_name,
+                )
+                if notif_id:
+                    stats["materials_processed"] += 1
+                    stats["new_notifications_saved"] += 1
+                else:
+                    skipped["duplicates"] += 1
+        
         except HttpError as e:
             if e.resp.status == 403:
-                print(f"Permission denied for materials in {course_name} (403). Skipping.")
+                logger.debug("Permission denied for materials in %s (403). Skipping.", course_name)
             else:
-                print(f"Error fetching materials for {course_name}: {e}")
+                logger.warning("Error fetching materials for %s: %s", course_name, e)
+            skipped["errors"] += 1
 
     return {
         "status": "success",
         "stats": stats,
-        "pipeline_results": pipeline_results
+        "skipped": skipped,
     }
 
 @app.get("/demo/sync")
-def sync_everything():
+async def sync_everything():
     """End-to-end verification: Fetch Gmail and Classroom and store in DB."""
-    gmail_res = fetch_gmail_emails(max_results=5)
+    gmail_res = await fetch_gmail_emails(max_results=5)
     classroom_res = fetch_classroom_all()
     
     return {
@@ -1374,73 +1897,34 @@ def classify_message_course(request: CourseMappingRequest):
         raise HTTPException(status_code=500, detail=f"Classification error: {str(e)}")
 
 @app.post("/messages/incoming")
-def process_incoming_message(message: IncomingWhatsAppMessage):
+async def process_incoming_message(payload: Dict[str, Any]):
     """
-    Process incoming WhatsApp messages from general groups.
-    Automatically classifies course, extracts deadlines, and stores in database.
-    
-    Flow:
-    1. Check message safety
-    2. Classify course using multi-stage pipeline
-    3. Call Groq for deadline extraction and parse the JSON response
-    4. Store notification in database
-    5. Update the notification deadline when a valid datetime was extracted
-    6. Return processed result
+    Process an incoming WhatsApp webhook payload through the production pipeline.
+
+    The endpoint accepts either the current flattened FastAPI bridge payload or a
+    richer Baileys webhook payload, delegates all work to
+    `process_whatsapp_message()`, and returns the created notification IDs.
+
+    Args:
+        payload: Incoming WhatsApp JSON payload.
+
+    Returns:
+        A compact response with the created notification UUIDs and count.
+
+    Example:
+        await process_incoming_message({"message_id": "abc", "text": "Assignment due tomorrow"})
     """
     try:
-        group_ref = message.group or message.group_name or message.group_id or "unknown"
-        sender_ref = message.sender_name or message.sender
-
-        # Optional LLM safety check. Disabled by default so general-group
-        # automation does not spend one LLM call per incoming message.
-        if env_flag("ENABLE_INCOMING_SAFETY_CHECK") and check_message_safety(message.text):
-            return {
-                "success": False,
-                "message": "Message flagged as potentially malicious",
-                "requires_review": True
-            }
-        
-        # Step 2: Get or create user
-        user_id = get_or_create_user("WhatsApp User", "whatsapp@acadpulse.local")
-        
-        # Step 3: Classify course
-        classification = classify_course_for_message(message.text, group_ref)
-        
-        category = classifier_stub(message.text)
-        
-        notif_id = insert_notification(
-            user_id=user_id,
-            source_type="whatsapp",
-            external_id=message.message_id or f"wa_{message.timestamp}_{message.sender}",
-            sender=sender_ref,
-            text=message.text,
-            category=category,
-            received_at=normalize_received_at(message.timestamp),
-            course_id=classification.get("course_id"),
-            source_ref=group_ref
-        )
-
-        pipeline_result = run_pipeline(message.text, notif_id, "whatsapp")
-        
+        notification_ids = await process_whatsapp_message(payload)
         return {
             "success": True,
-            "notification_id": notif_id,
-            "user_id": str(user_id),
-            "classification": classification,
-            "pipeline_result": pipeline_result,
-            "deadline_extraction": {
-                "has_deadline": pipeline_result["deadline_found"],
-                "deadline": pipeline_result["deadline"],
-                "deadline_saved": pipeline_result["deadline_found"],
-            },
-            "urgency": {
-                "score": pipeline_result["urgency_score"],
-                "label": pipeline_result["urgency_label"],
-                "color": pipeline_result["urgency_color"],
-            },
-            "urgency_saved": True,
-            "message": f"Processed message. Course: {classification.get('course_name', 'Unknown')}, Category: {pipeline_result['category']}, Urgency: {pipeline_result['urgency_label']}"
+            "notifications_created": notification_ids,
+            "count": len(notification_ids),
         }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Message processing error: {str(e)}")
+    except Exception:
+        logger.exception("WhatsApp webhook processing failed")
+        return {
+            "success": True,
+            "notifications_created": [],
+            "count": 0,
+        }
