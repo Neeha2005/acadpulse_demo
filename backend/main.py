@@ -49,6 +49,11 @@ from db import (
     get_notification_by_id,
     list_notifications,
     update_notification_completion,
+    list_courses,
+    record_whatsapp_group,
+    list_whatsapp_groups,
+    list_course_source_mappings,
+    upsert_course_source_mapping,
 )
 from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_flusher, stop_whatsapp_buffer_flusher
 import uuid
@@ -152,6 +157,18 @@ class CourseMappingResponse(BaseModel):
     confidence: float
     method: str
     requires_user_confirmation: bool
+
+class WhatsAppGroupRequest(BaseModel):
+    group_id: str
+    group_name: Optional[str] = None
+    user_id: Optional[str] = None
+    is_general: bool = False
+
+class CourseSourceMappingRequest(BaseModel):
+    user_id: Optional[str] = None
+    course_id: str
+    source_type: str = "whatsapp"
+    source_reference_id: str
 
 class RegisterRequest(BaseModel):
     name: str
@@ -496,6 +513,48 @@ def serialize_notification_row(row):
         "received_at": row["received_at"].isoformat() if row.get("received_at") else None,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
     }
+
+def serialize_course_row(row):
+    return {
+        "id": str(row["id"]),
+        "course_code": row.get("course_code"),
+        "course_name": row.get("course_name"),
+        "aliases": row.get("aliases") or [],
+    }
+
+def serialize_whatsapp_group_row(row):
+    return {
+        "group_id": row.get("group_id"),
+        "group_name": row.get("group_name") or row.get("group_id"),
+        "is_general": bool(row.get("is_general")),
+        "source": row.get("source"),
+    }
+
+def serialize_course_source_mapping_row(row):
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]),
+        "course_id": str(row["course_id"]),
+        "course_code": row.get("course_code"),
+        "course_name": row.get("course_name"),
+        "source_type": row.get("source_type"),
+        "source_reference_id": row.get("source_reference_id"),
+        "group_name": row.get("group_name") or row.get("source_reference_id"),
+    }
+
+def resolve_default_student_user_id() -> str:
+    return str(get_or_create_user("Default Student", "student@example.com"))
+
+def resolve_mapping_user_id(user_id: Optional[str] = None) -> str:
+    """Use a real DB user UUID for source mappings and WhatsApp ingestion."""
+    if user_id:
+        try:
+            parsed_user_id = str(uuid.UUID(str(user_id)))
+            if get_user_by_id(parsed_user_id):
+                return parsed_user_id
+        except (ValueError, TypeError):
+            logger.info("Replacing non-UUID user_id with default student: %s", user_id)
+    return resolve_default_student_user_id()
 
 def ensure_timezone_aware(value):
     if value is None:
@@ -1913,6 +1972,118 @@ def complete_notification(notification_id: str, request: NotificationCompletionR
         "notification": serialize_notification_row(updated),
     }
 
+@app.get("/courses")
+def get_courses(user_id: Optional[str] = Query(default=None)):
+    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    try:
+        rows = list_courses(user_id=resolved_user_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch courses")
+        raise HTTPException(status_code=500, detail="Unable to fetch courses") from exc
+
+    return {
+        "status": "success",
+        "count": len(rows),
+        "courses": [serialize_course_row(row) for row in rows],
+    }
+
+@app.get("/whatsapp/groups")
+def get_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
+    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    try:
+        rows = list_whatsapp_groups(user_id=resolved_user_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch WhatsApp groups")
+        raise HTTPException(status_code=500, detail="Unable to fetch WhatsApp groups") from exc
+
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "count": len(rows),
+        "groups": [serialize_whatsapp_group_row(row) for row in rows],
+    }
+
+@app.post("/whatsapp/groups")
+def save_whatsapp_group(request: WhatsAppGroupRequest):
+    group_id = (request.group_id or "").strip()
+    if not group_id:
+        raise HTTPException(status_code=422, detail="group_id is required")
+
+    user_id = resolve_mapping_user_id(request.user_id)
+    saved_id = record_whatsapp_group(
+        group_id=group_id,
+        group_name=(request.group_name or group_id).strip(),
+        user_id=user_id,
+        is_general=request.is_general,
+    )
+    if not saved_id:
+        raise HTTPException(status_code=500, detail="Unable to save WhatsApp group")
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "group": {
+            "group_id": group_id,
+            "group_name": (request.group_name or group_id).strip(),
+            "is_general": request.is_general,
+        },
+    }
+
+@app.get("/course-source-mappings")
+def get_course_source_mappings(
+    user_id: Optional[str] = Query(default=None),
+    source_type: str = Query(default="whatsapp"),
+):
+    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    try:
+        rows = list_course_source_mappings(
+            user_id=resolved_user_id,
+            source_type=source_type,
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch course source mappings")
+        raise HTTPException(status_code=500, detail="Unable to fetch course mappings") from exc
+
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "count": len(rows),
+        "mappings": [serialize_course_source_mapping_row(row) for row in rows],
+    }
+
+@app.post("/course-source-mappings")
+def save_course_source_mapping(request: CourseSourceMappingRequest):
+    source_type = (request.source_type or "whatsapp").strip().lower()
+    source_reference_id = (request.source_reference_id or "").strip()
+    course_id = (request.course_id or "").strip()
+
+    if source_type not in {"whatsapp", "gmail", "classroom"}:
+        raise HTTPException(status_code=422, detail="source_type must be whatsapp, gmail, or classroom")
+    if not source_reference_id:
+        raise HTTPException(status_code=422, detail="source_reference_id is required")
+    if not course_id:
+        raise HTTPException(status_code=422, detail="course_id is required")
+
+    user_id = resolve_mapping_user_id(request.user_id)
+
+    try:
+        upsert_course_source_mapping(
+            user_id=user_id,
+            course_id=course_id,
+            source_type=source_type,
+            source_reference_id=source_reference_id,
+        )
+        rows = list_course_source_mappings(user_id=user_id, source_type=source_type)
+    except Exception as exc:
+        logger.exception("Failed to save course source mapping")
+        raise HTTPException(status_code=500, detail="Unable to save course mapping") from exc
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "mappings": [serialize_course_source_mapping_row(row) for row in rows],
+    }
+
 @app.get("/urgency/refresh")
 def refresh_urgency_endpoint(user_id: str = Query(...)):
     """Recalculate urgency for one user immediately."""
@@ -2275,6 +2446,34 @@ async def process_incoming_message(payload: Dict[str, Any]):
         await process_incoming_message({"message_id": "abc", "text": "Assignment due tomorrow"})
     """
     try:
+        user_id = resolve_mapping_user_id(
+            payload.get("user_id") or payload.get("userId") or payload.get("user")
+        )
+        payload["user_id"] = user_id
+
+        key_payload = payload.get("key") if isinstance(payload.get("key"), dict) else {}
+        group_id = (
+            payload.get("group_id")
+            or payload.get("groupId")
+            or payload.get("chat_id")
+            or payload.get("chatId")
+            or key_payload.get("remoteJid")
+        )
+        group_name = (
+            payload.get("group_name")
+            or payload.get("groupName")
+            or payload.get("chat_name")
+            or payload.get("chatName")
+            or group_id
+        )
+        if group_id and str(group_id).endswith("@g.us"):
+            record_whatsapp_group(
+                group_id=str(group_id),
+                group_name=str(group_name or group_id),
+                user_id=user_id,
+                is_general=bool(payload.get("is_general") or payload.get("isGeneral")),
+            )
+
         notification_ids = await process_whatsapp_message(payload)
         return {
             "success": True,

@@ -1,22 +1,128 @@
-import React, { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function WhatsAppIntegration() {
-  const { notifications } = useAppContext();
+  const { notifications, apiFetch } = useAppContext();
   const [isSyncing, setIsSyncing] = useState(false);
   const [active, setActive] = useState(true);
-  const [botEnabled, setBotEnabled] = useState(true);
-  const [nlpEnabled, setNlpEnabled] = useState(true);
+  const [courses, setCourses] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [mappings, setMappings] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState('');
+  const [selectedCourse, setSelectedCourse] = useState('');
+  const [manualGroupId, setManualGroupId] = useState('');
+  const [manualGroupName, setManualGroupName] = useState('');
+  const [loadingMappings, setLoadingMappings] = useState(true);
+  const [savingMapping, setSavingMapping] = useState(false);
+  const [mappingStatus, setMappingStatus] = useState('');
+  const [mappingError, setMappingError] = useState('');
 
   const whatsappNotifs = notifications.filter(n => n.source === 'whatsapp');
+  const mappedGroupIds = useMemo(
+    () => new Set(mappings.map(mapping => mapping.source_reference_id)),
+    [mappings],
+  );
+
+  const loadMappingData = useCallback(async () => {
+    setLoadingMappings(true);
+    setMappingError('');
+
+    try {
+      const [coursesPayload, groupsPayload, mappingsPayload] = await Promise.all([
+        apiFetch('/courses', {}, false),
+        apiFetch('/whatsapp/groups', {}, false),
+        apiFetch('/course-source-mappings?source_type=whatsapp', {}, false),
+      ]);
+
+      const nextCourses = Array.isArray(coursesPayload?.courses) ? coursesPayload.courses : [];
+      const nextGroups = Array.isArray(groupsPayload?.groups) ? groupsPayload.groups : [];
+      const nextMappings = Array.isArray(mappingsPayload?.mappings) ? mappingsPayload.mappings : [];
+
+      setCourses(nextCourses);
+      setGroups(nextGroups);
+      setMappings(nextMappings);
+      setSelectedCourse(current => current || nextCourses[0]?.id || '');
+      setSelectedGroup(current => current || nextGroups[0]?.group_id || '');
+    } catch (error) {
+      setMappingError(error.message || 'Unable to load WhatsApp mapping data.');
+    } finally {
+      setLoadingMappings(false);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadMappingData();
+  }, [loadMappingData]);
 
   const handleForceSync = () => {
     setIsSyncing(true);
-    console.log("[API MOCK TETHER] POST backend.com/api/integrations/whatsapp/sync");
     setTimeout(() => {
         setIsSyncing(false);
     }, 1500);
   }
+
+  const handleSaveManualGroup = async (event) => {
+    event.preventDefault();
+    const groupId = manualGroupId.trim();
+    if (!groupId) {
+      setMappingError('WhatsApp group ID is required.');
+      return;
+    }
+
+    setSavingMapping(true);
+    setMappingError('');
+    setMappingStatus('');
+
+    try {
+      await apiFetch('/whatsapp/groups', {
+        method: 'POST',
+        body: JSON.stringify({
+          group_id: groupId,
+          group_name: manualGroupName.trim() || groupId,
+        }),
+      }, false);
+      setManualGroupId('');
+      setManualGroupName('');
+      setMappingStatus('Group saved. Select a course to map it.');
+      await loadMappingData();
+      setSelectedGroup(groupId);
+    } catch (error) {
+      setMappingError(error.message || 'Unable to save WhatsApp group.');
+    } finally {
+      setSavingMapping(false);
+    }
+  };
+
+  const handleSaveMapping = async (event) => {
+    event.preventDefault();
+    if (!selectedGroup || !selectedCourse) {
+      setMappingError('Select both a WhatsApp group and a course.');
+      return;
+    }
+
+    setSavingMapping(true);
+    setMappingError('');
+    setMappingStatus('');
+
+    try {
+      const payload = await apiFetch('/course-source-mappings', {
+        method: 'POST',
+        body: JSON.stringify({
+          source_type: 'whatsapp',
+          source_reference_id: selectedGroup,
+          course_id: selectedCourse,
+        }),
+      }, false);
+
+      setMappings(Array.isArray(payload?.mappings) ? payload.mappings : []);
+      setMappingStatus('Mapping saved. Future WhatsApp messages from this group will attach to this course.');
+    } catch (error) {
+      setMappingError(error.message || 'Unable to save course mapping.');
+    } finally {
+      setSavingMapping(false);
+    }
+  };
 
   return (
     <div className="dashboard-scroll">
@@ -43,32 +149,75 @@ export default function WhatsAppIntegration() {
       <div className="content-grid" style={{marginTop: 32}}>
          <div className="panel tasks-panel">
             <div className="panel-header">
-               <h2 className="panel-title"><i className="fa-solid fa-sliders text-primary"></i> Environment Constraints</h2>
+               <h2 className="panel-title"><i className="fa-solid fa-diagram-project text-primary"></i> Course Mapping</h2>
+               <button className="text-btn" onClick={loadMappingData} disabled={loadingMappings}>
+                  {loadingMappings ? 'Loading...' : 'Refresh'}
+               </button>
             </div>
-            <div style={{padding: 24, display: 'flex', flexDirection: 'column', gap: 24}}>
-               <div style={{display:'flex', justifyContent:'space-between', alignItems: 'center'}}>
-                   <div>
-                      <strong style={{display: 'block', fontSize: 14, marginBottom: 4}}>Reflexive Bot Intercept</strong>
-                      <span style={{fontSize: 13, color: 'var(--text-muted)'}}>Allow AI to autonomously reply to Assignment timeline requests.</span>
-                   </div>
-                   <div onClick={() => active && setBotEnabled(!botEnabled)} style={{width: 44, height: 24, borderRadius: 12, background: (active && botEnabled) ? 'var(--whatsapp)' : 'var(--bg)', border: '1px solid var(--border-strong)', position: 'relative', cursor: active ? 'pointer' : 'not-allowed', transition: 'all 0.3s ease', opacity: active ? 1 : 0.5}}>
-                      <div style={{width: 20, height: 20, background: '#fff', borderRadius: '50%', position: 'absolute', top: 1, left: (active && botEnabled) ? 20 : 2, transition: 'all 0.3s ease'}}></div>
-                   </div>
-               </div>
-               
-               <div style={{display:'flex', justifyContent:'space-between', alignItems: 'center'}}>
-                   <div>
-                      <strong style={{display: 'block', fontSize: 14, marginBottom: 4}}>Semantic NLP Stripping</strong>
-                      <span style={{fontSize: 13, color: 'var(--text-muted)'}}>Filter out chaotic chat junk. Store ONLY strictly defined deadline strings.</span>
-                   </div>
-                   <div onClick={() => active && setNlpEnabled(!nlpEnabled)} style={{width: 44, height: 24, borderRadius: 12, background: (active && nlpEnabled) ? 'var(--whatsapp)' : 'var(--bg)', border: '1px solid var(--border-strong)', position: 'relative', cursor: active ? 'pointer' : 'not-allowed', transition: 'all 0.3s ease', opacity: active ? 1 : 0.5}}>
-                      <div style={{width: 20, height: 20, background: '#fff', borderRadius: '50%', position: 'absolute', top: 1, left: (active && nlpEnabled) ? 20 : 2, transition: 'all 0.3s ease'}}></div>
-                   </div>
-               </div>
-               
-               <div style={{padding: 16, background: 'rgba(0,0,0,0.4)', border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-sm)'}}>
-                  <strong style={{color: 'var(--text-faint)', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1, display: 'block', marginBottom: 8}}>API Webhook Target Architecture</strong>
-                  <code style={{fontSize: 13, color: 'var(--whatsapp)', fontFamily: 'monospace', wordBreak: 'break-all'}}>https://backend.com/api/webhooks/twillio_pipe_j2x9/wa_layer</code>
+            <div style={{padding: 24, display: 'flex', flexDirection: 'column', gap: 20}}>
+               <form onSubmit={handleSaveMapping} style={{display: 'flex', flexDirection: 'column', gap: 14}}>
+                  <div>
+                     <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>WhatsApp Group</label>
+                     <select value={selectedGroup} onChange={event => setSelectedGroup(event.target.value)} style={{width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}}>
+                        <option value="">Select a group</option>
+                        {groups.map(group => (
+                           <option value={group.group_id} key={group.group_id}>
+                              {group.group_name || group.group_id}{mappedGroupIds.has(group.group_id) ? ' - mapped' : ''}
+                           </option>
+                        ))}
+                     </select>
+                  </div>
+
+                  <div>
+                     <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>Course</label>
+                     <select value={selectedCourse} onChange={event => setSelectedCourse(event.target.value)} style={{width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}}>
+                        <option value="">Select a course</option>
+                        {courses.map(course => (
+                           <option value={course.id} key={course.id}>
+                              {course.course_code} - {course.course_name}
+                           </option>
+                        ))}
+                     </select>
+                  </div>
+
+                  <button className="btn btn-primary" type="submit" disabled={savingMapping || !selectedGroup || !selectedCourse}>
+                     {savingMapping ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-link"></i> Save Mapping</>}
+                  </button>
+               </form>
+
+               <form onSubmit={handleSaveManualGroup} style={{padding: 16, background: 'rgba(0,0,0,0.28)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 12}}>
+                  <strong style={{fontSize: 13}}>Add group manually</strong>
+                  <input value={manualGroupId} onChange={event => setManualGroupId(event.target.value)} placeholder="120363418273@g.us" style={{width: '100%', padding: '11px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}} />
+                  <input value={manualGroupName} onChange={event => setManualGroupName(event.target.value)} placeholder="Group name optional" style={{width: '100%', padding: '11px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}} />
+                  <button className="btn btn-outline" type="submit" disabled={savingMapping || !manualGroupId.trim()}>
+                     <i className="fa-solid fa-plus"></i> Add Group
+                  </button>
+               </form>
+
+               {mappingError && (
+                  <div style={{color: 'var(--urgent)', padding: 12, background: 'var(--urgent-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--urgent)', fontSize: 13}}>
+                     <i className="fa-solid fa-triangle-exclamation"></i> {mappingError}
+                  </div>
+               )}
+               {mappingStatus && (
+                  <div style={{color: 'var(--success)', padding: 12, background: 'var(--success-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--success)', fontSize: 13}}>
+                     <i className="fa-solid fa-check"></i> {mappingStatus}
+                  </div>
+               )}
+
+               <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                  <strong style={{fontSize: 13, color: 'var(--text-muted)'}}>Saved mappings</strong>
+                  {mappings.length === 0 ? (
+                     <div style={{fontSize: 13, color: 'var(--text-faint)'}}>No WhatsApp groups mapped yet.</div>
+                  ) : mappings.map(mapping => (
+                     <div key={mapping.id} style={{padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', gap: 12}}>
+                        <div style={{minWidth: 0}}>
+                           <div style={{fontSize: 14, fontWeight: 600}}>{mapping.group_name || mapping.source_reference_id}</div>
+                           <div style={{fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere'}}>{mapping.source_reference_id}</div>
+                        </div>
+                        <span className="badge badge-success" style={{alignSelf: 'center', whiteSpace: 'nowrap'}}>{mapping.course_code}</span>
+                     </div>
+                  ))}
                </div>
             </div>
          </div>

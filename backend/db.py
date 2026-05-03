@@ -331,6 +331,214 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         cur.close()
         conn.close()
 
+def list_courses(user_id=None):
+    """Fetch courses available to a user, including aliases where present."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        params = []
+        user_filter = ""
+        if user_id:
+            user_filter = "WHERE uc.user_id = %s OR uc.user_id IS NULL"
+            params.append(user_id)
+
+        cur.execute(
+            f"""
+            SELECT
+                c.id,
+                c.course_code,
+                c.course_name,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT ca.alias)
+                    FILTER (WHERE ca.alias IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) AS aliases
+            FROM courses c
+            LEFT JOIN course_aliases ca ON ca.course_id = c.id
+            LEFT JOIN user_courses uc ON uc.course_id = c.id
+            {user_filter}
+            GROUP BY c.id, c.course_code, c.course_name
+            ORDER BY c.course_code, c.course_name;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False):
+    """Store a WhatsApp group seen by the bridge and optionally attach it to a user."""
+    if not group_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO whatsapp_groups (whatsapp_group_id, group_name, is_general)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (whatsapp_group_id) DO UPDATE
+            SET group_name = COALESCE(NULLIF(EXCLUDED.group_name, ''), whatsapp_groups.group_name),
+                is_general = whatsapp_groups.is_general OR EXCLUDED.is_general
+            RETURNING id;
+            """,
+            (group_id, group_name or group_id, is_general),
+        )
+        whatsapp_group_pk = cur.fetchone()[0]
+
+        if user_id:
+            cur.execute(
+                """
+                INSERT INTO user_whatsapp_groups (user_id, whatsapp_group_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING;
+                """,
+                (user_id, whatsapp_group_pk),
+            )
+
+        conn.commit()
+        return whatsapp_group_pk
+    except Exception as e:
+        conn.rollback()
+        print(f"Database WhatsApp group record error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def list_whatsapp_groups(user_id=None):
+    """Return WhatsApp groups from saved groups and previously stored notifications."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        params = []
+        group_user_filter = ""
+        notification_user_filter = ""
+        if user_id:
+            group_user_filter = "WHERE uwg.user_id = %s OR uwg.user_id IS NULL"
+            notification_user_filter = "AND n.user_id = %s"
+            params.extend([user_id, user_id])
+
+        cur.execute(
+            f"""
+            WITH saved_groups AS (
+                SELECT
+                    wg.whatsapp_group_id AS group_id,
+                    wg.group_name,
+                    wg.is_general,
+                    'saved' AS source
+                FROM whatsapp_groups wg
+                LEFT JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
+                {group_user_filter}
+            ),
+            notification_groups AS (
+                SELECT DISTINCT
+                    n.source_reference_id AS group_id,
+                    COALESCE(n.source_reference_id, 'WhatsApp group') AS group_name,
+                    FALSE AS is_general,
+                    'notifications' AS source
+                FROM notifications n
+                WHERE n.source_type = 'whatsapp'
+                  AND n.source_reference_id IS NOT NULL
+                  {notification_user_filter}
+            )
+            SELECT DISTINCT ON (group_id)
+                group_id,
+                group_name,
+                is_general,
+                source
+            FROM (
+                SELECT * FROM saved_groups
+                UNION ALL
+                SELECT * FROM notification_groups
+            ) groups
+            WHERE group_id IS NOT NULL AND group_id <> ''
+            ORDER BY group_id, source;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+def list_course_source_mappings(user_id=None, source_type="whatsapp"):
+    """List saved source-to-course mappings for the mapping UI."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        params = [source_type]
+        user_clause = ""
+        if user_id:
+            user_clause = "AND csm.user_id = %s"
+            params.append(user_id)
+
+        cur.execute(
+            f"""
+            SELECT
+                csm.id,
+                csm.user_id,
+                csm.course_id,
+                c.course_code,
+                c.course_name,
+                csm.source_type,
+                csm.source_reference_id,
+                wg.group_name
+            FROM course_source_mappings csm
+            JOIN courses c ON c.id = csm.course_id
+            LEFT JOIN whatsapp_groups wg
+                ON wg.whatsapp_group_id = csm.source_reference_id
+               AND csm.source_type = 'whatsapp'
+            WHERE csm.source_type = %s
+              {user_clause}
+            ORDER BY c.course_code, csm.source_reference_id;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+def upsert_course_source_mapping(user_id, course_id, source_type, source_reference_id):
+    """Save one course mapping for a source reference, replacing the old one."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            DELETE FROM course_source_mappings
+            WHERE user_id = %s
+              AND source_type = %s
+              AND source_reference_id = %s;
+            """,
+            (user_id, source_type, source_reference_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO course_source_mappings (
+                user_id,
+                course_id,
+                source_type,
+                source_reference_id
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, user_id, course_id, source_type, source_reference_id;
+            """,
+            (user_id, course_id, source_type, source_reference_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
 def get_or_create_user(full_name, email):
     """Get user ID by email or create a new user."""
     conn = get_db_connection()
