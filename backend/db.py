@@ -464,6 +464,97 @@ def list_whatsapp_groups(user_id=None):
         cur.close()
         conn.close()
 
+def record_classroom_course(classroom_id, classroom_name=None, user_id=None):
+    """Store a Google Classroom course seen during sync and optionally attach it to a user."""
+    if not classroom_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO classroom_courses (classroom_id, classroom_name)
+            VALUES (%s, %s)
+            ON CONFLICT (classroom_id) DO UPDATE
+            SET classroom_name = COALESCE(NULLIF(EXCLUDED.classroom_name, ''), classroom_courses.classroom_name)
+            RETURNING id;
+            """,
+            (classroom_id, classroom_name or classroom_id),
+        )
+        classroom_course_pk = cur.fetchone()[0]
+
+        if user_id:
+            cur.execute(
+                """
+                INSERT INTO user_classroom_courses (user_id, classroom_course_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING;
+                """,
+                (user_id, classroom_course_pk),
+            )
+
+        conn.commit()
+        return classroom_course_pk
+    except Exception as e:
+        conn.rollback()
+        print(f"Database Classroom course record error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def list_classroom_courses(user_id=None):
+    """Return Classroom courses discovered from Google Classroom sync."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        params = []
+        user_filter = ""
+        if user_id:
+            user_filter = "WHERE ucc.user_id = %s OR ucc.user_id IS NULL"
+            params.append(user_id)
+
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (cc.classroom_id)
+                cc.classroom_id,
+                cc.classroom_name
+            FROM classroom_courses cc
+            LEFT JOIN user_classroom_courses ucc ON ucc.classroom_course_id = cc.id
+            {user_filter}
+            ORDER BY cc.classroom_id, cc.classroom_name;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_course_mapping_course_id(user_id, source_type, source_reference_id):
+    """Return mapped local course_id for a source reference, if configured."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT course_id
+            FROM course_source_mappings
+            WHERE user_id = %s
+              AND source_type = %s
+              AND source_reference_id = %s
+            ORDER BY id DESC
+            LIMIT 1;
+            """,
+            (user_id, source_type, source_reference_id),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        cur.close()
+        conn.close()
+
 def list_course_source_mappings(user_id=None, source_type="whatsapp"):
     """List saved source-to-course mappings for the mapping UI."""
     conn = get_db_connection()
@@ -485,12 +576,15 @@ def list_course_source_mappings(user_id=None, source_type="whatsapp"):
                 c.course_name,
                 csm.source_type,
                 csm.source_reference_id,
-                wg.group_name
+                COALESCE(wg.group_name, cc.classroom_name) AS source_name
             FROM course_source_mappings csm
             JOIN courses c ON c.id = csm.course_id
             LEFT JOIN whatsapp_groups wg
                 ON wg.whatsapp_group_id = csm.source_reference_id
                AND csm.source_type = 'whatsapp'
+            LEFT JOIN classroom_courses cc
+                ON cc.classroom_id = csm.source_reference_id
+               AND csm.source_type = 'classroom'
             WHERE csm.source_type = %s
               {user_clause}
             ORDER BY c.course_code, csm.source_reference_id;

@@ -52,9 +52,13 @@ from db import (
     list_courses,
     record_whatsapp_group,
     list_whatsapp_groups,
+    record_classroom_course,
+    list_classroom_courses,
+    get_course_mapping_course_id,
     list_course_source_mappings,
     upsert_course_source_mapping,
 )
+from local_classifier import classify_with_local_model, local_classifier_available
 from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_flusher, stop_whatsapp_buffer_flusher
 import uuid
 
@@ -163,6 +167,11 @@ class WhatsAppGroupRequest(BaseModel):
     group_name: Optional[str] = None
     user_id: Optional[str] = None
     is_general: bool = False
+
+class ClassroomCourseRequest(BaseModel):
+    classroom_id: str
+    classroom_name: Optional[str] = None
+    user_id: Optional[str] = None
 
 class CourseSourceMappingRequest(BaseModel):
     user_id: Optional[str] = None
@@ -539,7 +548,14 @@ def serialize_course_source_mapping_row(row):
         "course_name": row.get("course_name"),
         "source_type": row.get("source_type"),
         "source_reference_id": row.get("source_reference_id"),
-        "group_name": row.get("group_name") or row.get("source_reference_id"),
+        "group_name": row.get("source_name") or row.get("source_reference_id"),
+        "source_name": row.get("source_name") or row.get("source_reference_id"),
+    }
+
+def serialize_classroom_course_row(row):
+    return {
+        "classroom_id": row.get("classroom_id"),
+        "classroom_name": row.get("classroom_name") or row.get("classroom_id"),
     }
 
 def resolve_default_student_user_id() -> str:
@@ -686,7 +702,8 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
             "urgency_label": "none",
         }
 
-    category = classifier_stub(text)
+    local_classification = classify_with_local_model(text)
+    category = local_classification["label"] if local_classification else classifier_stub(text)
     update_notification_category(notification_id, category)
 
     result = {
@@ -702,6 +719,8 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
         "urgency_score": 0,
         "urgency_color": "grey",
         "llm_called": False,
+        "classifier_source": local_classification["source"] if local_classification else "keyword_stub",
+        "classifier_confidence": local_classification["score"] if local_classification else None,
     }
 
     if category == "noise":
@@ -1362,7 +1381,8 @@ async def process_classroom_resource(
     resource: dict,
     resource_type: str,
     local_course_id: Optional[uuid.UUID] = None,
-    course_name: Optional[str] = None
+    course_name: Optional[str] = None,
+    source_reference_id: Optional[str] = None,
 ) -> Optional[uuid.UUID]:
     """
     Process a single Classroom resource (announcement, courseWork, or material) into a notification.
@@ -1494,7 +1514,7 @@ async def process_classroom_resource(
             category=category,
             received_at=normalize_received_at(created_time),
             course_id=local_course_id,
-            source_ref=resource_id,  # source reference is the resource ID itself
+            source_ref=source_reference_id or resource_id,
             deadline=deadline,
         )
         
@@ -1563,6 +1583,10 @@ async def classify_with_fallback(text: str) -> str:
     Example:
         label = await classify_with_fallback(email_text)
     """
+    local_classification = classify_with_local_model(text)
+    if local_classification:
+        return local_classification["label"]
+
     hf_model = os.getenv("HF_MODEL_NAME")
     hf_token = os.getenv("HF_TOKEN")
     labels = ["announcement", "assignment", "event", "quiz", "noise"]
@@ -2029,6 +2053,46 @@ def save_whatsapp_group(request: WhatsAppGroupRequest):
         },
     }
 
+@app.get("/classroom/courses")
+def get_classroom_courses(user_id: Optional[str] = Query(default=None)):
+    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    try:
+        rows = list_classroom_courses(user_id=resolved_user_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch Classroom courses")
+        raise HTTPException(status_code=500, detail="Unable to fetch Classroom courses") from exc
+
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "count": len(rows),
+        "courses": [serialize_classroom_course_row(row) for row in rows],
+    }
+
+@app.post("/classroom/courses")
+def save_classroom_course(request: ClassroomCourseRequest):
+    classroom_id = (request.classroom_id or "").strip()
+    if not classroom_id:
+        raise HTTPException(status_code=422, detail="classroom_id is required")
+
+    user_id = resolve_mapping_user_id(request.user_id)
+    saved_id = record_classroom_course(
+        classroom_id=classroom_id,
+        classroom_name=(request.classroom_name or classroom_id).strip(),
+        user_id=user_id,
+    )
+    if not saved_id:
+        raise HTTPException(status_code=500, detail="Unable to save Classroom course")
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "course": {
+            "classroom_id": classroom_id,
+            "classroom_name": (request.classroom_name or classroom_id).strip(),
+        },
+    }
+
 @app.get("/course-source-mappings")
 def get_course_source_mappings(
     user_id: Optional[str] = Query(default=None),
@@ -2119,6 +2183,16 @@ def get_groq_status():
     reset_groq_daily_counter_if_needed()
     return {"status": "success", **groq_status}
 
+@app.get("/classifier/status")
+def get_classifier_status():
+    return {
+        "status": "success",
+        "local_model_available": local_classifier_available(),
+        "local_model_path": os.getenv("LOCAL_CLASSIFIER_PATH", str(Path(__file__).resolve().parent.parent / "ai" / "classifier" / "model")),
+        "hf_model": os.getenv("HF_MODEL_NAME"),
+        "fallback_order": ["local_xlm_roberta", "huggingface_inference_api", "groq", "keyword_stub"],
+    }
+
 # Task #25: Fetch Gmail Emails (Proper Implementation)
 @app.get("/gmail/fetch")
 async def fetch_gmail_emails(max_results: int = 10):
@@ -2194,6 +2268,7 @@ async def fetch_classroom_all():
 
     stats = {
         "courses_processed": 0,
+        "mapped_courses": 0,
         "announcements_processed": 0,
         "coursework_processed": 0,
         "materials_processed": 0,
@@ -2208,6 +2283,18 @@ async def fetch_classroom_all():
         course_id = course["id"]
         course_name = course["name"]
         stats["courses_processed"] += 1
+        record_classroom_course(
+            classroom_id=course_id,
+            classroom_name=course_name,
+            user_id=user_id,
+        )
+        mapped_course_id = get_course_mapping_course_id(
+            user_id=user_id,
+            source_type="classroom",
+            source_reference_id=course_id,
+        )
+        if mapped_course_id:
+            stats["mapped_courses"] += 1
         
         # 1. Fetch Announcements
         try:
@@ -2220,8 +2307,9 @@ async def fetch_classroom_all():
                     user_id,
                     ann,
                     resource_type="announcement",
-                    local_course_id=None,  # Announcement course_id is optional
+                    local_course_id=mapped_course_id,
                     course_name=course_name,
+                    source_reference_id=course_id,
                 )
                 if notif_id:
                     stats["announcements_processed"] += 1
@@ -2249,8 +2337,9 @@ async def fetch_classroom_all():
                     user_id,
                     cw,
                     resource_type="courseWork",
-                    local_course_id=None,  # Coursework course_id is optional in this version
+                    local_course_id=mapped_course_id,
                     course_name=course_name,
+                    source_reference_id=course_id,
                 )
                 if notif_id:
                     stats["coursework_processed"] += 1
@@ -2274,8 +2363,9 @@ async def fetch_classroom_all():
                     user_id,
                     mat,
                     resource_type="courseWorkMaterial",
-                    local_course_id=None,  # Material course_id is optional
+                    local_course_id=mapped_course_id,
                     course_name=course_name,
+                    source_reference_id=course_id,
                 )
                 if notif_id:
                     stats["materials_processed"] += 1
