@@ -175,7 +175,14 @@ export default function Events() {
           ) : (
             <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
               <div className="empty-state-icon"><i className="fa-solid fa-calendar-xmark"></i></div>
-              <p>No matching events</p>
+              <p style={{ margin: '8px 0 4px' }}>
+                {eventTasks.length === 0 ? 'No events or exam schedules found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {eventTasks.length === 0
+                  ? 'Events and exam schedules from connected WhatsApp groups, Gmail, and Classroom will appear here.'
+                  : 'Try adjusting the source or date filter above.'}
+              </span>
             </div>
           )}
         </div>

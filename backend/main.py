@@ -4187,7 +4187,7 @@ def seed_test_data(
         # Sample notifications (skip if external_message_id already exists for this user)
         sample_notifs = [
             ("Assignment", "OS Assignment #3 Submission", "Submit your process scheduler implementation via LMS by midnight.", "assignment", "high", "whatsapp"),
-            ("Quiz", "NLP Mid-term Quiz Tomorrow", "10 MCQs covering tokenization, POS tagging and Named Entity Recognition.", "assignment", "urgent", "whatsapp"),
+            ("Quiz", "NLP Mid-term Quiz Tomorrow", "10 MCQs covering tokenization, POS tagging and Named Entity Recognition.", "quiz", "critical", "whatsapp"),
             ("Announcement", "DB Lab Cancelled", "Database Systems lab for Thursday is cancelled due to faculty travel.", "announcement", "low", "classroom"),
             ("Event", "FAST Career Fair 2026", "Annual career fair — bring 3 printed CVs and your portfolio.", "event", "medium", "classroom"),
             ("Material", "Deep Learning Lecture 8 Slides", "Backpropagation and optimizers — uploaded to Google Classroom.", "material", "low", "classroom"),
@@ -4195,28 +4195,30 @@ def seed_test_data(
             ("Announcement", "Midterm Schedule Released", "Check the academic calendar for your midterm exam dates.", "announcement", "medium", "gmail"),
             ("Event", "Hackathon Registration Open", "FAST HackFest registrations close Sunday. Teams of 3-4.", "event", "high", "gmail"),
             ("Material", "OS Lecture Notes Week 10", "Paging, segmentation and TLB coverage — PDF linked below.", "material", "low", "whatsapp"),
-            ("Assignment", "DL Final Project Proposal", "Submit a 1-page project proposal by next Friday 11:59 PM.", "assignment", "urgent", "classroom"),
+            ("Assignment", "DL Final Project Proposal", "Submit a 1-page project proposal by next Friday 11:59 PM.", "assignment", "critical", "classroom"),
         ]
 
         import datetime as _dt
         now_pk = _dt.datetime.now(PAKISTAN_TZ)
-        for i, (sender, title, body_text, category, urgency, source) in enumerate(sample_notifs):
+        for i, (sender_name, title, body_text, category, urgency_label, source) in enumerate(sample_notifs):
             ext_id = f"seed-{user_id[:8]}-{i}"
             deadline_offset = [3, 1, None, 7, None, 5, None, 4, None, 6][i]
             deadline = (now_pk + _dt.timedelta(days=deadline_offset)).isoformat() if deadline_offset else None
             course_id = course_ids[i % len(course_ids)] if course_ids else None
+            message_text = f"{title}\n\n{body_text}"
             try:
                 cur.execute(
                     """
                     INSERT INTO notifications
-                        (user_id, external_message_id, source_type, sender, title, body, category, urgency, deadline, course_id, received_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
+                        (user_id, external_message_id, source_type, sender_name, message_text, category, urgency_label, deadline, course_id, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
                     """,
-                    (user_id, ext_id, source, sender, title, body_text, category, urgency, deadline, course_id, now_pk),
+                    (user_id, ext_id, source, sender_name, message_text, category, urgency_label, deadline, course_id, now_pk),
                 )
                 seeded["notifications"] += cur.rowcount
-            except Exception:
+            except Exception as seed_exc:
+                logger.warning("Seed notification %s failed: %s", i, seed_exc)
                 conn.rollback()
 
         # Sample timetable slots (Mon-Fri, only if courses exist)

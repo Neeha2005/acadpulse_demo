@@ -161,6 +161,19 @@ export default function Materials() {
         </div>
 
         <div className="notification-stream" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          {visibleMaterials.length === 0 && (
+            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1', margin: '0 0 16px' }}>
+              <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
+              <p style={{ margin: '8px 0 4px' }}>
+                {materials.length === 0 ? 'No materials found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {materials.length === 0
+                  ? 'Lecture notes, PDFs, slides, and links shared in WhatsApp groups or Google Classroom will appear here.'
+                  : 'Try adjusting the source or type filter above.'}
+              </span>
+            </div>
+          )}
           {visibleMaterials.length > 0 ? visibleMaterials.map((material) => (
             <div className="notif-item" key={material.id} style={{ alignItems: 'flex-start' }}>
               <div className={`notif-icon-wrap ${material.source}`}>
@@ -179,12 +192,7 @@ export default function Materials() {
                 </div>
               </div>
             </div>
-          )) : (
-            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
-              <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
-              <p>No matching materials</p>
-            </div>
-          )}
+          )) : null}
         </div>
       </div>
     </div>

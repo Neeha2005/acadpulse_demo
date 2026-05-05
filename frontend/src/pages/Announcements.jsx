@@ -175,6 +175,19 @@ export default function Announcements() {
         </div>
 
         <div className="notification-stream" style={{ padding: '8px 24px 24px' }}>
+          {visibleAnnouncements.length === 0 && (
+            <div className="empty-state glass-empty-state" style={{ margin: '0 0 16px' }}>
+              <div className="empty-state-icon"><i className="fa-solid fa-inbox"></i></div>
+              <p style={{ margin: '8px 0 4px' }}>
+                {announcements.length === 0 ? 'No announcements yet' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {announcements.length === 0
+                  ? 'Announcements from WhatsApp groups, Gmail, and Google Classroom will appear here once connected.'
+                  : 'Try adjusting the source, course, or date filter above.'}
+              </span>
+            </div>
+          )}
           {visibleAnnouncements.length > 0 ? visibleAnnouncements.map((announcement) => (
             <div className="notif-item" key={announcement.id}>
               <div className={`notif-icon-wrap ${announcement.source}`}>
@@ -196,12 +209,7 @@ export default function Announcements() {
                 </div>
               </div>
             </div>
-          )) : (
-            <div className="empty-state glass-empty-state">
-              <div className="empty-state-icon"><i className="fa-solid fa-inbox"></i></div>
-              <p>No matching announcements</p>
-            </div>
-          )}
+          )) : null}
         </div>
       </div>
     </div>

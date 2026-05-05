@@ -175,7 +175,14 @@ export default function AssignmentsQuizzes() {
           ) : (
             <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
               <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
-              <p>No matching assignments or quizzes</p>
+              <p style={{ margin: '8px 0 4px' }}>
+                {academicTasks.length === 0 ? 'No assignments or quizzes found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {academicTasks.length === 0
+                  ? 'Assignments and quizzes appear here once your WhatsApp, Gmail, or Classroom sources send deadline-bearing messages.'
+                  : 'Try changing the type, source, or status filter above.'}
+              </span>
             </div>
           )}
         </div>
