@@ -68,7 +68,9 @@ export default function Layout() {
       />
       <div className="main-content">
         <Topbar onOpenAddTask={() => setShowAddTaskModal(true)} />
-        <Outlet />
+        <div key={location.key} className="page-transition">
+          <Outlet />
+        </div>
       </div>
       {showAccountModal && <AccountModal onClose={() => setShowAccountModal(false)} />}
       {showAddTaskModal && <AddTaskModal onClose={() => setShowAddTaskModal(false)} />}

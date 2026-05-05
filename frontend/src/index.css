@@ -607,6 +607,11 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .dashboard-scroll::-webkit-scrollbar-track { background: transparent; }
 .dashboard-scroll::-webkit-scrollbar-thumb { background: var(--clr-stone-brown); border-radius: 10px; }
 
+/* Page transitions */
+@keyframes pageEnter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.page-transition { animation: pageEnter 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; will-change: opacity, transform; }
+@media (prefers-reduced-motion: reduce) { .page-transition { animation: none; } }
+
 /* Hero */
 .hero-stats { margin-bottom: 32px; animation: slideUp 0.5s ease; }
 @keyframes slideUp { from {opacity:0; transform:translateY(15px);} to {opacity:1; transform:translateY(0);} }
