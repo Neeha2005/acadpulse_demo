@@ -2,7 +2,8 @@ import { NavLink } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
 export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterReset, chatbotOpen, collapsed, onToggle }) {
-  const { user } = useAppContext();
+  const { user, theme, toggleTheme } = useAppContext();
+  const isLight = theme === 'light';
   const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : "SC";
 
   return (
@@ -98,6 +99,15 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
       <div className="sidebar-footer">
         <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset}>
           New Semester
+        </button>
+        <button
+          className="theme-toggle-btn"
+          type="button"
+          onClick={toggleTheme}
+          title={isLight ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          <i className={`fa-solid ${isLight ? 'fa-moon' : 'fa-sun'}`}></i>
+          <span className="theme-toggle-label">{isLight ? 'Dark Mode' : 'Light Mode'}</span>
         </button>
         <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings">
           <div className="avatar">{initials}</div>

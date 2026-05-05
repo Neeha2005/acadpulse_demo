@@ -12,6 +12,7 @@ import {
 const AppContext = createContext()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
+const THEME_STORAGE_KEY = 'acadpulse_theme'
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
 
@@ -230,6 +231,15 @@ function buildTaskFromNotification(notification) {
   }
 }
 
+function getStoredTheme() {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY)
+  return stored === 'light' ? 'light' : 'dark'
+}
+
+function applyThemeToDocument(theme) {
+  document.documentElement.setAttribute('data-theme', theme)
+}
+
 export function AppProvider({ children }) {
   const [tasks, setTasks] = useState([])
   const [notifications, setNotifications] = useState([])
@@ -238,8 +248,22 @@ export function AppProvider({ children }) {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('acadpulse_token'))
   const [authReady, setAuthReady] = useState(false)
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
+  const [theme, setTheme] = useState(() => {
+    const t = getStoredTheme()
+    applyThemeToDocument(t)
+    return t
+  })
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
   const userRef = useRef(user)
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      localStorage.setItem(THEME_STORAGE_KEY, next)
+      applyThemeToDocument(next)
+      return next
+    })
+  }, [])
 
   const persistUser = useCallback((nextUser) => {
     localStorage.setItem('acadpulse_user_id', nextUser.id || '')
@@ -542,6 +566,8 @@ export function AppProvider({ children }) {
       completeLoginSession,
       refreshAuthenticatedUser,
       refreshNotifications,
+      theme,
+      toggleTheme,
     }),
     [
       tasks,
@@ -563,6 +589,8 @@ export function AppProvider({ children }) {
       completeLoginSession,
       refreshAuthenticatedUser,
       refreshNotifications,
+      theme,
+      toggleTheme,
     ],
   )
 
