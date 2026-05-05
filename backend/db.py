@@ -1146,6 +1146,98 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
         cur.close()
         conn.close()
 
+def get_timetable_slots(user_id):
+    """Get all class schedule slots for a user, joined with course info."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT t.id, t.user_id, t.course_id, t.day_of_week, t.start_time, t.end_time, t.room_number,
+                   c.course_code, c.course_name, c.short_name
+            FROM timetable_entries t
+            LEFT JOIN courses c ON t.course_id = c.id
+            WHERE t.user_id = %s
+            ORDER BY t.day_of_week, t.start_time
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_timetable_slot(user_id, course_id, day_of_week, start_time, end_time, room_number=None):
+    """Insert a new class schedule slot."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO timetable_entries (user_id, course_id, day_of_week, start_time, end_time, room_number)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, user_id, course_id, day_of_week, start_time, end_time, room_number
+            """,
+            (user_id, course_id, day_of_week, start_time, end_time, room_number),
+        )
+        conn.commit()
+        return cur.fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_timetable_slot(slot_id, user_id, course_id=None, day_of_week=None, start_time=None, end_time=None, room_number=None):
+    """Update fields on a class schedule slot owned by user_id."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE timetable_entries
+            SET course_id    = COALESCE(%s, course_id),
+                day_of_week  = COALESCE(%s, day_of_week),
+                start_time   = COALESCE(%s, start_time),
+                end_time     = COALESCE(%s, end_time),
+                room_number  = COALESCE(%s, room_number)
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, course_id, day_of_week, start_time, end_time, room_number
+            """,
+            (course_id, day_of_week, start_time, end_time, room_number, slot_id, user_id),
+        )
+        conn.commit()
+        return cur.fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_timetable_slot(slot_id, user_id):
+    """Delete a class schedule slot owned by user_id. Returns True if deleted."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM timetable_entries WHERE id = %s AND user_id = %s RETURNING id",
+            (slot_id, user_id),
+        )
+        conn.commit()
+        return cur.fetchone() is not None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
 def notification_exists(external_id, source_type, user_id=None):
     """Check if a notification with the given source identity exists.
 

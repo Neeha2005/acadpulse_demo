@@ -26,9 +26,9 @@ A smart student dashboard that aggregates academic notifications from WhatsApp, 
 ## Where things live
 
 - `frontend/src/context/AppContext.jsx` — global state and API_BASE_URL
-- `frontend/src/pages/` — all page components
-- `backend/main.py` — FastAPI app (~4000 lines), all routes
-- `backend/db.py` — all DB queries
+- `frontend/src/pages/` — all page components (Dashboard, Assignments, Events, Announcements, Materials, Timetable, Courses, Chatbot, Archives, WhatsApp/Gmail/Classroom integrations)
+- `backend/main.py` — FastAPI app, all routes (auth, notifications, timetable CRUD, courses, chatbot, seed)
+- `backend/db.py` — all DB queries incl. timetable slot CRUD helpers
 - `backend/whatsapp_pipeline.py` — WhatsApp message processing
 - `backend/.env.example` — environment variable template
 
@@ -47,6 +47,9 @@ A smart student dashboard that aggregates academic notifications from WhatsApp, 
 - Automatic urgency scoring based on deadline proximity
 - Course mapping from WhatsApp group names to registered courses
 - Onboarding flow for new student registration
+- **Timetable page**: deadline calendar (week/month) + class schedule grid (Mon–Fri, add/edit/delete slots via `GET|POST|PUT|DELETE /timetable`)
+- **Semester reset**: archives current notifications + clears timetable (modal in sidebar footer)
+- **Dev seed**: `POST /dev/seed` creates sample notifications + class slots for the current user
 
 ## User preferences
 
@@ -56,7 +59,7 @@ _Populate as you build_
 
 - Backend requires Supabase credentials to function fully — without them, API starts but all DB endpoints return 500
 - `sslmode=require` needed for Supabase; set `DB_SSLMODE=require` in `backend/.env`
-- WhatsApp service (`whatsapp/`) is not configured as a workflow — run it manually when needed
+- WhatsApp service (`whatsapp/`) runs as the "WhatsApp Bridge" Replit workflow
 - The `ai/` classifier directory contains training scripts only, not a running service
 
 ## Pointers

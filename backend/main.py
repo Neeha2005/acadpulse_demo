@@ -72,6 +72,10 @@ from db import (
     upsert_course_source_mapping,
     get_user_by_login,
     update_existing_user_account,
+    get_timetable_slots,
+    create_timetable_slot,
+    update_timetable_slot,
+    delete_timetable_slot,
 )
 from local_classifier import classify_with_local_model, local_classifier_available
 from notification_abbr import (
@@ -4005,6 +4009,220 @@ def test_abbreviation_expansion(
         "matches_found": list(set(matches_found)),
         "expansions_applied": len(set(matches_found)),
     }
+
+
+### ─── Class Schedule (Timetable Slots) ─────────────────────────────────────
+
+def _serialize_slot(row: dict) -> dict:
+    """Convert a timetable_entries DB row to a JSON-safe dict."""
+    def _time_str(val):
+        if val is None:
+            return None
+        if hasattr(val, "strftime"):
+            return val.strftime("%H:%M")
+        return str(val)
+
+    return {
+        "id": str(row.get("id", "")),
+        "course_id": str(row.get("course_id", "")) if row.get("course_id") else None,
+        "day_of_week": row.get("day_of_week"),
+        "start_time": _time_str(row.get("start_time")),
+        "end_time": _time_str(row.get("end_time")),
+        "room_number": row.get("room_number"),
+        "course_code": row.get("course_code"),
+        "course_name": row.get("course_name"),
+        "short_name": row.get("short_name"),
+    }
+
+
+@app.get("/timetable")
+def get_class_schedule(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Return all class schedule slots for the authenticated user."""
+    user_id = str(current_user["id"])
+    try:
+        rows = get_timetable_slots(user_id)
+        return {"status": "success", "slots": [_serialize_slot(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Failed to fetch timetable slots")
+        raise HTTPException(status_code=500, detail="Unable to fetch timetable slots") from exc
+
+
+class TimetableSlotCreate(BaseModel):
+    course_id: str
+    day_of_week: int  # 1=Monday … 7=Sunday
+    start_time: str   # "HH:MM"
+    end_time: str     # "HH:MM"
+    room_number: Optional[str] = None
+
+
+class TimetableSlotUpdate(BaseModel):
+    course_id: Optional[str] = None
+    day_of_week: Optional[int] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    room_number: Optional[str] = None
+
+
+@app.post("/timetable")
+def add_class_slot(
+    body: TimetableSlotCreate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Add a new class schedule slot."""
+    user_id = str(current_user["id"])
+    try:
+        row = create_timetable_slot(
+            user_id=user_id,
+            course_id=body.course_id,
+            day_of_week=body.day_of_week,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            room_number=body.room_number,
+        )
+        rows = get_timetable_slots(user_id)
+        return {"status": "success", "slot": _serialize_slot(row), "slots": [_serialize_slot(r) for r in rows]}
+    except Exception as exc:
+        logger.exception("Failed to create timetable slot")
+        raise HTTPException(status_code=500, detail="Unable to create timetable slot") from exc
+
+
+@app.put("/timetable/{slot_id}")
+def edit_class_slot(
+    slot_id: str,
+    body: TimetableSlotUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Update an existing class schedule slot."""
+    user_id = str(current_user["id"])
+    try:
+        row = update_timetable_slot(
+            slot_id=slot_id,
+            user_id=user_id,
+            course_id=body.course_id,
+            day_of_week=body.day_of_week,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            room_number=body.room_number,
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="Slot not found or not owned by user")
+        rows = get_timetable_slots(user_id)
+        return {"status": "success", "slot": _serialize_slot(row), "slots": [_serialize_slot(r) for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to update timetable slot")
+        raise HTTPException(status_code=500, detail="Unable to update timetable slot") from exc
+
+
+@app.delete("/timetable/{slot_id}")
+def remove_class_slot(
+    slot_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Delete a class schedule slot."""
+    user_id = str(current_user["id"])
+    try:
+        deleted = delete_timetable_slot(slot_id=slot_id, user_id=user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Slot not found or not owned by user")
+        rows = get_timetable_slots(user_id)
+        return {"status": "success", "slots": [_serialize_slot(r) for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to delete timetable slot")
+        raise HTTPException(status_code=500, detail="Unable to delete timetable slot") from exc
+
+
+### ─── Dev / Testing Seed Endpoint ───────────────────────────────────────────
+
+@app.post("/dev/seed")
+def seed_test_data(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Seed sample notifications and timetable slots for the authenticated user.
+    Safe to call multiple times — uses INSERT … ON CONFLICT DO NOTHING for notifications."""
+    user_id = str(current_user["id"])
+    conn = get_db_connection()
+    cur = conn.cursor()
+    seeded: Dict[str, int] = {"notifications": 0, "timetable_slots": 0}
+    try:
+        # Fetch existing courses for this user
+        cur.execute("SELECT id, course_code FROM courses WHERE user_id = %s LIMIT 6", (user_id,))
+        courses = cur.fetchall()
+        course_ids = [str(c["id"]) for c in courses] if courses else []
+
+        # Sample notifications (skip if external_message_id already exists for this user)
+        sample_notifs = [
+            ("Assignment", "OS Assignment #3 Submission", "Submit your process scheduler implementation via LMS by midnight.", "assignment", "high", "whatsapp"),
+            ("Quiz", "NLP Mid-term Quiz Tomorrow", "10 MCQs covering tokenization, POS tagging and Named Entity Recognition.", "assignment", "urgent", "whatsapp"),
+            ("Announcement", "DB Lab Cancelled", "Database Systems lab for Thursday is cancelled due to faculty travel.", "announcement", "low", "classroom"),
+            ("Event", "FAST Career Fair 2026", "Annual career fair — bring 3 printed CVs and your portfolio.", "event", "medium", "classroom"),
+            ("Material", "Deep Learning Lecture 8 Slides", "Backpropagation and optimizers — uploaded to Google Classroom.", "material", "low", "classroom"),
+            ("Assignment", "NLP Assignment 2 — Sentiment Analysis", "Build a sentiment classifier using any approach. Due in 5 days.", "assignment", "high", "classroom"),
+            ("Announcement", "Midterm Schedule Released", "Check the academic calendar for your midterm exam dates.", "announcement", "medium", "gmail"),
+            ("Event", "Hackathon Registration Open", "FAST HackFest registrations close Sunday. Teams of 3-4.", "event", "high", "gmail"),
+            ("Material", "OS Lecture Notes Week 10", "Paging, segmentation and TLB coverage — PDF linked below.", "material", "low", "whatsapp"),
+            ("Assignment", "DL Final Project Proposal", "Submit a 1-page project proposal by next Friday 11:59 PM.", "assignment", "urgent", "classroom"),
+        ]
+
+        import datetime as _dt
+        now_pk = _dt.datetime.now(PAKISTAN_TZ)
+        for i, (sender, title, body_text, category, urgency, source) in enumerate(sample_notifs):
+            ext_id = f"seed-{user_id[:8]}-{i}"
+            deadline_offset = [3, 1, None, 7, None, 5, None, 4, None, 6][i]
+            deadline = (now_pk + _dt.timedelta(days=deadline_offset)).isoformat() if deadline_offset else None
+            course_id = course_ids[i % len(course_ids)] if course_ids else None
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO notifications
+                        (user_id, external_message_id, source_type, sender, title, body, category, urgency, deadline, course_id, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (user_id, ext_id, source, sender, title, body_text, category, urgency, deadline, course_id, now_pk),
+                )
+                seeded["notifications"] += cur.rowcount
+            except Exception:
+                conn.rollback()
+
+        # Sample timetable slots (Mon-Fri, only if courses exist)
+        if course_ids:
+            sample_slots = [
+                (1, "08:00", "09:30"),   # Monday
+                (2, "10:00", "11:30"),   # Tuesday
+                (3, "12:00", "13:30"),   # Wednesday
+                (4, "14:00", "15:30"),   # Thursday
+                (5, "09:00", "10:30"),   # Friday
+            ]
+            for idx, (dow, start, end) in enumerate(sample_slots):
+                cid = course_ids[idx % len(course_ids)]
+                room = f"Room {301 + idx}"
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO timetable_entries (user_id, course_id, day_of_week, start_time, end_time, room_number)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (user_id, cid, dow, start, end, room),
+                    )
+                    seeded["timetable_slots"] += cur.rowcount
+                except Exception:
+                    conn.rollback()
+
+        conn.commit()
+        return {"status": "success", "seeded": seeded}
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("Failed to seed test data")
+        raise HTTPException(status_code=500, detail="Seed failed") from exc
+    finally:
+        cur.close()
+        conn.close()
 
 
 @app.get("/abbreviations/unknown")

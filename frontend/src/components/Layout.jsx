@@ -39,7 +39,7 @@ export default function Layout() {
 
     setResetStatus('saving');
     try {
-      const payload = await apiFetch('/semester/reset?user_id=1', { method: 'POST' }, false);
+      const payload = await apiFetch('/semester/reset', { method: 'POST' });
       setShowSemesterReset(false);
       setResetConfirmText('');
       setToast(`Semester archived! Fresh start ✨ ${payload?.archived_count ?? 0} items archived.`);
