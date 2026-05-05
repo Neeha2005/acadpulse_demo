@@ -1,0 +1,4 @@
+# Optional local XLM-RoBERTa runtime dependencies for task #14.
+# Install these only when LOCAL_CLASSIFIER_PATH points to a saved model.
+transformers>=4.40,<5.0
+torch>=2.2

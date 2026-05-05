@@ -33,7 +33,7 @@ Chat with the AI academic assistant.
 ---
 
 ### 2. POST `/deadlines/extract`
-Extract assignment deadlines from text (WhatsApp messages, emails, etc.)
+Extract assignment deadlines from text (WhatsApp messages, emails, etc.) using the hybrid pipeline: pattern detection, `dateparser`, then Groq only as a fallback.
 
 **Request Body:**
 ```json
@@ -67,8 +67,10 @@ Extract assignment deadlines from text (WhatsApp messages, emails, etc.)
 
 **Features:**
 - Automatic deadline detection from unstructured text
+- Handles natural language dates such as `next Sunday`, `coming Friday`, `tomorrow at 11:59 PM`, and `before midnight`
+- Avoids Groq calls when `dateparser` can resolve the deadline locally
 - Returns structured JSON with task, course, date, and description
-- Safety checking included
+- Optional safety checking can be enabled with `ENABLE_DEADLINE_SAFETY_CHECK=true`
 
 ---
 
@@ -112,7 +114,7 @@ Extract deadlines from multiple text sources at once.
 Checks if text contains malicious or inappropriate content using Groq AI.
 
 ### `extract_deadlines_from_text(text: str) -> list`
-Extracts structured deadline information from text using Groq AI.
+Final fallback that extracts structured deadline information from text using Groq AI when local parsing cannot resolve the deadline.
 
 Returns a list of dictionaries with fields:
 - `task`: Name/title of the assignment

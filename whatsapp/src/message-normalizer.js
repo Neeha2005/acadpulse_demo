@@ -16,6 +16,7 @@ export async function normalizeIncomingMessage(sock, eventMessage) {
   const groupName = isGroup ? await resolveGroupName(sock, remoteJid) : null;
 
   return {
+    message_id: eventMessage.key?.id,
     group_id: cleanJid(remoteJid),
     group_name: groupName || cleanJid(remoteJid),
     sender: cleanJid(senderJid),

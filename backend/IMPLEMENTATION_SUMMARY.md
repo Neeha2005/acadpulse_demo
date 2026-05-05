@@ -96,7 +96,8 @@ Classify which course a message belongs to.
 ```json
 {
   "message": "ML assignment 2 deadline next Sunday",
-  "group_name": "CS Fall 2026"
+  "group_name": "CS Fall 2026",
+  "user_id": "optional-user-uuid"
 }
 ```
 
@@ -148,12 +149,12 @@ Now uses hybrid extraction instead of pure LLM.
 ## Helper Functions
 
 ### Core Classification
-- `get_all_courses_from_db()` - Fetch courses for matching
+- `get_all_courses_from_db(user_id)` - Fetch courses, aliases, and professor names for matching
 - `normalize_text(text)` - Lowercase, remove punctuation
 - `exact_match_course(message, courses)` - Stage 1 weighted scoring
 - `fuzzy_match_course(message, courses, threshold)` - Stage 2 RapidFuzz
 - `llm_classify_course(message, courses)` - Stage 3 LLM fallback
-- `classify_course_for_message(message, group_name)` - Main pipeline
+- `classify_course_for_message(message, group_name, user_id)` - Main pipeline
 
 ### Deadline Extraction
 - `parse_deadline_with_dateparser(date_text)` - Natural language dates

@@ -1,4 +1,59 @@
-```
-# Environment
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+backend/.tmp/
+backend/credentials.json
+backend/token.json
 .env
-```
+*.egg-info/
+
+# ── Node.js ───────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+*.log
+frontend/dist/
+
+# ── WhatsApp session credentials (NEVER commit) ───
+whatsapp/auth/
+whatsapp/auth_info/
+whatsapp/queue/
+whatsapp/sessions/
+whatsapp/baileys_store.json
+whatsapp/selected_groups.json
+whatsapp/*.log
+frontend-vite.*.log
+
+# ── AI model weights (too large for GitHub) ───────
+ai/classifier/model/
+ai/classifier/runs/
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+
+# ── Dataset (may contain private messages) ────────
+ai/dataset/*.xlsx
+ai/dataset/*.csv
+
+# ── Environment / secrets ─────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── OS junk ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE files ─────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.user
