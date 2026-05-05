@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function GmailIntegration() {
-  const { notifications, tasks } = useAppContext();
+  const { notifications, tasks, apiFetch } = useAppContext();
   const [isSyncing, setIsSyncing] = useState(false);
   const [imapStatus, setImapStatus] = useState(true);
   const [priorityFilter, setPriorityFilter] = useState(true);
@@ -11,16 +11,17 @@ export default function GmailIntegration() {
   const gmailNotifs = notifications.filter(n => n.source === 'gmail');
   const gmailTasks = tasks.filter(t => t.source === 'gmail');
 
-  const handleForceSync = () => {
+  const handleForceSync = async () => {
     setIsSyncing(true);
-    console.log("[API MOCK TETHER] POST backend.com/api/integrations/gmail/sync");
-    setTimeout(() => {
-        setIsSyncing(false);
-    }, 2000);
+    try {
+      await apiFetch('/gmail/fetch');
+    } catch {
+    } finally {
+      setIsSyncing(false);
+    }
   }
 
   const handleImapConnection = () => {
-    console.log("[API MOCK TETHER] POST backend.com/api/auth/imap/toggle");
     setImapStatus(!imapStatus);
   }
 

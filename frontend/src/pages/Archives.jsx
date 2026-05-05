@@ -21,7 +21,7 @@ function formatDate(value) {
 }
 
 export default function Archives() {
-  const { apiFetch } = useAppContext();
+  const { apiFetch, authUser } = useAppContext();
   const [archives, setArchives] = useState([]);
   const [category, setCategory] = useState('All');
   const [search, setSearch] = useState('');
@@ -33,7 +33,8 @@ export default function Archives() {
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ user_id: '1' });
+      const params = new URLSearchParams();
+      if (authUser?.id) params.set('user_id', authUser.id);
       if (category !== 'All') params.set('category', category);
       if (search.trim()) params.set('search', search.trim());
       const payload = await apiFetch(`/archives?${params.toString()}`, {}, false);

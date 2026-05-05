@@ -10,7 +10,7 @@ import {
 } from 'react'
 
 const AppContext = createContext()
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
@@ -287,7 +287,7 @@ export function AppProvider({ children }) {
         headers.set('Content-Type', 'application/json')
       }
 
-      if (requireAuth && authToken) {
+      if (authToken && (requireAuth || authToken)) {
         headers.set('Authorization', `Bearer ${authToken}`)
       }
 
@@ -348,8 +348,11 @@ export function AppProvider({ children }) {
     }
   }, [apiFetch, authToken, clearAuthSession, persistUser, user])
 
-  const refreshNotifications = useCallback(async () => {
-    const payload = await apiFetch('/notifications?include_completed=true&limit=200', {}, false)
+  const refreshNotifications = useCallback(async (overrideUserId) => {
+    const uid = overrideUserId || authUser?.id
+    const params = new URLSearchParams({ include_completed: 'true', limit: '200' })
+    if (uid) params.set('user_id', uid)
+    const payload = await apiFetch(`/notifications?${params}`, {}, Boolean(uid))
     const backendRows = Array.isArray(payload?.notifications) ? payload.notifications : []
     const nextNotifications = backendRows.map(buildUiNotification)
     const nextTasks = sortTasksByPriority(backendRows.map(buildTaskFromNotification).filter(Boolean))
@@ -359,17 +362,18 @@ export function AppProvider({ children }) {
       notifications: nextNotifications,
       tasks: nextTasks,
     }
-  }, [apiFetch])
+  }, [apiFetch, authUser?.id])
 
   useEffect(() => {
     refreshAuthenticatedUser()
   }, [refreshAuthenticatedUser])
 
   useEffect(() => {
+    if (!authToken) return
     refreshNotifications().catch((error) => {
       console.error('Failed to load notifications from backend:', error)
     })
-  }, [refreshNotifications])
+  }, [refreshNotifications, authToken])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) {

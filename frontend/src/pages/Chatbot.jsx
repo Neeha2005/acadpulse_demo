@@ -96,7 +96,7 @@ function ChatMessage({ message, onRetry }) {
 }
 
 export default function Chatbot({ open, onClose }) {
-  const { apiFetch, refreshNotifications } = useAppContext();
+  const { apiFetch, refreshNotifications, authUser } = useAppContext();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
@@ -162,10 +162,10 @@ export default function Chatbot({ open, onClose }) {
         method: 'POST',
         body: JSON.stringify({
           prompt,
-          user_id: '1',
+          ...(authUser?.id ? { user_id: authUser.id } : {}),
           history,
         }),
-      }, false);
+      });
 
       const botMessage = {
         id: `assistant-${nextMessageIdRef.current++}`,
