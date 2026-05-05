@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from db import get_db_connection, insert_notification, notification_exists
+from notification_abbr import expand_abbreviations, detect_unknown_abbreviations
 
 
 logger = logging.getLogger(__name__)
@@ -1009,6 +1010,12 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         canonical_message_id = _safe_text(batch.get("canonical_message_id") or primary.get("message_id"))
         first_timestamp = batch.get("first_timestamp") or primary.get("timestamp") or datetime.now(timezone.utc)
         combined_text = _safe_text(batch.get("combined_text"))
+        
+        # STEP 0: Expand abbreviations early
+        expanded_combined_text = expand_abbreviations(combined_text, user_id)
+        # Detect unknown abbreviations for future learning
+        detect_unknown_abbreviations(combined_text, user_id)
+        
         media_items = batch.get("media_items") or []
         mapping = batch.get("mapping") or {}
         mapped_course_id = mapping.get("mapped_course_id")
@@ -1042,6 +1049,8 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
             course_name=course_name,
             combined_text=combined_text,
         )
+        # Also expand abbreviations in media context if generated
+        expanded_media_context_text = expand_abbreviations(media_context_text, user_id) if media_context_text else ""
 
         has_media = bool(attachments)
         is_general_group = not is_course_specific and bool(chat_id)
@@ -1063,7 +1072,7 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         else:
             classification_result = await asyncio.to_thread(
                 classify_course_for_message,
-                combined_text or media_context_text,
+                expanded_combined_text or expanded_media_context_text,
                 chat_name,
                 user_id,
             )
@@ -1079,18 +1088,21 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         if has_media:
             category = classify_media_message(
                 attachments,
-                media_context_text,
+                expanded_media_context_text,
                 is_course_specific=is_course_specific or bool(mapped_course_id),
                 is_general_group=is_general_group,
             )
-            final_text = media_context_text or combined_text
+            final_text = combined_text
+            final_expanded_text = expanded_combined_text or expanded_media_context_text
         else:
+            # We use the already expanded text for the unified pipeline
             pipeline_result = await asyncio.to_thread(
                 run_pipeline,
-                combined_text,
+                expanded_combined_text,
                 None,
                 "whatsapp",
                 None,
+                user_id,
             )
             category = _safe_text(pipeline_result.get("category"))
             if category == "noise":
@@ -1100,6 +1112,7 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
                 )
                 return None
             final_text = combined_text
+            final_expanded_text = expanded_combined_text
 
         if category == "noise":
             logger.info(
@@ -1110,7 +1123,7 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
 
         deadline = None
         if category in {"assignment", "quiz", "announcement", "event"}:
-            deadline_source_text = media_context_text if has_media else combined_text
+            deadline_source_text = expanded_media_context_text if has_media else expanded_combined_text
             deadline_candidates = await asyncio.to_thread(extract_deadlines_hybrid, deadline_source_text)
             first_deadline = None
             for deadline_candidate in deadline_candidates or []:
@@ -1139,6 +1152,7 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
             source_ref=source_id,
             deadline=deadline,
             urgency_level=urgency_level,
+            expanded_text=final_expanded_text,
         )
 
         if not notification_id:

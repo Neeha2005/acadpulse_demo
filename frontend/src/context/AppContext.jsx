@@ -12,7 +12,7 @@ const AppContext = createContext()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001'
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
 
-const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'exam_schedule'])
+const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
 
 function getStoredUser() {
   const storedName = localStorage.getItem('acadpulse_user')
@@ -154,6 +154,8 @@ function buildUiNotification(notification) {
     title: extractNotificationTitle(notification.message_text, notification.category, meta.sourceLabel),
     preview: extractNotificationPreview(notification.message_text),
     time: formatRelativeTime(notification.received_at || notification.created_at),
+    receivedAt: notification.received_at || null,
+    createdAt: notification.created_at || null,
     rawText: notification.message_text || '',
     deadline: notification.deadline || null,
     category: notification.category || null,
@@ -179,6 +181,8 @@ function buildTaskFromNotification(notification) {
     title: extractNotificationTitle(notification.message_text, notification.category, meta.sourceLabel),
     course,
     due: formatTaskDue(notification.deadline) || 'No deadline set',
+    deadline: notification.deadline || null,
+    category: category || (isManual ? 'assignment' : null),
     content: extractNotificationPreview(notification.message_text),
     urgency: mapUrgencyLabelToTaskUrgency(notification.urgency_label),
     urgencyLabel: notification.urgency_label || 'none',

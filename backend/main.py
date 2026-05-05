@@ -22,7 +22,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from groq import APIConnectionError, APIStatusError, Groq
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
@@ -49,7 +49,13 @@ from db import (
     get_notification_by_id,
     list_notifications,
     update_notification_completion,
+    update_notification_fields,
     list_courses,
+    get_course_by_id,
+    get_course_by_name,
+    delete_notification,
+    replace_course_aliases,
+    upsert_course,
     record_whatsapp_group,
     list_whatsapp_groups,
     record_classroom_course,
@@ -59,6 +65,17 @@ from db import (
     upsert_course_source_mapping,
 )
 from local_classifier import classify_with_local_model, local_classifier_available
+from notification_abbr import (
+    expand_abbreviations,
+    seed_default_abbreviations,
+    add_or_update_abbreviation,
+    delete_abbreviation,
+    get_user_abbreviations,
+    detect_unknown_abbreviations,
+    get_unknown_abbreviations,
+)
+from chat_context import build_user_context, invalidate_chat_context
+from chatbot_config import build_chatbot_system_prompt
 from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_flusher, stop_whatsapp_buffer_flusher
 import uuid
 
@@ -140,6 +157,8 @@ class IncomingWhatsAppMessage(BaseModel):
 class ChatRequest(BaseModel):
     prompt: str
     confirm_malicious: bool = False
+    user_id: Optional[str] = None
+    history: List[Dict[str, str]] = Field(default_factory=list)
 
 class DeadlineRequest(BaseModel):
     text: str
@@ -162,6 +181,16 @@ class CourseMappingResponse(BaseModel):
     method: str
     requires_user_confirmation: bool
 
+class CourseAmbiguityResolutionRequest(BaseModel):
+    user_id: Optional[str] = None
+    message: str
+    group_name: Optional[str] = None
+    source_type: str = "whatsapp"
+    source_reference_id: Optional[str] = None
+    course_id: str
+    alias: Optional[str] = None
+    save_alias: bool = True
+
 class WhatsAppGroupRequest(BaseModel):
     group_id: str
     group_name: Optional[str] = None
@@ -179,10 +208,25 @@ class CourseSourceMappingRequest(BaseModel):
     source_type: str = "whatsapp"
     source_reference_id: str
 
+class CourseRequest(BaseModel):
+    user_id: Optional[str] = None
+    course_code: str
+    course_name: str
+    aliases: List[str] = Field(default_factory=list)
+
+class CourseAliasesRequest(BaseModel):
+    user_id: Optional[str] = None
+    aliases: List[str] = Field(default_factory=list)
+
 class RegisterRequest(BaseModel):
     name: str
     email: str
     password: str
+
+class AbbreviationRequest(BaseModel):
+    abbreviation: str
+    expansion: str
+    category: str = "general"
 
 class LoginRequest(BaseModel):
     email: str
@@ -205,6 +249,10 @@ class ChatResponse(BaseModel):
     response: str
     is_safe: bool
     warning: Optional[str] = None
+    context_loaded: bool = False
+    context_counts: Optional[Dict[str, int]] = None
+    action: Optional[str] = None
+    action_result: Optional[Dict[str, Any]] = None
 
 class DeadlineResponse(BaseModel):
     deadlines: list
@@ -381,7 +429,7 @@ def record_groq_usage(response):
             groq_status["tokens_used_today"],
         )
 
-def call_groq_with_retry(prompt_messages: list, max_retries: int = 3) -> str:
+def call_groq_with_retry(prompt_messages: list, max_retries: int = 3, tools: Optional[list] = None) -> Any:
     reset_groq_daily_counter_if_needed()
     client = get_groq_client()
     model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
@@ -390,13 +438,18 @@ def call_groq_with_retry(prompt_messages: list, max_retries: int = 3) -> str:
 
     for attempt in range(max_retries + 1):
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=prompt_messages,
-            )
+            params = {
+                "model": model,
+                "messages": prompt_messages,
+            }
+            if tools:
+                params["tools"] = tools
+                params["tool_choice"] = "auto"
+                
+            response = client.chat.completions.create(**params)
             record_groq_usage(response)
             groq_status["last_error"] = None
-            return response.choices[0].message.content or ""
+            return response.choices[0].message
         except APIStatusError as e:
             status_code = getattr(e, "status_code", None)
             groq_status["last_error"] = f"HTTP {status_code}: {str(e)}"
@@ -420,23 +473,135 @@ def call_groq_with_retry(prompt_messages: list, max_retries: int = 3) -> str:
                 continue
 
             logger.warning("Groq retries exhausted or non-retryable error: %s", e)
-            return groq_safe_fallback(prompt_messages)
+            return type('obj', (object,), {'content': groq_safe_fallback(prompt_messages), 'tool_calls': None})
         except (APIConnectionError, httpx.TimeoutException, httpx.ConnectError) as e:
             groq_status["last_error"] = f"Connection error: {str(e)}"
             if attempt < max_retries:
                 logger.warning("Groq connection error. Retry %s/%s in 5s", attempt + 1, max_retries)
                 time.sleep(5)
                 continue
-            return groq_safe_fallback(prompt_messages)
+            return type('obj', (object,), {'content': groq_safe_fallback(prompt_messages), 'tool_calls': None})
         except Exception as e:
             groq_status["last_error"] = str(e)
             logger.warning("Unexpected Groq error: %s", e)
-            return groq_safe_fallback(prompt_messages)
+            return type('obj', (object,), {'content': groq_safe_fallback(prompt_messages), 'tool_calls': None})
 
-    return groq_safe_fallback(prompt_messages)
+    return type('obj', (object,), {'content': groq_safe_fallback(prompt_messages), 'tool_calls': None})
 
-def create_groq_chat(prompt_messages):
-    return call_groq_with_retry(prompt_messages)
+def create_groq_chat(prompt_messages, tools=None):
+    return call_groq_with_retry(prompt_messages, tools=tools)
+
+def serialize_groq_assistant_message(message: Any) -> Dict[str, Any]:
+    """Convert a Groq SDK assistant message into an API-safe dict."""
+    if hasattr(message, "model_dump"):
+        return message.model_dump(exclude_none=True)
+    if isinstance(message, dict):
+        return message
+    return {
+        "role": "assistant",
+        "content": getattr(message, "content", "") or "",
+    }
+
+def execute_function_call(function_name: str, arguments: dict, user_id: str) -> str:
+    """Execute a tool call from the LLM and return the result as a string."""
+    try:
+        if function_name == "mark_item_done":
+            notif_id = arguments.get("notification_id")
+            row = update_notification_completion(notif_id, True)
+            if row:
+                invalidate_chat_context(user_id)
+                return f"Success: Task {notif_id} marked as done."
+            return f"Error: notification ID {notif_id} not found for this user."
+
+        if function_name == "add_manual_notification":
+            category = arguments.get("category")
+            course_name = arguments.get("course")
+            text = arguments.get("text")
+            deadline = arguments.get("deadline")
+            
+            deadline_dt = parse_manual_deadline(deadline=deadline)
+            message_text = build_manual_message_text(title=text, course=course_name)
+            
+            notif_id = insert_notification(
+                user_id=user_id,
+                source_type="manual",
+                external_id=None,
+                sender="AcadPulse Chatbot",
+                text=message_text,
+                category=category,
+                received_at=datetime.now(PAKISTAN_TZ),
+                deadline=deadline_dt,
+            )
+            if notif_id:
+                if deadline_dt:
+                    urgency = calculate_urgency(deadline_dt)
+                    update_notification_urgency(notif_id, urgency["score"], urgency["label"])
+                invalidate_chat_context(user_id)
+                return f"Success: Added new {category} task with ID {notif_id}."
+            return "Error: Failed to create task."
+
+        if function_name == "update_deadline":
+            notif_id = arguments.get("notification_id")
+            new_deadline = arguments.get("new_deadline")
+            deadline_dt = parse_manual_deadline(deadline=new_deadline)
+            
+            if not deadline_dt:
+                return f"Error: Invalid deadline format '{new_deadline}'."
+                
+            success = update_notification_deadline(notif_id, deadline_dt)
+            if success:
+                urgency = calculate_urgency(deadline_dt)
+                update_notification_urgency(notif_id, urgency["score"], urgency["label"])
+                invalidate_chat_context(user_id)
+                return f"Success: Deadline for task {notif_id} updated to {new_deadline}."
+            return f"Error: notification ID {notif_id} not found."
+
+        if function_name == "delete_notification":
+            notif_id = arguments.get("notification_id")
+            confirmed = arguments.get("confirmed", False)
+            
+            if not confirmed:
+                return f"Confirmation Required: Please confirm you want to delete item {notif_id} by saying 'yes' or 'confirm'."
+                
+            success = delete_notification(notif_id, user_id)
+            if success:
+                invalidate_chat_context(user_id)
+                return f"Success: Task {notif_id} has been deleted."
+            return f"Error: notification ID {notif_id} not found."
+
+        if function_name == "map_course":
+            group_name = arguments.get("group_name")
+            course_name = arguments.get("course_name")
+            
+            course = get_course_by_name(course_name, user_id)
+            if not course:
+                return f"Error: Course '{course_name}' not found. Please create the course first or check the name."
+                
+            mapping = upsert_course_source_mapping(
+                user_id=user_id,
+                course_id=course["id"],
+                source_type="whatsapp",
+                source_reference_id=group_name
+            )
+            if mapping:
+                invalidate_chat_context(user_id)
+                return f"Success: WhatsApp group '{group_name}' is now mapped to '{course['course_name']}'."
+            return "Error: Failed to create course mapping."
+
+        if function_name == "get_notification_detail":
+            notif_id = arguments.get("notification_id")
+            row = get_notification_by_id(notif_id)
+            if row and str(row.get("user_id")) == str(user_id):
+                # Format the row for LLM
+                detail = {k: str(v) for k, v in row.items()}
+                return json.dumps(detail, indent=2)
+            return f"Error: notification ID {notif_id} not found."
+
+        return f"Error: unknown function '{function_name}'"
+        
+    except Exception as e:
+        logger.error(f"Error in execute_function_call: {e}")
+        return f"Error executing {function_name}: {str(e)}"
 
 def check_message_safety(text):
     """Check if message contains potentially malicious content."""
@@ -466,16 +631,51 @@ def normalize_received_at(value):
         return datetime.fromtimestamp(int(value), tz=timezone.utc)
     return value
 
+def normalize_roman_urdu_datetime_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    replacements = {
+        "kal raat": "tomorrow 11:59 PM",
+        "kal sham": "tomorrow 5 PM",
+        "kal subah": "tomorrow 9 AM",
+        "kal": "tomorrow",
+        "aaj raat": "today 11:59 PM",
+        "aaj sham": "today 5 PM",
+        "aaj subah": "today 9 AM",
+        "aaj": "today",
+        "parson raat": "in 2 days 11:59 PM",
+        "parson sham": "in 2 days 5 PM",
+        "parson subah": "in 2 days 9 AM",
+        "parson": "in 2 days",
+        "raat": "11:59 PM",
+        "sham": "5 PM",
+        "subah": "9 AM",
+    }
+    for source, target in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        text = re.sub(rf"\b{re.escape(source)}\b", target, text)
+    return text
+
 def parse_manual_deadline(deadline=None, due_date=None, due_time=None):
     """
     Parse manual deadline input from either an ISO datetime string or split date/time fields.
     Returns a timezone-aware datetime in Pakistan time, or None when absent/unparseable.
     """
     if deadline:
+        raw_deadline = str(deadline).strip()
         try:
-            parsed = datetime.fromisoformat(str(deadline).strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw_deadline.replace("Z", "+00:00"))
             return ensure_timezone_aware(parsed)
         except ValueError:
+            parsed = dateparser.parse(
+                normalize_roman_urdu_datetime_text(raw_deadline),
+                settings={
+                    "PREFER_DATES_FROM": "future",
+                    "RETURN_AS_TIMEZONE_AWARE": False,
+                    "PREFER_DAY_OF_MONTH": "first",
+                    "RELATIVE_BASE": datetime.now(PAKISTAN_TZ).replace(tzinfo=None),
+                },
+            )
+            if parsed:
+                return ensure_timezone_aware(parsed)
             logger.warning("Manual notification deadline could not be parsed: %s", deadline)
             return None
 
@@ -557,6 +757,41 @@ def serialize_classroom_course_row(row):
         "classroom_id": row.get("classroom_id"),
         "classroom_name": row.get("classroom_name") or row.get("classroom_id"),
     }
+
+def compact_text(value: Optional[str], limit: int = 500) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+def parse_chat_action(raw_output: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(extract_json_object(raw_output))
+    except Exception:
+        return {"action": "none", "arguments": {}, "reply": None}
+
+    if not isinstance(parsed, dict):
+        return {"action": "none", "arguments": {}, "reply": None}
+
+    action = str(parsed.get("action") or "none").strip().lower()
+    arguments = parsed.get("arguments") if isinstance(parsed.get("arguments"), dict) else {}
+    reply = parsed.get("reply") if isinstance(parsed.get("reply"), str) else None
+    return {
+        "action": action,
+        "arguments": arguments,
+        "reply": reply,
+    }
+
+def build_manual_message_text(title: str, course: Optional[str] = None, description: Optional[str] = None) -> str:
+    parts = [title.strip()]
+    if course:
+        parts.append(f"Course: {course.strip()}")
+    if description:
+        parts.append(description.strip())
+    return "\n\n".join(part for part in parts if part)
+
+def summarize_notification_for_action(row: Dict[str, Any]) -> Dict[str, Any]:
+    return serialize_notification_row(row) if row else {}
 
 def resolve_default_student_user_id() -> str:
     return str(get_or_create_user("Default Student", "student@example.com"))
@@ -685,10 +920,20 @@ def parse_structured_classroom_due_date(due_date, due_time=None):
         tzinfo=timezone.utc,
     )
 
-def run_pipeline(text: str, notification_id: Optional[int], source_type: str, structured_deadline=None) -> dict:
+def run_pipeline(
+    text: str, 
+    notification_id: Optional[str], 
+    source_type: str, 
+    structured_deadline=None,
+    user_id: Optional[str] = None
+) -> dict:
     """
     Unified notification pipeline for WhatsApp, Gmail, Classroom, and future sources.
-    Saves category, optional deadline, and urgency onto an existing notification row.
+    1. Expand abbreviations (new)
+    2. Classify
+    3. Extract deadline
+    4. Score urgency
+    5. Save to DB
     """
     if not text or not text.strip():
         return {
@@ -702,8 +947,39 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
             "urgency_label": "none",
         }
 
-    local_classification = classify_with_local_model(text)
-    category = local_classification["label"] if local_classification else classifier_stub(text)
+    # Get user_id if not provided
+    if not user_id and notification_id:
+        notif = get_notification_by_id(notification_id)
+        if notif:
+            user_id = notif.get("user_id")
+    
+    # STEP 1: Expand abbreviations (NEW)
+    original_text = text
+    expanded_text = expand_abbreviations(text, user_id) if user_id else text
+    
+    # Auto-detect unknown abbreviations for future learning
+    if user_id:
+        detect_unknown_abbreviations(original_text, user_id)
+    
+    # Store expanded_text in database
+    if notification_id and expanded_text != original_text:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE notifications SET expanded_text = %s WHERE id = %s",
+                (expanded_text, notification_id)
+            )
+            conn.commit()
+        except:
+            pass
+        finally:
+            cur.close()
+            conn.close()
+    
+    # STEP 2: Classify using EXPANDED text
+    local_classification = classify_with_local_model(expanded_text)
+    category = local_classification["label"] if local_classification else classifier_stub(expanded_text)
     update_notification_category(notification_id, category)
 
     result = {
@@ -721,6 +997,8 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
         "llm_called": False,
         "classifier_source": local_classification["source"] if local_classification else "keyword_stub",
         "classifier_confidence": local_classification["score"] if local_classification else None,
+        "abbreviations_expanded": expanded_text != original_text,
+        "expanded_text": expanded_text,
     }
 
     if category == "noise":
@@ -728,13 +1006,14 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
         result["skipped"] = "noise"
         return result
 
+    # STEP 3: Extract deadline using EXPANDED text
     deadline_datetime = structured_deadline
     if deadline_datetime:
         result["deadline_source"] = "structured"
     elif category in DEADLINE_CATEGORIES:
         result["llm_called"] = True
         try:
-            parsed_deadline = parse_deadline_response(extract_deadline_json_from_text(text))
+            parsed_deadline = parse_deadline_response(extract_deadline_json_from_text(expanded_text))
         except Exception as e:
             logger.warning("Pipeline deadline extraction failed for notification %s: %s", notification_id, e)
             parsed_deadline = {"has_deadline": False, "deadline": None}
@@ -743,6 +1022,7 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
             deadline_datetime = parsed_deadline["deadline"]
             result["deadline_source"] = "llm"
 
+    # STEP 4: Score urgency and save
     if deadline_datetime:
         update_notification_deadline(notification_id, deadline_datetime)
         urgency = calculate_urgency(deadline_datetime)
@@ -762,6 +1042,11 @@ def run_pipeline(text: str, notification_id: Optional[int], source_type: str, st
         })
 
     update_notification_urgency(notification_id, urgency["score"], urgency["label"])
+    
+    # Invalidate cache since notification was updated
+    if user_id:
+        invalidate_chat_context(user_id)
+        
     return result
 
 def strip_markdown_code_fence(text):
@@ -1968,6 +2253,9 @@ def create_manual_notification(request: ManualNotificationRequest):
     if not notification_id:
         raise HTTPException(status_code=500, detail="Unable to create manual notification")
 
+    # Invalidate cache
+    invalidate_chat_context(user_id)
+
     urgency = calculate_urgency(deadline_dt) if deadline_dt else {"score": 0, "label": "none", "color": "grey"}
     if deadline_dt:
         update_notification_urgency(notification_id, urgency["score"], urgency["label"])
@@ -1990,6 +2278,10 @@ def complete_notification(notification_id: str, request: NotificationCompletionR
     if not updated:
         raise HTTPException(status_code=404, detail="Notification not found")
 
+    # Invalidate cache
+    if updated.get("user_id"):
+        invalidate_chat_context(str(updated["user_id"]))
+
     return {
         "status": "success",
         "message": "Notification completion updated",
@@ -2009,6 +2301,55 @@ def get_courses(user_id: Optional[str] = Query(default=None)):
         "status": "success",
         "count": len(rows),
         "courses": [serialize_course_row(row) for row in rows],
+    }
+
+@app.post("/courses")
+def save_course(request: CourseRequest):
+    course_code = (request.course_code or "").strip()
+    course_name = (request.course_name or "").strip()
+
+    if not course_code:
+        raise HTTPException(status_code=422, detail="course_code is required")
+    if not course_name:
+        raise HTTPException(status_code=422, detail="course_name is required")
+
+    user_id = resolve_mapping_user_id(request.user_id)
+    try:
+        course_id = upsert_course(
+            course_code=course_code,
+            course_name=course_name,
+            aliases=request.aliases,
+            user_id=user_id,
+        )
+        row = get_course_by_id(course_id, user_id=user_id)
+    except Exception as exc:
+        logger.exception("Failed to save course")
+        raise HTTPException(status_code=500, detail="Unable to save course") from exc
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "course": serialize_course_row(row),
+    }
+
+@app.patch("/courses/{course_id}/aliases")
+def update_course_aliases(course_id: str, request: CourseAliasesRequest):
+    user_id = resolve_mapping_user_id(request.user_id) if request.user_id else None
+    existing = get_course_by_id(course_id, user_id=user_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    try:
+        replace_course_aliases(course_id, request.aliases)
+        row = get_course_by_id(course_id, user_id=user_id)
+    except Exception as exc:
+        logger.exception("Failed to update course aliases")
+        raise HTTPException(status_code=500, detail="Unable to update course aliases") from exc
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "course": serialize_course_row(row),
     }
 
 @app.get("/whatsapp/groups")
@@ -2400,11 +2741,120 @@ async def sync_everything():
 
 # --- Groq Chatbot & Deadline Extraction Endpoints ---
 
+@app.get("/chat/context")
+def get_chat_context(
+    user_id: Optional[str] = Query(default=None),
+    notification_limit: int = Query(default=80, ge=1, le=200),
+):
+    try:
+        context = build_chat_db_context(user_id=user_id, notification_limit=notification_limit)
+    except Exception as exc:
+        logger.exception("Failed to build chat DB context")
+        raise HTTPException(status_code=500, detail="Unable to load chat context") from exc
+
+    return {
+        "status": "success",
+        "context": context,
+    }
+
+CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_item_done",
+            "description": "Mark a task or notification as completed/done.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notification_id": {"type": "string", "description": "The unique ID of the notification/task to mark as done."}
+                },
+                "required": ["notification_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_manual_notification",
+            "description": "Add a new manual task or notification to the list.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "enum": ["assignment", "quiz", "exam_schedule", "announcement", "event", "material"], "description": "The type of notification."},
+                    "course": {"type": "string", "description": "The course name or code (e.g., 'NLP', 'Natural Language Processing')."},
+                    "text": {"type": "string", "description": "The description of the task."},
+                    "deadline": {"type": "string", "description": "Deadline in ISO format (YYYY-MM-DD HH:MM), optional."}
+                },
+                "required": ["category", "course", "text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_deadline",
+            "description": "Update the deadline for an existing task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notification_id": {"type": "string", "description": "The ID of the task to update."},
+                    "new_deadline": {"type": "string", "description": "New deadline in ISO format (YYYY-MM-DD HH:MM)."}
+                },
+                "required": ["notification_id", "new_deadline"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_notification",
+            "description": "Remove a task or notification from the database. REQUIRES USER CONFIRMATION FIRST.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notification_id": {"type": "string", "description": "The ID of the task to delete."},
+                    "confirmed": {"type": "boolean", "description": "Set to true ONLY if the user has explicitly confirmed they want to delete this specific item."}
+                },
+                "required": ["notification_id", "confirmed"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "map_course",
+            "description": "Map a WhatsApp group name to a course name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "group_name": {"type": "string", "description": "The name of the WhatsApp group."},
+                    "course_name": {"type": "string", "description": "The full name or code of the course to map it to."}
+                },
+                "required": ["group_name", "course_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_notification_detail",
+            "description": "Get full details of a single notification/task by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notification_id": {"type": "string", "description": "The ID of the notification to fetch."}
+                },
+                "required": ["notification_id"]
+            }
+        }
+    }
+]
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat_with_bot(request: ChatRequest):
     """
-    Chat with the AI assistant. Includes safety checking.
-    If the message is flagged as malicious, requires confirmation to proceed.
+    Chat with the AI assistant. Includes safety checking and multi-turn tool calling.
     """
     # Check for malicious content
     is_malicious = check_message_safety(request.prompt)
@@ -2418,21 +2868,84 @@ def chat_with_bot(request: ChatRequest):
     
     # If confirmed or safe, proceed with chat
     try:
+        user_id = resolve_mapping_user_id(request.user_id)
+        context_json = build_user_context(user_id)
+        db_context = json.loads(context_json)
+
+        # 1. Start message history
+        sanitized_history = []
+        for entry in request.history[-10:]:
+            role = entry.get("role")
+            content = entry.get("content")
+            if role in {"user", "assistant"} and content:
+                sanitized_history.append({"role": role, "content": str(content)})
+
         messages = [
-            {"role": "system", "content": "You are AcadPulse, a helpful academic assistant for students. Help users with questions about assignments, deadlines, courses, and general academic queries. Be concise and friendly."},
+            {
+                "role": "system",
+                "content": build_chatbot_system_prompt(db_context),
+            },
+            {"role": "system", "content": f"academic_context JSON:\n{context_json}"},
+            *sanitized_history,
             {"role": "user", "content": request.prompt}
         ]
+
+        # 2. Tool use loop (max 5 iterations)
+        action_taken = None
+        action_result = None
         
-        response_text = create_groq_chat(messages)
+        for _ in range(5):
+            response_msg = create_groq_chat(messages, tools=CHAT_TOOLS)
+            
+            # If no tool calls, we're done
+            if not getattr(response_msg, "tool_calls", None):
+                break
+                
+            # Add assistant's message to history
+            messages.append(serialize_groq_assistant_message(response_msg))
+            
+            # Process tool calls
+            for tool_call in response_msg.tool_calls:
+                fn_name = tool_call.function.name
+                fn_args = json.loads(tool_call.function.arguments)
+                
+                logger.info(f"Chatbot executing tool: {fn_name} with args {fn_args}")
+                
+                # Execute the action
+                result_str = execute_function_call(fn_name, fn_args, user_id)
+                
+                # Record the last action for the response metadata
+                action_taken = fn_name
+                action_result = {"message": result_str}
+                
+                # Add tool result to history
+                messages.append({
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": fn_name,
+                    "content": result_str,
+                })
+                
+                # If we just did a DB operation, we might want to refresh context
+                # but for simplicity in one turn, we'll let the LLM know the success.
+        
+        # Get final response text
+        final_text = response_msg.content or ""
         
         return ChatResponse(
-            response=response_text,
+            response=final_text,
             is_safe=True,
-            warning=groq_status["last_error"] if response_text.startswith("Abhi thoda busy hoon") else None
+            warning=groq_status["last_error"],
+            context_loaded=True,
+            context_counts=db_context.get("summary", {}),
+            action=action_taken or "none",
+            action_result=action_result,
         )
+
     except HTTPException as e:
         raise e
     except Exception as e:
+        logger.exception("Chat error")
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.post("/deadlines/extract", response_model=DeadlineResponse)
@@ -2517,6 +3030,69 @@ def classify_message_course(request: CourseMappingRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Classification error: {str(e)}")
 
+@app.post("/messages/resolve-course-ambiguity")
+def resolve_course_ambiguity(request: CourseAmbiguityResolutionRequest):
+    """
+    Confirm an ambiguous course match and teach the classifier for next time.
+
+    Confirmation can save both a source mapping (for a WhatsApp group, Gmail
+    sender, or Classroom course id) and a human-approved alias such as "OS".
+    """
+    message = (request.message or "").strip()
+    course_id = (request.course_id or "").strip()
+    source_type = (request.source_type or "whatsapp").strip().lower()
+
+    if not message:
+        raise HTTPException(status_code=422, detail="message is required")
+    if not course_id:
+        raise HTTPException(status_code=422, detail="course_id is required")
+    if source_type not in {"whatsapp", "gmail", "classroom"}:
+        raise HTTPException(status_code=422, detail="source_type must be whatsapp, gmail, or classroom")
+
+    user_id = resolve_mapping_user_id(request.user_id)
+    course = get_course_by_id(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    saved_alias = None
+    saved_mapping = None
+    source_reference_id = (request.source_reference_id or "").strip()
+    alias_candidate = (request.alias or request.group_name or "").strip()
+
+    try:
+        if request.save_alias and alias_candidate:
+            existing_aliases = course.get("aliases") or []
+            merged_aliases = [*existing_aliases, alias_candidate]
+            replace_course_aliases(course_id, merged_aliases)
+            saved_alias = alias_candidate
+
+        if source_reference_id:
+            saved_mapping = upsert_course_source_mapping(
+                user_id=user_id,
+                course_id=course_id,
+                source_type=source_type,
+                source_reference_id=source_reference_id,
+            )
+
+        updated_course = get_course_by_id(course_id)
+        updated_classification = classify_course_for_message(
+            message,
+            request.group_name,
+            user_id,
+        )
+    except Exception as exc:
+        logger.exception("Failed to resolve course ambiguity")
+        raise HTTPException(status_code=500, detail="Unable to resolve course ambiguity") from exc
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "saved_alias": saved_alias,
+        "mapping": serialize_course_source_mapping_row(saved_mapping) if saved_mapping else None,
+        "course": serialize_course_row(updated_course),
+        "classification": updated_classification,
+    }
+
 @app.post("/messages/incoming")
 async def process_incoming_message(payload: Dict[str, Any]):
     """
@@ -2577,3 +3153,114 @@ async def process_incoming_message(payload: Dict[str, Any]):
             "notifications_created": [],
             "count": 0,
         }
+
+
+# ===== ABBREVIATION DICTIONARY ENDPOINTS =====
+
+@app.get("/abbreviations")
+def get_abbreviations(user_id: str = Query(...), current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Get user's full abbreviation dictionary grouped by category."""
+    if str(current_user.get("id")) != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    result = get_user_abbreviations(user_id)
+    return {"status": "success", **result}
+
+
+@app.post("/abbreviations")
+def create_or_update_abbreviation(
+    request: AbbreviationRequest,
+    user_id: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Add or update a user-defined abbreviation."""
+    if str(current_user.get("id")) != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    success, result = add_or_update_abbreviation(
+        user_id, 
+        request.abbreviation, 
+        request.expansion, 
+        request.category
+    )
+    
+    if not success:
+        raise HTTPException(status_code=422, detail=result.get("error", "Invalid input"))
+    
+    return {"status": "success", "abbreviation": result}
+
+
+@app.delete("/abbreviations/{abbreviation}")
+def delete_abbr(
+    abbreviation: str,
+    user_id: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Delete a user-defined abbreviation."""
+    if str(current_user.get("id")) != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    success, message = delete_abbreviation(user_id, abbreviation)
+    
+    if not success:
+        if "cannot be deleted" in message:
+            raise HTTPException(status_code=403, detail=message)
+        raise HTTPException(status_code=404, detail=message)
+    
+    return {"status": "success", "message": message}
+
+
+@app.get("/abbreviations/test")
+def test_abbreviation_expansion(
+    user_id: str = Query(...),
+    text: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Test abbreviation expansion on a text string."""
+    if str(current_user.get("id")) != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    if not text:
+        raise HTTPException(status_code=422, detail="Text is required")
+    
+    expanded = expand_abbreviations(text, user_id)
+    
+    # Identify which abbreviations were actually expanded
+    # We do this by checking word-by-word against the dictionary
+    abbr_data = get_user_abbreviations(user_id)
+    all_abbrs = []
+    for cat_dict in [abbr_data.get("system", {}), abbr_data.get("user", {})]:
+        for cat, items in cat_dict.items():
+            all_abbrs.extend([item["abbreviation"].lower() for item in items])
+    
+    matches_found = []
+    # Use the same regex logic as the expansion engine to identify matches
+    for abbr in all_abbrs:
+        if re.search(r'\b' + re.escape(abbr) + r'\b', text, re.IGNORECASE):
+            matches_found.append(abbr)
+    
+    return {
+        "status": "success",
+        "original": text,
+        "expanded": expanded,
+        "matches_found": list(set(matches_found)),
+        "expansions_applied": len(set(matches_found)),
+    }
+
+
+@app.get("/abbreviations/unknown")
+def get_unknown_abbrs(
+    user_id: str = Query(...),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get detected unknown abbreviations for manual review."""
+    if str(current_user.get("id")) != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    unknown = get_unknown_abbreviations(user_id)
+    
+    return {
+        "status": "success",
+        "unknown_abbreviations": unknown,
+        "count": len(unknown),
+    }

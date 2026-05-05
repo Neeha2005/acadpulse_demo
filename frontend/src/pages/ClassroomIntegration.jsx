@@ -141,7 +141,7 @@ export default function ClassroomIntegration() {
 
   return (
     <div className="dashboard-scroll">
-      <div className="hero-stats" style={{paddingBottom: 24, borderBottom: '1px solid var(--border)'}}>
+      <section className="hero-stats glass-banner">
         <div style={{display: 'flex', gap: 20, alignItems: 'center'}}>
            <div style={{width: 64, height: 64, borderRadius: 16, background: 'var(--warning-subtle)', color: 'var(--warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32}}>
               <i className="fa-brands fa-google"></i>
@@ -159,10 +159,10 @@ export default function ClassroomIntegration() {
                </button>
            </div>
         </div>
-      </div>
+      </section>
       
       <div className="content-grid" style={{marginTop: 32}}>
-         <div className="panel tasks-panel">
+         <div className="panel tasks-panel glass-panel panel-accent">
             <div className="panel-header">
                <h2 className="panel-title"><i className="fa-solid fa-diagram-project text-warning"></i> Course Mapping</h2>
                <button className="text-btn" onClick={loadMappingData} disabled={loadingMappings}>
@@ -239,7 +239,7 @@ export default function ClassroomIntegration() {
             </div>
          </div>
          
-         <div className="panel">
+         <div className="panel glass-panel panel-accent">
             <div className="panel-header">
                <h2 className="panel-title"><i className="fa-solid fa-graduation-cap text-warning"></i> Classroom Polling Logs</h2>
                <span className="badge badge-warning">{classroomNotifs.length} items queued</span>

@@ -5,6 +5,7 @@ export default function WhatsAppIntegration() {
   const { notifications, apiFetch } = useAppContext();
   const [isSyncing, setIsSyncing] = useState(false);
   const [active, setActive] = useState(true);
+  const [groupFilter, setGroupFilter] = useState('All');
   const [courses, setCourses] = useState([]);
   const [groups, setGroups] = useState([]);
   const [mappings, setMappings] = useState([]);
@@ -22,6 +23,27 @@ export default function WhatsAppIntegration() {
     () => new Set(mappings.map(mapping => mapping.source_reference_id)),
     [mappings],
   );
+  const mappingByGroupId = useMemo(
+    () => new Map(mappings.map(mapping => [mapping.source_reference_id, mapping])),
+    [mappings],
+  );
+  const unmappedGroups = useMemo(
+    () => groups.filter(group => !mappedGroupIds.has(group.group_id)),
+    [groups, mappedGroupIds],
+  );
+  const visibleGroups = useMemo(
+    () => groups.filter(group => {
+      if (groupFilter === 'Mapped') return mappedGroupIds.has(group.group_id);
+      if (groupFilter === 'Unmapped') return !mappedGroupIds.has(group.group_id);
+      return true;
+    }),
+    [groupFilter, groups, mappedGroupIds],
+  );
+  const selectedGroupInfo = useMemo(
+    () => groups.find(group => group.group_id === selectedGroup),
+    [groups, selectedGroup],
+  );
+  const selectedMapping = selectedGroup ? mappingByGroupId.get(selectedGroup) : null;
 
   const loadMappingData = useCallback(async () => {
     setLoadingMappings(true);
@@ -42,7 +64,12 @@ export default function WhatsAppIntegration() {
       setGroups(nextGroups);
       setMappings(nextMappings);
       setSelectedCourse(current => current || nextCourses[0]?.id || '');
-      setSelectedGroup(current => current || nextGroups[0]?.group_id || '');
+      setSelectedGroup(current => {
+        if (current && nextGroups.some(group => group.group_id === current)) return current;
+        return nextGroups.find(group => !nextMappings.some(mapping => mapping.source_reference_id === group.group_id))?.group_id
+          || nextGroups[0]?.group_id
+          || '';
+      });
     } catch (error) {
       setMappingError(error.message || 'Unable to load WhatsApp mapping data.');
     } finally {
@@ -126,14 +153,14 @@ export default function WhatsAppIntegration() {
 
   return (
     <div className="dashboard-scroll">
-      <div className="hero-stats" style={{paddingBottom: 24, borderBottom: '1px solid var(--border)'}}>
+      <section className="hero-stats glass-banner">
         <div style={{display: 'flex', gap: 20, alignItems: 'center'}}>
            <div style={{width: 64, height: 64, borderRadius: 16, background: 'var(--whatsapp-subtle)', color: 'var(--whatsapp)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32}}>
               <i className="fa-brands fa-whatsapp"></i>
            </div>
            <div>
               <h1 style={{margin: '0 0 8px 0'}}>WhatsApp Interface</h1>
-              <p style={{margin: 0, color: 'var(--text-muted)'}}>Manage your AI text routing, synchronization patterns, and incoming unread hooks.</p>
+              <p style={{margin: 0, color: 'var(--text-muted)'}}>Map WhatsApp groups to AcadPulse courses so incoming messages route into the right workload.</p>
            </div>
            <div style={{marginLeft: 'auto', display: 'flex', gap: 16}}>
                <button className="btn btn-outline" onClick={() => setActive(!active)}>
@@ -144,10 +171,10 @@ export default function WhatsAppIntegration() {
                </button>
            </div>
         </div>
-      </div>
+      </section>
       
       <div className="content-grid" style={{marginTop: 32}}>
-         <div className="panel tasks-panel">
+         <div className="panel tasks-panel glass-panel panel-accent">
             <div className="panel-header">
                <h2 className="panel-title"><i className="fa-solid fa-diagram-project text-primary"></i> Course Mapping</h2>
                <button className="text-btn" onClick={loadMappingData} disabled={loadingMappings}>
@@ -155,6 +182,21 @@ export default function WhatsAppIntegration() {
                </button>
             </div>
             <div style={{padding: 24, display: 'flex', flexDirection: 'column', gap: 20}}>
+               <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12}}>
+                  <div style={{padding: 14, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)'}}>
+                     <strong style={{fontSize: 24, display: 'block', color: 'var(--whatsapp)'}}>{groups.length}</strong>
+                     <span style={{fontSize: 12, color: 'var(--text-muted)'}}>Detected Groups</span>
+                  </div>
+                  <div style={{padding: 14, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)'}}>
+                     <strong style={{fontSize: 24, display: 'block', color: 'var(--success)'}}>{mappings.length}</strong>
+                     <span style={{fontSize: 12, color: 'var(--text-muted)'}}>Mapped Groups</span>
+                  </div>
+                  <div style={{padding: 14, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)'}}>
+                     <strong style={{fontSize: 24, display: 'block', color: unmappedGroups.length ? 'var(--warning)' : 'var(--text)'}}>{unmappedGroups.length}</strong>
+                     <span style={{fontSize: 12, color: 'var(--text-muted)'}}>Need Course</span>
+                  </div>
+               </div>
+
                <form onSubmit={handleSaveMapping} style={{display: 'flex', flexDirection: 'column', gap: 14}}>
                   <div>
                      <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>WhatsApp Group</label>
@@ -167,6 +209,18 @@ export default function WhatsAppIntegration() {
                         ))}
                      </select>
                   </div>
+
+                  {selectedGroup && (
+                     <div style={{padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'rgba(0,0,0,0.24)', display: 'flex', justifyContent: 'space-between', gap: 12}}>
+                        <div style={{minWidth: 0}}>
+                           <div style={{fontSize: 14, fontWeight: 600}}>{selectedGroupInfo?.group_name || selectedGroup}</div>
+                           <div style={{fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere'}}>{selectedGroup}</div>
+                        </div>
+                        <span className={`badge ${selectedMapping ? 'badge-success' : 'badge-warning'}`} style={{alignSelf: 'center', whiteSpace: 'nowrap'}}>
+                           {selectedMapping ? selectedMapping.course_code : 'Unmapped'}
+                        </span>
+                     </div>
+                  )}
 
                   <div>
                      <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>Course</label>
@@ -206,23 +260,40 @@ export default function WhatsAppIntegration() {
                )}
 
                <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                  <strong style={{fontSize: 13, color: 'var(--text-muted)'}}>Saved mappings</strong>
-                  {mappings.length === 0 ? (
-                     <div style={{fontSize: 13, color: 'var(--text-faint)'}}>No WhatsApp groups mapped yet.</div>
-                  ) : mappings.map(mapping => (
-                     <div key={mapping.id} style={{padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', gap: 12}}>
-                        <div style={{minWidth: 0}}>
-                           <div style={{fontSize: 14, fontWeight: 600}}>{mapping.group_name || mapping.source_reference_id}</div>
-                           <div style={{fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere'}}>{mapping.source_reference_id}</div>
-                        </div>
-                        <span className="badge badge-success" style={{alignSelf: 'center', whiteSpace: 'nowrap'}}>{mapping.course_code}</span>
+                  <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12}}>
+                     <strong style={{fontSize: 13, color: 'var(--text-muted)'}}>Group coverage</strong>
+                     <div className="filters glass-pill-group" style={{flexWrap: 'wrap'}}>
+                        {['All', 'Mapped', 'Unmapped'].map(filter => (
+                           <button key={filter} className={`filter-btn glass-filter-pill ${groupFilter === filter ? 'active' : ''}`} type="button" onClick={() => setGroupFilter(filter)}>
+                              {filter}
+                           </button>
+                        ))}
                      </div>
-                  ))}
+                  </div>
+                  {visibleGroups.length === 0 ? (
+                     <div style={{fontSize: 13, color: 'var(--text-faint)'}}>No WhatsApp groups match this filter.</div>
+                  ) : visibleGroups.map(group => {
+                     const mapping = mappingByGroupId.get(group.group_id);
+                     return (
+                        <button key={group.group_id} type="button" onClick={() => {
+                           setSelectedGroup(group.group_id);
+                           if (mapping?.course_id) setSelectedCourse(mapping.course_id);
+                        }} style={{padding: 12, borderRadius: 'var(--radius-sm)', border: selectedGroup === group.group_id ? '1px solid var(--whatsapp)' : '1px solid var(--border)', background: selectedGroup === group.group_id ? 'var(--whatsapp-subtle)' : 'var(--bg)', display: 'flex', justifyContent: 'space-between', gap: 12, color: 'var(--text)', textAlign: 'left', cursor: 'pointer'}}>
+                           <div style={{minWidth: 0}}>
+                              <div style={{fontSize: 14, fontWeight: 600}}>{group.group_name || group.group_id}</div>
+                              <div style={{fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere'}}>{group.group_id}</div>
+                           </div>
+                           <span className={`badge ${mapping ? 'badge-success' : 'badge-warning'}`} style={{alignSelf: 'center', whiteSpace: 'nowrap'}}>
+                              {mapping ? mapping.course_code : 'Map'}
+                           </span>
+                        </button>
+                     );
+                  })}
                </div>
             </div>
          </div>
          
-         <div className="panel">
+         <div className="panel glass-panel panel-accent">
             <div className="panel-header">
                <h2 className="panel-title"><i className="fa-solid fa-satellite-dish text-whatsapp"></i> NLP Scraped Logs</h2>
                <span className="badge badge-success">{whatsappNotifs.length} items logged</span>

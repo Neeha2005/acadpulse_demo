@@ -13,13 +13,14 @@ export default function Integrations() {
 
   return (
     <div className="dashboard-scroll">
-      <div className="hero-stats">
+      <section className="hero-stats glass-banner">
         <div className="welcome-text">
+          <span className="hero-kicker">CONNECTED SOURCES</span>
           <h1>Manage Integrations</h1>
           <p>Link your academic platforms to pull assignments and messages automatically.</p>
         </div>
-      </div>
-      <div className="panel">
+      </section>
+      <div className="panel glass-panel panel-accent">
         <div className="panel-header">
           <h2 className="panel-title"><i className="fa-solid fa-link text-primary"></i> Linked Platforms</h2>
         </div>

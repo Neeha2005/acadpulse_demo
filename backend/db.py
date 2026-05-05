@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+
 def get_db_connection():
     """Establish a connection to the Supabase PostgreSQL database."""
     conn = psycopg2.connect(
@@ -29,6 +30,7 @@ def insert_notification(
     source_ref=None,
     deadline=None,
     urgency_level=None,
+    expanded_text=None,
 ):
     """Insert a notification into the database, ignoring duplicates."""
     conn = get_db_connection()
@@ -38,8 +40,9 @@ def insert_notification(
             """
             INSERT INTO notifications (
                 user_id, source_type, external_message_id, sender_name, 
-                message_text, category, received_at, course_id, source_reference_id, deadline, urgency_level
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                message_text, category, received_at, course_id, source_reference_id, 
+                deadline, urgency_level, expanded_text
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
             RETURNING id;
             """,
@@ -55,6 +58,7 @@ def insert_notification(
                 source_ref,
                 deadline,
                 urgency_level,
+                expanded_text or text,
             )
         )
         result = cur.fetchone()
@@ -67,6 +71,7 @@ def insert_notification(
     finally:
         cur.close()
         conn.close()
+
 
 def update_notification_deadline(notification_id, deadline_datetime):
     """Set the deadline for an existing notification. Returns True if updated."""
@@ -233,17 +238,44 @@ def update_notification_completion(notification_id, completed=True):
         cur.close()
         conn.close()
 
-def get_notification_by_id(notification_id):
-    """Fetch one notification row by ID."""
+def update_notification_fields(
+    notification_id,
+    message_text=None,
+    category=None,
+    deadline_marker=False,
+    deadline=None,
+):
+    """Update editable notification fields. Use deadline_marker=True to clear/set deadline."""
     if not notification_id:
         return None
+
+    updates = []
+    params = []
+
+    if message_text is not None:
+        updates.append("message_text = %s")
+        params.append(message_text)
+    if category is not None:
+        updates.append("category = %s")
+        params.append(category)
+    if deadline_marker:
+        updates.append("deadline = %s")
+        params.append(deadline)
+
+    if not updates:
+        return get_notification_by_id(notification_id)
+
+    params.append(notification_id)
 
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
-            """
-            SELECT
+            f"""
+            UPDATE notifications
+            SET {", ".join(updates)}
+            WHERE id = %s
+            RETURNING
                 id,
                 user_id,
                 course_id,
@@ -259,12 +291,75 @@ def get_notification_by_id(notification_id):
                 urgency_level,
                 is_completed,
                 received_at,
-                created_at
-            FROM notifications
-            WHERE id = %s
-            LIMIT 1;
+                created_at;
+            """,
+            params,
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception as e:
+        conn.rollback()
+        print(f"Database notification field update error: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+def get_notification_by_id(notification_id):
+    """Fetch one notification row by ID."""
+    if not notification_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT * FROM notifications WHERE id = %s LIMIT 1;
             """,
             (notification_id,),
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def delete_notification(notification_id, user_id):
+    """Delete a notification from the database."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM notifications WHERE id = %s AND user_id = %s RETURNING id",
+            (notification_id, user_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row is not None
+    except Exception as e:
+        conn.rollback()
+        print(f"Database error deleting notification: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+def get_course_by_name(course_name, user_id):
+    """Fetch a course by name or code for a user."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT c.id, c.course_name, c.course_code
+            FROM courses c
+            JOIN user_courses uc ON uc.course_id = c.id
+            WHERE uc.user_id = %s 
+              AND (LOWER(c.course_name) = LOWER(%s) OR LOWER(c.course_code) = LOWER(%s))
+            LIMIT 1
+            """,
+            (user_id, course_name, course_name),
         )
         return cur.fetchone()
     finally:
@@ -366,6 +461,149 @@ def list_courses(user_id=None):
     finally:
         cur.close()
         conn.close()
+
+def get_course_by_id(course_id, user_id=None):
+    """Fetch one course with aliases."""
+    if not course_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        params = [course_id]
+        user_filter = ""
+        if user_id:
+            user_filter = "AND (uc.user_id = %s OR uc.user_id IS NULL)"
+            params.append(user_id)
+
+        cur.execute(
+            f"""
+            SELECT
+                c.id,
+                c.course_code,
+                c.course_name,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT ca.alias)
+                    FILTER (WHERE ca.alias IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) AS aliases
+            FROM courses c
+            LEFT JOIN course_aliases ca ON ca.course_id = c.id
+            LEFT JOIN user_courses uc ON uc.course_id = c.id
+            WHERE c.id = %s
+              {user_filter}
+            GROUP BY c.id, c.course_code, c.course_name
+            LIMIT 1;
+            """,
+            params,
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def normalize_aliases(aliases):
+    """Return trimmed, de-duplicated aliases while preserving user-facing casing."""
+    seen = set()
+    normalized = []
+    for alias in aliases or []:
+        value = str(alias or "").strip()
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(value)
+    return normalized
+
+def replace_course_aliases(course_id, aliases):
+    """Replace all aliases for a course and return the normalized aliases."""
+    cleaned_aliases = normalize_aliases(aliases)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM course_aliases WHERE course_id = %s;", (course_id,))
+        for alias in cleaned_aliases:
+            cur.execute(
+                """
+                INSERT INTO course_aliases (course_id, alias)
+                VALUES (%s, %s)
+                ON CONFLICT (course_id, alias) DO NOTHING;
+                """,
+                (course_id, alias),
+            )
+        conn.commit()
+        return cleaned_aliases
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+def upsert_course(course_code, course_name, aliases=None, user_id=None):
+    """Create or update a course by course code, then replace aliases."""
+    code = (course_code or "").strip()
+    name = (course_name or "").strip()
+    if not code or not name:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id
+            FROM courses
+            WHERE LOWER(course_code) = LOWER(%s)
+            LIMIT 1;
+            """,
+            (code,),
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            course_id = existing[0]
+            cur.execute(
+                """
+                UPDATE courses
+                SET course_code = %s,
+                    course_name = %s
+                WHERE id = %s;
+                """,
+                (code, name, course_id),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO courses (course_code, course_name)
+                VALUES (%s, %s)
+                RETURNING id;
+                """,
+                (code, name),
+            )
+            course_id = cur.fetchone()[0]
+
+        if user_id:
+            cur.execute(
+                """
+                INSERT INTO user_courses (user_id, course_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING;
+                """,
+                (user_id, course_id),
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    replace_course_aliases(course_id, aliases or [])
+    return course_id
 
 def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False):
     """Store a WhatsApp group seen by the bridge and optionally attach it to a user."""
@@ -649,6 +887,14 @@ def get_or_create_user(full_name, email):
         )
         new_user = cur.fetchone()
         conn.commit()
+        
+        # Seed default abbreviations for new user
+        try:
+            from notification_abbr import seed_default_abbreviations
+            seed_default_abbreviations(new_user[0])
+        except Exception as e:
+            print(f"Error seeding abbreviations: {e}")
+            
         return new_user[0]
     finally:
         cur.close()
@@ -660,7 +906,7 @@ def get_user_by_email(email):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, password_hash
+            SELECT id, full_name, email, password_hash, university, degree, semester
             FROM users
             WHERE email = %s
             LIMIT 1
@@ -678,7 +924,7 @@ def get_user_by_id(user_id):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, password_hash
+            SELECT id, full_name as name, email, university, degree, semester
             FROM users
             WHERE id = %s
             LIMIT 1
@@ -686,6 +932,127 @@ def get_user_by_id(user_id):
             (user_id,),
         )
         return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_chatbot_context_data(user_id):
+    """
+    Fetch all data needed for the chatbot context in a few efficient queries.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # 1. Get student profile
+        cur.execute(
+            "SELECT full_name as name, university, degree, semester FROM users WHERE id = %s",
+            (user_id,)
+        )
+        student = cur.fetchone() or {"name": "Scholar", "university": "FAST", "degree": "BS Computer Science", "semester": "5th"}
+
+        # 2. Get course names
+        cur.execute(
+            """
+            SELECT c.course_name, c.course_code
+            FROM courses c
+            JOIN user_courses uc ON uc.course_id = c.id
+            WHERE uc.user_id = %s
+            """,
+            (user_id,)
+        )
+        courses = [f"{row['course_code']} {row['course_name']}".strip() for row in cur.fetchall()]
+
+        # 3. Get notification summary stats
+        cur.execute(
+            """
+            SELECT 
+                COUNT(*) FILTER (WHERE is_completed = false) as total_pending,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'critical') as critical_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'high') as high_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'overdue') as overdue_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND deadline::date = CURRENT_DATE) as due_today
+            FROM notifications
+            WHERE user_id = %s
+            """,
+            (user_id,)
+        )
+        summary = cur.fetchone()
+
+        # 4. Get urgent items (critical/high, max 10)
+        cur.execute(
+            """
+            SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
+                   n.deadline, n.urgency_label as urgency, n.urgency_score, n.source_type as source
+            FROM notifications n
+            LEFT JOIN courses c ON n.course_id = c.id
+            WHERE n.user_id = %s AND n.is_completed = false 
+              AND n.urgency_label IN ('critical', 'high')
+            ORDER BY n.urgency_score DESC
+            LIMIT 10
+            """,
+            (user_id,)
+        )
+        urgent_items = cur.fetchall()
+
+        # 5. Get pending items (low/medium, max 15)
+        cur.execute(
+            """
+            SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
+                   n.deadline, n.urgency_label as urgency, n.source_type as source
+            FROM notifications n
+            LEFT JOIN courses c ON n.course_id = c.id
+            WHERE n.user_id = %s AND n.is_completed = false 
+              AND n.urgency_label NOT IN ('critical', 'high', 'overdue')
+            ORDER BY n.deadline ASC NULLS LAST
+            LIMIT 15
+            """,
+            (user_id,)
+        )
+        pending_items = cur.fetchall()
+
+        # 6. Get today's announcements (max 5)
+        cur.execute(
+            """
+            SELECT n.id, c.course_code as course, n.message_text as text, n.received_at
+            FROM notifications n
+            LEFT JOIN courses c ON n.course_id = c.id
+            WHERE n.user_id = %s AND n.category = 'announcement'
+              AND n.received_at::date = CURRENT_DATE
+            ORDER BY n.received_at DESC
+            LIMIT 5
+            """,
+            (user_id,)
+        )
+        announcements = cur.fetchall()
+
+        # 7. Get today's timetable (max 8)
+        # PostgreSQL extract(dow from CURRENT_DATE) returns 0 for Sunday to 6 for Saturday
+        # Schema uses 1-7, we'll assume 1 is Monday, 7 is Sunday
+        cur.execute(
+            """
+            SELECT c.course_code, c.course_name, t.start_time, t.end_time, t.room_number
+            FROM timetable_entries t
+            JOIN courses c ON t.course_id = c.id
+            WHERE t.user_id = %s AND t.day_of_week = CASE 
+                WHEN extract(dow from CURRENT_DATE) = 0 THEN 7 
+                ELSE extract(dow from CURRENT_DATE) 
+            END
+            ORDER BY t.start_time
+            LIMIT 8
+            """,
+            (user_id,)
+        )
+        timetable = cur.fetchall()
+
+        return {
+            "student": student,
+            "courses": courses,
+            "summary": summary,
+            "urgent_items": urgent_items,
+            "pending_items": pending_items,
+            "announcements": announcements,
+            "timetable": timetable
+        }
     finally:
         cur.close()
         conn.close()
@@ -704,6 +1071,11 @@ def create_user_account(full_name, email, password_hash):
         )
         user_id = cur.fetchone()[0]
         conn.commit()
+        
+        # Seed default abbreviations for new user
+        from notification_abbr import seed_default_abbreviations
+        seed_default_abbreviations(user_id)
+        
         return user_id
     except Exception:
         conn.rollback()
