@@ -28,7 +28,7 @@ export default function AuthShell({ children }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE_URL}/public/preview-notifications`)
+    fetch(`${API_BASE_URL}/preview-notifications`)
       .then((r) => r.ok ? r.json() : Promise.reject(r.status))
       .then((data) => {
         if (!cancelled && Array.isArray(data) && data.length > 0) {

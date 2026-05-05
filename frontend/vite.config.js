@@ -26,6 +26,9 @@ const backendRoutes = [
   '/semester',
   '/demo',
   '/test',
+  '/timetable',
+  '/dev',
+  '/preview-notifications',
 ]
 
 const proxy = Object.fromEntries(

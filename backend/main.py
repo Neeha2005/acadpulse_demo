@@ -2823,7 +2823,7 @@ def google_oauth_callback(
         redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
         return RedirectResponse(redirect_url)
 
-@app.get("/public/preview-notifications")
+@app.get("/preview-notifications")
 def get_preview_notifications():
     return [
         {
