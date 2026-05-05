@@ -1,39 +1,44 @@
+import { useEffect, useState } from 'react';
 import { GraduationCap, Bell, BookOpen, MessageCircle, Mail } from 'lucide-react';
+import authPreviewNotifications from '../config/authPreviewNotifications';
 
-const notificationItems = [
-  {
-    icon: MessageCircle,
-    iconClass: 'auth-notif-icon-wa',
-    source: 'NLP Group',
-    message: 'Assignment 3 due Friday at 11:59 PM',
-    time: '2m ago',
-    tag: 'Deadline',
-    tagClass: 'auth-notif-tag-urgent',
-    delay: 0,
-  },
-  {
-    icon: BookOpen,
-    iconClass: 'auth-notif-icon-cls',
-    source: 'Operating Systems',
-    message: 'Mid-term marks have been posted',
-    time: '14m ago',
-    tag: 'Grades',
-    tagClass: 'auth-notif-tag-info',
-    delay: 1,
-  },
-  {
-    icon: Mail,
-    iconClass: 'auth-notif-icon-gm',
-    source: 'university@fast.edu',
-    message: 'Fee submission deadline: Dec 15',
-    time: '1h ago',
-    tag: 'Finance',
-    tagClass: 'auth-notif-tag-warn',
-    delay: 2,
-  },
-];
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+
+const ICON_MAP = {
+  whatsapp: { icon: MessageCircle, iconClass: 'auth-notif-icon-wa' },
+  classroom: { icon: BookOpen,      iconClass: 'auth-notif-icon-cls' },
+  gmail:     { icon: Mail,          iconClass: 'auth-notif-icon-gm' },
+};
+
+function toDisplayItem(raw, index) {
+  const mapping = ICON_MAP[raw.iconType] ?? ICON_MAP.gmail;
+  return {
+    ...mapping,
+    source:   raw.source,
+    message:  raw.message,
+    time:     raw.time,
+    tag:      raw.tag,
+    tagClass: raw.tagClass,
+    delay:    index,
+  };
+}
 
 export default function AuthShell({ children }) {
+  const [notificationItems, setNotificationItems] = useState(authPreviewNotifications);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE_URL}/public/preview-notifications`)
+      .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+      .then((data) => {
+        if (!cancelled && Array.isArray(data) && data.length > 0) {
+          setNotificationItems(data.map(toDisplayItem));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div className="auth-shell auth-shell-enter">
       <div className="auth-bg-orb auth-bg-orb-1" aria-hidden="true"></div>

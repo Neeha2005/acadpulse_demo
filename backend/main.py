@@ -2823,6 +2823,35 @@ def google_oauth_callback(
         redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
         return RedirectResponse(redirect_url)
 
+@app.get("/public/preview-notifications")
+def get_preview_notifications():
+    return [
+        {
+            "iconType": "whatsapp",
+            "source": "NLP Group",
+            "message": "Assignment 3 due Friday at 11:59 PM",
+            "time": "2m ago",
+            "tag": "Deadline",
+            "tagClass": "auth-notif-tag-urgent",
+        },
+        {
+            "iconType": "classroom",
+            "source": "Operating Systems",
+            "message": "Mid-term marks have been posted",
+            "time": "14m ago",
+            "tag": "Grades",
+            "tagClass": "auth-notif-tag-info",
+        },
+        {
+            "iconType": "gmail",
+            "source": "university@fast.edu",
+            "message": "Fee submission deadline: Dec 15",
+            "time": "1h ago",
+            "tag": "Finance",
+            "tagClass": "auth-notif-tag-warn",
+        },
+    ]
+
 @app.get("/")
 def home():
     return {"message": "AcadPulse API v1.1.0 is online", "status": "success"}
