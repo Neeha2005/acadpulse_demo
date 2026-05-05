@@ -1951,9 +1951,10 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 /* --- Onboarding theme polish --- */
 .onboarding-screen {
   background:
-    linear-gradient(135deg, rgba(207, 160, 74, 0.08), transparent 36%),
-    linear-gradient(180deg, rgba(40, 42, 58, 0.92), rgba(0, 0, 0, 0.98)),
-    var(--bg);
+    radial-gradient(ellipse 800px 600px at 15% 8%, rgba(207, 160, 74, 0.12) 0%, transparent 55%),
+    radial-gradient(ellipse 600px 500px at 88% 92%, rgba(139, 115, 57, 0.09) 0%, transparent 52%),
+    radial-gradient(ellipse 500px 400px at 70% 20%, rgba(40, 42, 58, 0.5) 0%, transparent 60%),
+    linear-gradient(160deg, #0d0e14 0%, #181a26 45%, #0a0b10 100%);
 }
 
 .onboarding-progress-bar {
@@ -1961,8 +1962,28 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 }
 
 .onboarding-progress-bar span {
+  position: relative;
   background: linear-gradient(90deg, var(--primary), var(--warning));
   box-shadow: 0 0 18px rgba(207, 160, 74, 0.45);
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.onboarding-progress-bar span::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 0 0 rgba(207, 160, 74, 0.7);
+  animation: progressGlowPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes progressGlowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(207, 160, 74, 0.7); }
+  50%       { box-shadow: 0 0 0 5px rgba(207, 160, 74, 0); }
 }
 
 .onboarding-topline {
@@ -2014,10 +2035,33 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   gap: 30px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-strong);
+  border-top-color: rgba(255, 255, 255, 0.14);
   background:
-    linear-gradient(180deg, rgba(40, 42, 58, 0.92), rgba(15, 16, 24, 0.92)),
+    linear-gradient(180deg, rgba(40, 42, 58, 0.88), rgba(12, 13, 20, 0.94)),
     var(--surface-elevated);
-  box-shadow: var(--shadow-float);
+  box-shadow:
+    var(--shadow-float),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 0 1px rgba(207, 160, 74, 0.04) inset;
+  will-change: transform, opacity;
+}
+
+.onboarding-step-card.slide-forward {
+  animation: stepSlideForward 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.onboarding-step-card.slide-back {
+  animation: stepSlideBack 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes stepSlideForward {
+  from { opacity: 0; transform: translateX(32px) scale(0.98); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes stepSlideBack {
+  from { opacity: 0; transform: translateX(-32px) scale(0.98); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
 }
 
 .onboarding-step-card::before {
@@ -2026,7 +2070,7 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   inset: 0 0 auto;
   height: 2px;
   background: linear-gradient(90deg, transparent, var(--primary), transparent);
-  opacity: 0.78;
+  opacity: 0.82;
 }
 
 .onboarding-step-rail {
@@ -2051,6 +2095,11 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+  transition:
+    color 0.25s ease,
+    border-color 0.25s ease,
+    background 0.25s ease,
+    box-shadow 0.25s ease;
 }
 
 .onboarding-step-pill i {
@@ -2064,12 +2113,16 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   font-size: 11px;
   color: var(--text-faint);
   background: rgba(255, 255, 255, 0.07);
+  transition:
+    color 0.25s ease,
+    background 0.25s ease;
 }
 
 .onboarding-step-pill.active {
   color: var(--text);
-  border-color: rgba(207, 160, 74, 0.46);
+  border-color: rgba(207, 160, 74, 0.5);
   background: var(--primary-subtle);
+  box-shadow: 0 0 14px rgba(207, 160, 74, 0.12);
 }
 
 .onboarding-step-pill.active i,
@@ -2080,6 +2133,7 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 
 .onboarding-step-pill.done {
   color: rgba(255, 255, 255, 0.82);
+  border-color: rgba(207, 160, 74, 0.22);
 }
 
 .onboarding-form-step,
@@ -2147,7 +2201,24 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   background: rgba(0, 0, 0, 0.2);
 }
 
-.platform-card:hover,
+.platform-card {
+  transition:
+    transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    background 0.2s ease;
+  will-change: transform;
+}
+
+.platform-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(207, 160, 74, 0.38);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 0 20px rgba(207, 160, 74, 0.06);
+}
+
 .mapping-row:hover {
   border-color: rgba(207, 160, 74, 0.34);
   background: rgba(255, 255, 255, 0.055);
@@ -2155,17 +2226,38 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 
 .platform-card.enabled.whatsapp,
 .platform-card.enabled.classroom {
-  border-color: rgba(34, 197, 94, 0.35);
-  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.06);
+  border-color: rgba(34, 197, 94, 0.38);
+  box-shadow: 0 0 22px rgba(34, 197, 94, 0.1);
 }
 
 .platform-card.enabled.gmail {
-  border-color: rgba(234, 67, 53, 0.34);
-  box-shadow: 0 0 0 1px rgba(234, 67, 53, 0.06);
+  border-color: rgba(234, 67, 53, 0.36);
+  box-shadow: 0 0 22px rgba(234, 67, 53, 0.08);
+}
+
+.platform-card.enabled.whatsapp:hover,
+.platform-card.enabled.classroom:hover {
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 0 28px rgba(34, 197, 94, 0.16);
+}
+
+.platform-card.enabled.gmail:hover {
+  border-color: rgba(234, 67, 53, 0.52);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 0 28px rgba(234, 67, 53, 0.14);
 }
 
 .platform-icon {
   border-radius: var(--radius-sm);
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.platform-card:hover .platform-icon {
+  transform: scale(1.08) rotate(-3deg);
 }
 
 .onboarding-switch.on {
@@ -2272,5 +2364,29 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   .mapping-row .onboarding-text-link,
   .mapping-row button {
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-step-card.slide-forward,
+  .onboarding-step-card.slide-back {
+    animation: none !important;
+  }
+
+  .onboarding-progress-bar span {
+    transition: none !important;
+  }
+
+  .onboarding-progress-bar span::after {
+    animation: none !important;
+  }
+
+  .platform-card,
+  .platform-icon {
+    transition: none !important;
+  }
+
+  .onboarding-step-pill {
+    transition: none !important;
   }
 }
