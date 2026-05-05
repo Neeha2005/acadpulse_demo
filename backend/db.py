@@ -8,14 +8,14 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 def get_db_connection():
-    """Establish a connection to the Supabase PostgreSQL database."""
+    """Establish a connection to the PostgreSQL database."""
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         database=os.getenv("DB_NAME", "postgres"),
         user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASSWORD", "postgres"),
         port=os.getenv("DB_PORT", "5432"),
-        sslmode="require"  # Supabase requires SSL for remote connections
+        sslmode=os.getenv("DB_SSLMODE", "prefer"),
     )
     return conn
 def insert_notification(

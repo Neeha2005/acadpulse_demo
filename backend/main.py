@@ -124,9 +124,11 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
+        "http://localhost:5000",
+        "http://0.0.0.0:5000",
         FRONTEND_URL,
     ],
-    allow_origin_regex=r"^http://(127\.0\.0\.1|localhost):51\d{2}$",
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost|([\w\-]+\.replit\.dev)|([\w\-]+\.repl\.co)):\d+$|^https?://([\w\-]+\.replit\.dev)$|^https?://([\w\-]+\.repl\.co)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1340,10 +1342,15 @@ async def scheduled_urgency_refresh_loop():
     while True:
         try:
             await asyncio.to_thread(refresh_urgency_for_all_users)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.exception("Scheduled urgency refresh failed; will retry on next interval: %s", e)
+            logger.warning("Scheduled urgency refresh failed; will retry on next interval: %s", e)
 
-        await asyncio.sleep(URGENCY_REFRESH_INTERVAL_SECONDS)
+        try:
+            await asyncio.sleep(URGENCY_REFRESH_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            raise
 
 def first_deadline_date(deadlines):
     for deadline in deadlines:

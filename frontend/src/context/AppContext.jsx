@@ -10,7 +10,7 @@ import {
 } from 'react'
 
 const AppContext = createContext()
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8005'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
