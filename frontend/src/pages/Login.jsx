@@ -32,12 +32,18 @@ export default function Login() {
     if (oauthToken) {
       const oauthName = oauthParams.get('oauth_name') || 'Google User'
       const oauthEmail = oauthParams.get('oauth_email') || ''
+      const returnTo = oauthParams.get('return_to') || ''
+      const googleConnected = oauthParams.get('google_connected') === '1'
       completeLoginSession(oauthToken, {
         name: oauthName,
         fullName: oauthName,
         email: oauthEmail,
       })
-      navigate('/onboarding', { replace: true })
+      if (returnTo) {
+        navigate(`/${returnTo}${googleConnected ? '?google_connected=1' : ''}`, { replace: true })
+      } else {
+        navigate('/onboarding', { replace: true })
+      }
     }
   }, [completeLoginSession, navigate, oauthParams])
 

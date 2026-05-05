@@ -1,10 +1,29 @@
 import { NavLink } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
+function IntegrationStatusPill({ status }) {
+  if (status === 'connected') {
+    return <span className="nav-status-pill nav-label" style={{ color: 'var(--success)', background: 'var(--success-subtle)', border: '1px solid var(--success)' }}>Connected</span>;
+  }
+  if (status === 'qr_required') {
+    return <span className="nav-status-pill nav-label" style={{ color: 'var(--warning)', background: 'var(--warning-subtle)', border: '1px solid var(--warning)' }}>Scan QR</span>;
+  }
+  if (status === 'disconnected') {
+    return <span className="nav-status-pill nav-label" style={{ color: 'var(--urgent)', background: 'var(--urgent-subtle)', border: '1px solid var(--urgent)' }}>Off</span>;
+  }
+  return <span className="nav-status-pill status-pill-muted nav-label">–</span>;
+}
+
 export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterReset, chatbotOpen, collapsed, onToggle }) {
-  const { user, theme, toggleTheme } = useAppContext();
+  const { user, theme, toggleTheme, googleConnected, whatsappStatus } = useAppContext();
   const isLight = theme === 'light';
-  const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : "SC";
+  const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'SC';
+
+  const waStatus = whatsappStatus === 'connected' ? 'connected'
+    : whatsappStatus === 'qr_required' ? 'qr_required'
+    : whatsappStatus === 'open' ? 'connected'
+    : 'disconnected';
+  const googleStatus = googleConnected ? 'connected' : 'disconnected';
 
   return (
     <div className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -24,25 +43,25 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
       </div>
       <nav className="sidebar-nav">
         <div className="nav-section nav-section-accent">Main</div>
-        <NavLink to="/dashboard" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Dashboard">
+        <NavLink to="/dashboard" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Dashboard">
           <i className="fa-solid fa-house"></i> <span className="nav-label">Dashboard</span>
         </NavLink>
-        <NavLink to="/assignments" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Assignments">
+        <NavLink to="/assignments" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Assignments">
           <i className="fa-solid fa-list-check"></i> <span className="nav-label">Assignments</span>
         </NavLink>
-        <NavLink to="/events" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Events">
+        <NavLink to="/events" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Events">
           <i className="fa-solid fa-calendar-days"></i> <span className="nav-label">Events</span>
         </NavLink>
-        <NavLink to="/announcements" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Announcements">
+        <NavLink to="/announcements" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Announcements">
           <i className="fa-solid fa-bullhorn"></i> <span className="nav-label">Announcements</span>
         </NavLink>
-        <NavLink to="/materials" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Materials">
+        <NavLink to="/materials" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Materials">
           <i className="fa-solid fa-folder-open"></i> <span className="nav-label">Materials</span>
         </NavLink>
-        <NavLink to="/timetable" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Timetable">
+        <NavLink to="/timetable" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Timetable">
           <i className="fa-solid fa-calendar"></i> <span className="nav-label">Timetable</span>
         </NavLink>
-        <NavLink to="/courses" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Courses">
+        <NavLink to="/courses" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Courses">
           <i className="fa-solid fa-book"></i> <span className="nav-label">Courses</span>
         </NavLink>
         <button
@@ -53,46 +72,43 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
         >
           <i className="fa-solid fa-comments"></i> <span className="nav-label">Chatbot</span>
         </button>
-        <NavLink to="/onboarding" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Onboarding">
+        <NavLink to="/onboarding" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Onboarding">
           <i className="fa-solid fa-compass"></i> <span className="nav-label">Onboarding</span>
         </NavLink>
 
         <div className="sidebar-divider"></div>
         <div className="nav-section nav-section-accent">Integrations</div>
-        <NavLink to="/integrations/whatsapp" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="WhatsApp">
+        <NavLink to="/integrations/whatsapp" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="WhatsApp">
           <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-whatsapp"><i className="fa-brands fa-whatsapp"></i></span>
               <span className="nav-label">WhatsApp</span>
             </span>
-            <span className="nav-status-pill status-pill-unknown nav-label">unknown</span>
+            <IntegrationStatusPill status={waStatus} />
           </div>
         </NavLink>
-        <NavLink to="/integrations/classroom" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Classroom">
+        <NavLink to="/integrations/classroom" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Classroom">
           <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-classroom"><i className="fa-brands fa-google"></i></span>
               <span className="nav-label">Classroom</span>
             </span>
-            <span className="nav-status-pill status-pill-syncing nav-label">
-              <span className="status-badge-spinner"></span>
-              Syncing
-            </span>
+            <IntegrationStatusPill status={googleStatus} />
           </div>
         </NavLink>
-        <NavLink to="/integrations/gmail" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Gmail">
-           <div className="has-badge nav-badge-row">
+        <NavLink to="/integrations/gmail" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Gmail">
+          <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-gmail"><i className="fa-regular fa-envelope"></i></span>
               <span className="nav-label">Gmail</span>
             </span>
-            <span className="nav-status-pill status-pill-muted nav-label">2h ago</span>
+            <IntegrationStatusPill status={googleStatus} />
           </div>
         </NavLink>
 
         <div className="sidebar-divider"></div>
         <div className="nav-section nav-section-accent">History</div>
-        <NavLink to="/archives" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Archives">
+        <NavLink to="/archives" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Archives">
           <i className="fa-solid fa-box-archive"></i> <span className="nav-label">Archives</span>
         </NavLink>
       </nav>
@@ -118,5 +134,5 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
         </div>
       </div>
     </div>
-  )
+  );
 }

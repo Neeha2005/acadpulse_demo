@@ -50,6 +50,11 @@ A smart student dashboard that aggregates academic notifications from WhatsApp, 
 - **Timetable page**: deadline calendar (week/month) + class schedule grid (Mon–Fri, add/edit/delete slots via `GET|POST|PUT|DELETE /timetable`)
 - **Semester reset**: archives current notifications + clears timetable (modal in sidebar footer)
 - **Dev seed**: `POST /dev/seed` creates sample notifications + class slots for the current user
+- **Real Google OAuth status**: `GET /google/status` + `DELETE /google/disconnect` endpoints; Gmail & Classroom pages show live connected state with disconnect button
+- **WhatsApp QR in UI**: WhatsApp integration page shows QR code panel when disconnected; uses `api.qrserver.com` to render QR from raw value
+- **OAuth return_to**: `/auth/google?next_path=integrations/gmail` encodes return destination in OAuth state; Login page reads `return_to` and navigates back after OAuth
+- **AddTaskModal deadline optional**: deadline fields required only for assignment/quiz/exam_schedule types; optional for announcements/events/materials
+- **Sidebar real statuses**: WhatsApp and Google status pills sourced from live backend, shown as Connected / Scan QR / Off
 
 ## User preferences
 

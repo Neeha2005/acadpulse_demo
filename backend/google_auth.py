@@ -112,6 +112,13 @@ def google_connected_for_user(user_id: str) -> bool:
     return _token_path(user_id).exists()
 
 
+def delete_google_credentials(user_id: str) -> None:
+    """Remove stored Google credentials for a user."""
+    path = _token_path(user_id)
+    if path.exists():
+        path.unlink()
+
+
 def get_google_credentials(user_id: Optional[str] = None) -> Credentials:
     """
     Load Google credentials for a user.

@@ -38,6 +38,7 @@ from google_auth import (
     load_google_credentials,
     is_google_configured,
     google_connected_for_user,
+    delete_google_credentials,
 )
 from db import (
     get_db_connection,
@@ -2728,7 +2729,10 @@ def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_us
     }
 
 @app.get("/auth/google")
-def login_with_google(user_id: Optional[str] = Query(default=None)):
+def login_with_google(
+    user_id: Optional[str] = Query(default=None),
+    next_path: Optional[str] = Query(default=None),
+):
     """Initiate Google OAuth — redirects browser to Google's consent screen."""
     if not is_google_configured():
         error_msg = (
@@ -2742,7 +2746,11 @@ def login_with_google(user_id: Optional[str] = Query(default=None)):
     try:
         redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
         flow = create_oauth_flow(redirect_uri)
-        state = user_id or "new"
+        # Encode user_id|next_path in state so callback can redirect back correctly
+        state_parts = [user_id or "new"]
+        if next_path:
+            state_parts.append(next_path)
+        state = "|".join(state_parts)
         auth_url, _ = flow.authorization_url(
             access_type="offline",
             include_granted_scopes="true",
@@ -2771,6 +2779,11 @@ def google_oauth_callback(
         redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Missing OAuth code')}"
         return RedirectResponse(redirect_url)
 
+    # Decode state: format is "user_id|next_path" or just "user_id"
+    state_parts = (state or "new").split("|", 1)
+    user_id_from_state = state_parts[0] if state_parts else "new"
+    next_path = state_parts[1] if len(state_parts) > 1 else None
+
     try:
         redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
         flow = create_oauth_flow(redirect_uri)
@@ -2797,8 +2810,8 @@ def google_oauth_callback(
 
         # Link to existing AcadPulse account if state contains a user_id
         user = None
-        if state and state != "new":
-            user = get_user_by_id(state)
+        if user_id_from_state and user_id_from_state != "new":
+            user = get_user_by_id(user_id_from_state)
 
         if not user:
             user = get_user_by_email(email)
@@ -2811,17 +2824,51 @@ def google_oauth_callback(
         save_google_credentials(str(user["id"]), credentials)
 
         token = create_access_token(user)
-        redirect_url = (
-            f"{FRONTEND_URL}/login"
+        base_redirect = f"{FRONTEND_URL}/login"
+        params = (
             f"?oauth_token={quote_plus(token)}"
             f"&oauth_name={quote_plus(_user_name(user))}"
             f"&oauth_email={quote_plus(user['email'])}"
+            f"&google_connected=1"
         )
-        return RedirectResponse(redirect_url)
+        if next_path:
+            params += f"&return_to={quote_plus(next_path)}"
+        return RedirectResponse(base_redirect + params)
     except Exception as exc:
         logger.exception("Google OAuth callback failed")
         redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
         return RedirectResponse(redirect_url)
+
+
+@app.get("/google/status")
+def get_google_status(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Check if Google credentials are saved for the current user."""
+    user_id = str(current_user["id"])
+    configured = is_google_configured()
+    connected = google_connected_for_user(user_id) if configured else False
+    email = None
+    if connected:
+        try:
+            creds = load_google_credentials(user_id)
+            if creds and hasattr(creds, "client_id"):
+                # Try reading stored email from user profile
+                email = current_user.get("email", "")
+        except Exception:
+            pass
+    return {
+        "status": "success",
+        "configured": configured,
+        "connected": connected,
+        "email": email,
+    }
+
+
+@app.delete("/google/disconnect")
+def disconnect_google(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Remove Google credentials for the current user."""
+    user_id = str(current_user["id"])
+    delete_google_credentials(user_id)
+    return {"status": "success", "message": "Google account disconnected."}
 
 @app.get("/preview-notifications")
 def get_preview_notifications():

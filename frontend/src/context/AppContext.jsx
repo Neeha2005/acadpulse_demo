@@ -249,6 +249,8 @@ export function AppProvider({ children }) {
   const [authReady, setAuthReady] = useState(false)
   const [dataLoading, setDataLoading] = useState(true)
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
+  const [googleConnected, setGoogleConnected] = useState(false)
+  const [whatsappStatus, setWhatsappStatus] = useState('unknown')
   const [theme, setTheme] = useState(() => {
     const t = getStoredTheme()
     applyThemeToDocument(t)
@@ -396,6 +398,17 @@ export function AppProvider({ children }) {
   useEffect(() => {
     refreshAuthenticatedUser()
   }, [refreshAuthenticatedUser])
+
+  // Fetch integration connection statuses when authenticated
+  useEffect(() => {
+    if (!authToken || !authReady) return
+    apiFetch('/google/status').then(payload => {
+      setGoogleConnected(Boolean(payload?.connected))
+    }).catch(() => {})
+    apiFetch('/whatsapp/status', {}, false).then(payload => {
+      setWhatsappStatus(payload?.whatsapp?.status || 'unknown')
+    }).catch(() => {})
+  }, [authToken, authReady, apiFetch])
 
   useEffect(() => {
     if (!authToken) {
@@ -578,6 +591,8 @@ export function AppProvider({ children }) {
       refreshNotifications,
       theme,
       toggleTheme,
+      googleConnected,
+      whatsappStatus,
     }),
     [
       tasks,
@@ -602,6 +617,8 @@ export function AppProvider({ children }) {
       refreshNotifications,
       theme,
       toggleTheme,
+      googleConnected,
+      whatsappStatus,
     ],
   )
 
