@@ -31,7 +31,14 @@ import dateparser
 import pytz
 import httpx
 
-from google_auth import get_google_credentials
+from google_auth import (
+    get_google_credentials,
+    create_oauth_flow,
+    save_google_credentials,
+    load_google_credentials,
+    is_google_configured,
+    google_connected_for_user,
+)
 from db import (
     get_db_connection,
     insert_notification,
@@ -342,11 +349,15 @@ def verify_password(password: str, password_hash: Optional[str]) -> bool:
     except ValueError:
         return False
 
+def _user_name(user_row: Dict[str, Any]) -> str:
+    """Return display name, handling both full_name and name column aliases."""
+    return user_row.get("full_name") or user_row.get("name") or ""
+
 def serialize_user(user_row: Dict[str, Any]) -> Dict[str, str]:
     return {
         "id": str(user_row["id"]),
-        "name": user_row["full_name"],
-        "email": user_row["email"],
+        "name": _user_name(user_row),
+        "email": user_row.get("email") or "",
         "phone": user_row.get("whatsapp_number") or "",
         "university": user_row.get("university") or "",
         "degree": user_row.get("degree") or "",
@@ -357,8 +368,8 @@ def create_access_token(user_row: Dict[str, Any]) -> str:
     expires_at = datetime.now(timezone.utc) + timedelta(days=JWT_EXPIRE_DAYS)
     payload = {
         "sub": str(user_row["id"]),
-        "email": user_row["email"],
-        "name": user_row["full_name"],
+        "email": user_row.get("email") or "",
+        "name": _user_name(user_row),
         "exp": expires_at,
     }
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
@@ -2612,11 +2623,14 @@ async def process_gmail_message(user_id: uuid.UUID, gmail_message: dict) -> Opti
 
 # --- Google Services Setup ---
 
-def get_google_credentials_safe():
+def get_google_credentials_safe(user_id: Optional[str] = None):
     try:
-        return get_google_credentials()
+        return get_google_credentials(user_id=user_id)
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Google Auth failed: {str(e)}. Try deleting token.json.")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Google not connected. Please link your Google account via the onboarding page. ({e})"
+        )
 
 def execute_google_api_call(request):
     """Execute a Google API request with exponential backoff for 429 and 503 errors."""
@@ -2710,19 +2724,64 @@ def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_us
     }
 
 @app.get("/auth/google")
-def login_with_google():
+def login_with_google(user_id: Optional[str] = Query(default=None)):
+    """Initiate Google OAuth — redirects browser to Google's consent screen."""
+    if not is_google_configured():
+        error_msg = (
+            "Google OAuth is not configured. "
+            "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to backend/.env, "
+            "then set the redirect URI in Google Cloud Console."
+        )
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(error_msg)}"
+        return RedirectResponse(redirect_url)
+
     try:
-        credentials = get_google_credentials_safe()
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
+        flow = create_oauth_flow(redirect_uri)
+        state = user_id or "new"
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            state=state,
+            prompt="consent",
+        )
+        return RedirectResponse(auth_url)
+    except Exception as exc:
+        logger.exception("Failed to initiate Google OAuth")
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed')}"
+        return RedirectResponse(redirect_url)
+
+
+@app.get("/auth/google/callback")
+def google_oauth_callback(
+    code: Optional[str] = Query(default=None),
+    state: Optional[str] = Query(default="new"),
+    error: Optional[str] = Query(default=None),
+):
+    """Handle the OAuth callback from Google — exchange code for tokens."""
+    if error:
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(error)}"
+        return RedirectResponse(redirect_url)
+
+    if not code:
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Missing OAuth code')}"
+        return RedirectResponse(redirect_url)
+
+    try:
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
+        flow = create_oauth_flow(redirect_uri)
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+
         email = ""
         name = ""
-
         try:
             oauth_service = build("oauth2", "v2", credentials=credentials)
             profile = execute_google_api_call(oauth_service.userinfo().get())
             email = normalize_auth_email(profile.get("email"))
             name = (profile.get("name") or "").strip()
         except Exception:
-            logger.info("OAuth userinfo unavailable with current scopes, falling back to Gmail profile")
+            logger.info("OAuth userinfo unavailable, falling back to Gmail profile")
 
         if not email:
             gmail_service = build("gmail", "v1", credentials=credentials)
@@ -2732,25 +2791,32 @@ def login_with_google():
         if not name:
             name = email.split("@")[0].replace(".", " ").title() if email else "Google User"
 
-        user = get_user_by_email(email)
+        # Link to existing AcadPulse account if state contains a user_id
+        user = None
+        if state and state != "new":
+            user = get_user_by_id(state)
+
         if not user:
-            user_id = create_user_account(name, email, hash_password(secrets.token_urlsafe(32)))
-            user = get_user_by_id(user_id)
+            user = get_user_by_email(email)
+
+        if not user:
+            new_id = create_user_account(name, email, hash_password(secrets.token_urlsafe(32)))
+            user = get_user_by_id(new_id)
+
+        # Persist Google credentials for this user (used by gmail/classroom fetch)
+        save_google_credentials(str(user["id"]), credentials)
 
         token = create_access_token(user)
         redirect_url = (
             f"{FRONTEND_URL}/login"
             f"?oauth_token={quote_plus(token)}"
-            f"&oauth_name={quote_plus(user['full_name'])}"
+            f"&oauth_name={quote_plus(_user_name(user))}"
             f"&oauth_email={quote_plus(user['email'])}"
         )
         return RedirectResponse(redirect_url)
-    except HTTPException as exc:
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(str(exc.detail))}"
-        return RedirectResponse(redirect_url)
     except Exception as exc:
-        logger.exception("Google login failed")
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed')}"
+        logger.exception("Google OAuth callback failed")
+        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
         return RedirectResponse(redirect_url)
 
 @app.get("/")
@@ -3147,15 +3213,19 @@ def get_classifier_status():
 
 # Task #25: Fetch Gmail Emails (Proper Implementation)
 @app.get("/gmail/fetch")
-async def fetch_gmail_emails(max_results: int = 10):
-    creds = get_google_credentials_safe()
+async def fetch_gmail_emails(
+    max_results: int = 10,
+    user_id: Optional[str] = Query(default=None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    resolved_uid = user_id or str(current_user.get("id", ""))
+    creds = get_google_credentials_safe(user_id=resolved_uid)
     service = build("gmail", "v1", credentials=creds)
-    
-    # Get unread/recent messages
+
     results = execute_google_api_call(service.users().messages().list(userId="me", labelIds=["INBOX"], maxResults=max_results))
     messages = results.get("messages", [])
-    
-    user_id = get_or_create_user("Default Student", "student@example.com") # Placeholder user
+
+    user_id_val = resolved_uid or get_or_create_user("Default Student", "student@example.com")
     fetched_count = 0
     new_count = 0
     processed_notifications = []
@@ -3164,7 +3234,7 @@ async def fetch_gmail_emails(max_results: int = 10):
         fetched_count += 1
         full_msg = execute_google_api_call(service.users().messages().get(userId="me", id=msg["id"], format="full"))
 
-        notif_id = await process_gmail_message(user_id, full_msg)
+        notif_id = await process_gmail_message(user_id_val, full_msg)
         if notif_id:
             new_count += 1
             processed_notifications.append(str(notif_id))
@@ -3178,38 +3248,15 @@ async def fetch_gmail_emails(max_results: int = 10):
 
 # Task #28: Fetch Google Classroom Content (Upgraded)
 @app.get("/classroom/fetch")
-async def fetch_classroom_all():
-    """
-    Fetch and process all Classroom content from active enrolled courses.
-    
-    This endpoint uses the production-grade pipeline shared with Gmail and WhatsApp:
-    - Fetches announcements, coursework, and course materials
-    - Normalizes each resource into a unified structure
-    - Uses multi-stage category determination (deterministic → HF → Groq → fallback)
-    - Extracts deadlines from structured fields or text
-    - Calculates urgency for assignments/quizzes
-    - Inserts into the unified notification system
-    
-    Returns:
-        {
-            "status": "success",
-            "stats": {
-                "courses_processed": int,
-                "announcements_processed": int,
-                "coursework_processed": int,
-                "materials_processed": int,
-                "new_notifications_saved": int
-            },
-            "skipped": {
-                "duplicates": int,
-                "errors": int
-            }
-        }
-    """
-    creds = get_google_credentials_safe()
+async def fetch_classroom_all(
+    user_id: Optional[str] = Query(default=None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    resolved_uid = user_id or str(current_user.get("id", ""))
+    creds = get_google_credentials_safe(user_id=resolved_uid)
     service = build("classroom", "v1", credentials=creds)
-    
-    user_id = get_or_create_user("Default Student", "student@example.com")
+
+    user_id = resolved_uid or get_or_create_user("Default Student", "student@example.com")
     
     # Fetch only ACTIVE courses
     try:

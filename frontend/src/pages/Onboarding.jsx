@@ -530,7 +530,7 @@ export default function Onboarding() {
                 {connections.gmailEmail ? (
                   <span className="platform-connected-copy">Connected as: {connections.gmailEmail}</span>
                 ) : (
-                  <button className="platform-action-btn gmail" type="button" onClick={() => window.location.assign(`${API_BASE_URL}/auth/google`)}>
+                  <button className="platform-action-btn gmail" type="button" onClick={() => window.location.assign(`${API_BASE_URL}/auth/google${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`)}>
                     Connect Gmail
                   </button>
                 )}
@@ -548,7 +548,7 @@ export default function Onboarding() {
                 {connections.classroomCourses > 0 ? (
                   <span className="platform-connected-copy">Syncing {connections.classroomCourses} courses</span>
                 ) : (
-                  <button className="platform-action-btn classroom" type="button" onClick={() => window.location.assign(`${API_BASE_URL}/auth/google`)}>
+                  <button className="platform-action-btn classroom" type="button" onClick={() => window.location.assign(`${API_BASE_URL}/auth/google${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`)}>
                     Connect Classroom
                   </button>
                 )}

@@ -239,6 +239,7 @@ export function AppProvider({ children }) {
   const [authReady, setAuthReady] = useState(false)
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
+  const userRef = useRef(user)
 
   const persistUser = useCallback((nextUser) => {
     localStorage.setItem('acadpulse_user_id', nextUser.id || '')
@@ -246,6 +247,7 @@ export function AppProvider({ children }) {
     localStorage.setItem('acadpulse_user_email', nextUser.email || '')
     localStorage.setItem('acadpulse_user_phone', nextUser.phone || '')
     if (nextUser.university) localStorage.setItem('acadpulse_university', nextUser.university)
+    userRef.current = nextUser
     setUser(nextUser)
     setAuthUser(nextUser)
   }, [])
@@ -269,16 +271,17 @@ export function AppProvider({ children }) {
   const completeLoginSession = useCallback((token, nextUser) => {
     localStorage.setItem('acadpulse_token', token)
     setAuthToken(token)
+    const cur = userRef.current
     persistUser({
       id: nextUser.id || '',
       fullName: nextUser.name || nextUser.fullName || 'Scholar',
       email: nextUser.email || '',
-      phone: nextUser.phone || user.phone,
-      university: nextUser.university || user.university || '',
-      degree: nextUser.degree || user.degree || '',
-      semester: nextUser.semester || user.semester || '',
+      phone: nextUser.phone || cur.phone,
+      university: nextUser.university || cur.university || '',
+      degree: nextUser.degree || cur.degree || '',
+      semester: nextUser.semester || cur.semester || '',
     })
-  }, [persistUser, user])
+  }, [persistUser])
 
   const apiFetch = useCallback(
     async (path, options = {}, requireAuth = true) => {
@@ -327,14 +330,15 @@ export function AppProvider({ children }) {
 
     try {
       const payload = await apiFetch('/auth/me')
+      const cur = userRef.current
       const nextUser = {
         id: payload.user.id,
         fullName: payload.user.name,
         email: payload.user.email,
-        phone: payload.user.phone || user.phone,
-        university: payload.user.university || user.university || '',
-        degree: payload.user.degree || user.degree || '',
-        semester: payload.user.semester || user.semester || '',
+        phone: payload.user.phone || cur.phone,
+        university: payload.user.university || cur.university || '',
+        degree: payload.user.degree || cur.degree || '',
+        semester: payload.user.semester || cur.semester || '',
       }
       persistUser(nextUser)
       setAuthReady(true)
@@ -346,7 +350,7 @@ export function AppProvider({ children }) {
       setAuthReady(true)
       return null
     }
-  }, [apiFetch, authToken, clearAuthSession, persistUser, user])
+  }, [apiFetch, authToken, clearAuthSession, persistUser])
 
   const refreshNotifications = useCallback(async (overrideUserId) => {
     const uid = overrideUserId || authUser?.id
