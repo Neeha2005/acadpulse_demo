@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 import TaskCard from '../components/TaskCard';
+import PageSkeleton from '../components/PageSkeleton';
 
 export default function Dashboard() {
-  const { tasks, user, notifications } = useAppContext();
+  const { tasks, user, notifications, dataLoading } = useAppContext();
   const [activeFilter, setActiveFilter] = useState('All');
   const [isTasksExpanded, setIsTasksExpanded] = useState(false);
   
+  if (dataLoading) return <PageSkeleton variant="dashboard" />;
+
   const firstName = user.fullName ? user.fullName.split(' ')[0] : 'Scholar';
   const pendingTasks = tasks.filter(task => !task.isCompleted);
   const urgentCount = pendingTasks.filter(task => task.urgency === 'urgent').length;

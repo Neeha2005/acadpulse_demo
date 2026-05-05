@@ -247,6 +247,7 @@ export function AppProvider({ children }) {
   const [activeTaskModal, setActiveTaskModal] = useState(null)
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('acadpulse_token'))
   const [authReady, setAuthReady] = useState(false)
+  const [dataLoading, setDataLoading] = useState(true)
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
   const [theme, setTheme] = useState(() => {
     const t = getStoredTheme()
@@ -397,10 +398,18 @@ export function AppProvider({ children }) {
   }, [refreshAuthenticatedUser])
 
   useEffect(() => {
-    if (!authToken) return
-    refreshNotifications().catch((error) => {
-      console.error('Failed to load notifications from backend:', error)
-    })
+    if (!authToken) {
+      setDataLoading(false)
+      return
+    }
+    setDataLoading(true)
+    refreshNotifications()
+      .catch((error) => {
+        console.error('Failed to load notifications from backend:', error)
+      })
+      .finally(() => {
+        setDataLoading(false)
+      })
   }, [refreshNotifications, authToken])
 
   useEffect(() => {
@@ -551,6 +560,7 @@ export function AppProvider({ children }) {
       authUser,
       authToken,
       authReady,
+      dataLoading,
       isAuthenticated: Boolean(authToken),
       activeTaskModal,
       setActiveTaskModal,
@@ -576,6 +586,7 @@ export function AppProvider({ children }) {
       authUser,
       authToken,
       authReady,
+      dataLoading,
       activeTaskModal,
       addTask,
       createManualTask,

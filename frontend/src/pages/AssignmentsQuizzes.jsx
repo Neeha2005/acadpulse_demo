@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import TaskCard from '../components/TaskCard';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const TYPE_FILTERS = ['All', 'Assignments', 'Quizzes'];
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
@@ -22,7 +23,7 @@ function isAssignmentOrQuiz(task) {
 }
 
 export default function AssignmentsQuizzes() {
-  const { tasks, refreshNotifications } = useAppContext();
+  const { tasks, refreshNotifications, dataLoading } = useAppContext();
   const [typeFilter, setTypeFilter] = useState('All');
   const [sourceFilter, setSourceFilter] = useState('All');
   const [courseFilter, setCourseFilter] = useState('All');
@@ -70,6 +71,8 @@ export default function AssignmentsQuizzes() {
       setIsRefreshing(false);
     }
   };
+
+  if (dataLoading) return <PageSkeleton variant="cards" />;
 
   return (
     <div className="dashboard-scroll">

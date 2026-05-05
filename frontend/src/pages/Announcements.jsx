@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const DATE_FILTERS = ['All', 'Today', 'This Week', 'With Deadline'];
@@ -39,7 +40,7 @@ function getAnnouncementTone(notification) {
 }
 
 export default function Announcements() {
-  const { notifications, refreshNotifications } = useAppContext();
+  const { notifications, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [courseFilter, setCourseFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('All');
@@ -82,6 +83,8 @@ export default function Announcements() {
       setIsRefreshing(false);
     }
   };
+
+  if (dataLoading) return <PageSkeleton variant="list" />;
 
   return (
     <div className="dashboard-scroll">

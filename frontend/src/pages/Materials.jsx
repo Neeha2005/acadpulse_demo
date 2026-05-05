@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const TYPE_FILTERS = ['All', 'PDF', 'Slides', 'Video', 'Link', 'Notes'];
@@ -40,7 +41,7 @@ function getMaterialIcon(type) {
 }
 
 export default function Materials() {
-  const { notifications, refreshNotifications } = useAppContext();
+  const { notifications, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [typeFilter, setTypeFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -73,6 +74,8 @@ export default function Materials() {
       setIsRefreshing(false);
     }
   };
+
+  if (dataLoading) return <PageSkeleton variant="list" />;
 
   return (
     <div className="dashboard-scroll">

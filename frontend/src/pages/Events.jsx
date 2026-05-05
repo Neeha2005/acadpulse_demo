@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import TaskCard from '../components/TaskCard';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const DATE_FILTERS = ['All', 'Upcoming', 'No Date'];
@@ -41,7 +42,7 @@ function EventItem({ task }) {
 }
 
 export default function Events() {
-  const { tasks, refreshNotifications } = useAppContext();
+  const { tasks, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -78,6 +79,8 @@ export default function Events() {
       setIsRefreshing(false);
     }
   };
+
+  if (dataLoading) return <PageSkeleton variant="list" />;
 
   return (
     <div className="dashboard-scroll">
