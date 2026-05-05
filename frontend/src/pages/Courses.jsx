@@ -18,6 +18,7 @@ export default function Courses() {
   const [aliasDrafts, setAliasDrafts] = useState({});
   const [newCourse, setNewCourse] = useState({
     course_code: '',
+    short_name: '',
     course_name: '',
     aliases: '',
   });
@@ -115,6 +116,7 @@ export default function Courses() {
   const handleCreateCourse = async (event) => {
     event.preventDefault();
     const courseCode = newCourse.course_code.trim();
+    const shortName = newCourse.short_name.trim();
     const courseName = newCourse.course_name.trim();
 
     if (!courseCode || !courseName) {
@@ -131,6 +133,7 @@ export default function Courses() {
         method: 'POST',
         body: JSON.stringify({
           course_code: courseCode,
+          short_name: shortName,
           course_name: courseName,
           aliases: textToAliases(newCourse.aliases),
         }),
@@ -138,8 +141,8 @@ export default function Courses() {
       if (payload?.course) {
         updateCourseInState(payload.course);
       }
-      setNewCourse({ course_code: '', course_name: '', aliases: '' });
-      setStatus(`${courseCode} saved to the abbreviation dictionary.`);
+      setNewCourse({ course_code: '', short_name: '', course_name: '', aliases: '' });
+      setStatus(`${courseCode} saved. Course short name will be used for course matching.`);
     } catch (saveError) {
       setError(saveError.message || 'Unable to save course.');
     } finally {
@@ -298,6 +301,12 @@ export default function Courses() {
               style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
             />
             <input
+              value={newCourse.short_name}
+              onChange={(event) => setNewCourse((current) => ({ ...current, short_name: event.target.value }))}
+              placeholder="Short name, e.g. OS, DB, NLP"
+              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+            />
+            <input
               value={newCourse.course_name}
               onChange={(event) => setNewCourse((current) => ({ ...current, course_name: event.target.value }))}
               placeholder="Course name, e.g. Operating Systems"
@@ -357,6 +366,11 @@ export default function Courses() {
                   <span className="task-due"><i className="fa-solid fa-tags"></i> {course.aliases?.length || 0}</span>
                 </div>
                 <h3 className="task-title">{course.course_name}</h3>
+                {course.short_name && (
+                  <p style={{ margin: '0 0 10px', color: 'var(--text-muted)', fontSize: 12 }}>
+                    Short name: <strong>{course.short_name}</strong>
+                  </p>
+                )}
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                   <input
                     value={aliasDrafts[course.id] || ''}

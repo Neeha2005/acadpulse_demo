@@ -1258,4 +1258,4 @@ async def process_whatsapp_message(payload: dict) -> List[str]:
 
     except Exception:
         logger.exception("Unhandled WhatsApp processing error")
-        return []
+        raise

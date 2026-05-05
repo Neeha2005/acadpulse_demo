@@ -137,7 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const modalSource = document.getElementById('modal-source');
             modalSource.className = 'modal-source ' + data.source;
-            let iconHtml = '';
+            let iconHtml;
             
             if(data.source === 'whatsapp') { iconHtml = '<i class="fa-brands fa-whatsapp"></i>'; modalSource.style.cssText = 'background:var(--whatsapp-subtle);color:var(--whatsapp);border-color:rgba(76,202,122,0.3)'; }
             else if(data.source === 'classroom') { iconHtml = '<i class="fa-brands fa-google"></i>'; modalSource.style.cssText = 'background:var(--classroom-subtle);color:var(--classroom);border-color:rgba(251,188,4,0.3)'; }

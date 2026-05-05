@@ -30,12 +30,42 @@ const presenceControllers = new Map();
 const reconnectAttempts = new Map();
 const reconnectTimers = new Map();
 
-async function postWhatsAppStatus(status, reason = null, userId = DEFAULT_USER_ID) {
+async function syncGroups(sock, userId) {
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    const groupEntries = Object.values(groups);
+    logger.info({ userId, count: groupEntries.length }, "Syncing WhatsApp groups to FastAPI");
+
+    for (const group of groupEntries) {
+      await postWhatsAppGroup(userId, {
+        group_id: cleanJid(group.id),
+        group_name: group.subject,
+        is_general: false,
+      });
+    }
+  } catch (error) {
+    logger.warn({ userId, error: error.message }, "Could not sync WhatsApp groups");
+  }
+}
+
+async function postWhatsAppGroup(userId, groupData) {
+  try {
+    await fetch(`${FASTAPI_URL}/whatsapp/groups`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...groupData, user_id: userId }),
+    });
+  } catch (error) {
+    // Silently fail for individual group posts to avoid log spam
+  }
+}
+
+async function postWhatsAppStatus(status, reason = null, userId = DEFAULT_USER_ID, qr = null) {
   try {
     await fetch(`${FASTAPI_URL}/whatsapp/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, reason, user_id: userId }),
+      body: JSON.stringify({ status, reason, user_id: userId, qr }),
     });
   } catch (error) {
     logger.warn({ error: error.message, status }, "Could not post WhatsApp status to FastAPI");
@@ -113,7 +143,7 @@ async function startSession(userId) {
     if (qr) {
       logger.info({ userId }, "Scan this QR code with WhatsApp");
       qrcode.generate(qr, { small: true });
-      postWhatsAppStatus("qr_required", null, userId);
+      postWhatsAppStatus("qr_required", null, userId, qr);
     }
 
     if (connection === "connecting") {
@@ -128,6 +158,9 @@ async function startSession(userId) {
       reconnectTimers.delete(userId);
       logger.info({ userId }, "WhatsApp connected successfully");
       postWhatsAppStatus("connected", null, userId);
+      syncGroups(sock, userId).catch((error) => {
+        logger.warn({ userId, error: error.message }, "Initial group sync failed");
+      });
       rampPresenceAfterConnect(sock, {
         minDelayMs: 30_000,
         maxDelayMs: 90_000,

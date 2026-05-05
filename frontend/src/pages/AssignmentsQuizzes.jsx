@@ -4,7 +4,7 @@ import { useAppContext } from '../context/AppContext';
 
 const TYPE_FILTERS = ['All', 'Assignments', 'Quizzes'];
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
-const URGENCY_FILTERS = ['All', 'Urgent', 'Warning', 'Normal'];
+const STATUS_FILTERS = ['All', 'Pending', 'Done', 'Overdue'];
 
 function normalizeType(category) {
   return (category || '').toLowerCase() === 'quiz' ? 'quiz' : 'assignment';
@@ -25,7 +25,8 @@ export default function AssignmentsQuizzes() {
   const { tasks, refreshNotifications } = useAppContext();
   const [typeFilter, setTypeFilter] = useState('All');
   const [sourceFilter, setSourceFilter] = useState('All');
-  const [urgencyFilter, setUrgencyFilter] = useState('All');
+  const [courseFilter, setCourseFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const academicTasks = useMemo(
@@ -39,13 +40,22 @@ export default function AssignmentsQuizzes() {
   const visibleTasks = useMemo(() => academicTasks.filter((task) => {
     const type = normalizeType(task.category);
     const source = (task.sourceLabel || task.source || '').toLowerCase();
-    const urgency = (task.urgency || 'normal').toLowerCase();
+    const course = task.course || 'Unassigned';
+    const isOverdue = (task.urgencyLabel || '').toLowerCase() === 'overdue';
 
     if (typeFilter !== 'All' && type !== typeFilter.toLowerCase().replace(/s$/, '')) return false;
     if (sourceFilter !== 'All' && source !== sourceFilter.toLowerCase()) return false;
-    if (urgencyFilter !== 'All' && urgency !== urgencyFilter.toLowerCase()) return false;
+    if (courseFilter !== 'All' && course !== courseFilter) return false;
+    if (statusFilter === 'Pending' && (task.isCompleted || isOverdue)) return false;
+    if (statusFilter === 'Done' && !task.isCompleted) return false;
+    if (statusFilter === 'Overdue' && !isOverdue) return false;
     return true;
-  }), [academicTasks, typeFilter, sourceFilter, urgencyFilter]);
+  }), [academicTasks, courseFilter, sourceFilter, statusFilter, typeFilter]);
+
+  const courseOptions = useMemo(
+    () => ['All', ...Array.from(new Set(academicTasks.map((task) => task.course || 'Unassigned'))).sort()],
+    [academicTasks],
+  );
 
   const assignmentCount = academicTasks.filter((task) => normalizeType(task.category) === 'assignment').length;
   const quizCount = academicTasks.filter((task) => normalizeType(task.category) === 'quiz').length;
@@ -142,9 +152,14 @@ export default function AssignmentsQuizzes() {
               </button>
             ))}
           </div>
+          <select className="input-field" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+            {courseOptions.map((course) => (
+              <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
+            ))}
+          </select>
           <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
-            {URGENCY_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${urgencyFilter === filter ? 'active' : ''}`} onClick={() => setUrgencyFilter(filter)}>
+            {STATUS_FILTERS.map((filter) => (
+              <button key={filter} className={`filter-btn glass-filter-pill ${statusFilter === filter ? 'active' : ''}`} onClick={() => setStatusFilter(filter)}>
                 {filter}
               </button>
             ))}

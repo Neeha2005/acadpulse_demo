@@ -22,6 +22,24 @@ function getTodayStart() {
   return today.getTime();
 }
 
+function EventItem({ task }) {
+  return (
+    <div className="notif-item" style={{ alignItems: 'flex-start' }}>
+      <div className={`notif-icon-wrap ${task.source}`}>
+        <i className={`${task.iconFamily || 'fa-solid'} ${task.icon}`}></i>
+      </div>
+      <div className="notif-content">
+        <div className="notif-header">
+          <span className="notif-sender">{task.course}</span>
+          <span className="badge badge-warning">Event</span>
+          <span className="notif-time">{task.due}</span>
+        </div>
+        <p className="notif-preview">{task.rawText || task.content || task.title}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function Events() {
   const { tasks, refreshNotifications } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
@@ -146,7 +164,11 @@ export default function Events() {
 
         <div className="tasks-list" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
           {visibleEvents.length > 0 ? (
-            visibleEvents.map((task) => <TaskCard key={task.id} task={task} />)
+            visibleEvents.map((task) => (
+              (task.category || '').toLowerCase() === 'event'
+                ? <EventItem key={task.id} task={task} />
+                : <TaskCard key={task.id} task={task} />
+            ))
           ) : (
             <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
               <div className="empty-state-icon"><i className="fa-solid fa-calendar-xmark"></i></div>

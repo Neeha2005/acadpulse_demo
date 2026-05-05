@@ -162,7 +162,7 @@ export default function Chatbot({ open, onClose }) {
         method: 'POST',
         body: JSON.stringify({
           prompt,
-          user_id: 1,
+          user_id: '1',
           history,
         }),
       }, false);

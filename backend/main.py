@@ -63,6 +63,8 @@ from db import (
     get_course_mapping_course_id,
     list_course_source_mappings,
     upsert_course_source_mapping,
+    get_user_by_login,
+    update_existing_user_account,
 )
 from local_classifier import classify_with_local_model, local_classifier_available
 from notification_abbr import (
@@ -101,6 +103,8 @@ groq_status = {
 whatsapp_status_state = {
     "status": "unknown",
     "reason": None,
+    "qr": None,
+    "qr_updated_at": None,
     "updated_at": None,
 }
 
@@ -115,13 +119,37 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         FRONTEND_URL,
     ],
+    allow_origin_regex=r"^http://(127\.0\.0\.1|localhost):51\d{2}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/health")
+def health_check():
+    db_ok = False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        db_ok = cur.fetchone() is not None
+        cur.close()
+        conn.close()
+    except Exception as exc:
+        logger.warning("Health DB probe failed: %s", exc)
+
+    return {
+        "status": "ok",
+        "database": "ok" if db_ok else "unavailable",
+        "local_classifier": "available" if local_classifier_available() else "missing",
+    }
 
 @app.on_event("startup")
 async def start_urgency_refresh_scheduler():
@@ -146,7 +174,7 @@ class IncomingWhatsAppMessage(BaseModel):
     text: str
     sender: str
     message_id: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     group: Optional[str] = None
     group_id: Optional[str] = None
     group_name: Optional[str] = None
@@ -157,22 +185,35 @@ class IncomingWhatsAppMessage(BaseModel):
 class ChatRequest(BaseModel):
     prompt: str
     confirm_malicious: bool = False
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     history: List[Dict[str, str]] = Field(default_factory=list)
 
 class DeadlineRequest(BaseModel):
     text: str
     confirm_malicious: bool = False
 
+class ClassificationRequest(BaseModel):
+    text: str
+
+class ClassificationResponse(BaseModel):
+    label: str
+    confidence: float
+    source: str
+
+class SingleDeadlineResponse(BaseModel):
+    has_deadline: bool
+    deadline: Optional[str] = None
+
 class WhatsAppStatusUpdate(BaseModel):
     status: str
     reason: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
+    qr: Optional[str] = None
 
 class CourseMappingRequest(BaseModel):
     message: str
     group_name: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
 
 class CourseMappingResponse(BaseModel):
     course_id: Optional[str]
@@ -182,7 +223,7 @@ class CourseMappingResponse(BaseModel):
     requires_user_confirmation: bool
 
 class CourseAmbiguityResolutionRequest(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     message: str
     group_name: Optional[str] = None
     source_type: str = "whatsapp"
@@ -194,33 +235,36 @@ class CourseAmbiguityResolutionRequest(BaseModel):
 class WhatsAppGroupRequest(BaseModel):
     group_id: str
     group_name: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     is_general: bool = False
 
 class ClassroomCourseRequest(BaseModel):
     classroom_id: str
     classroom_name: Optional[str] = None
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
 
 class CourseSourceMappingRequest(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     course_id: str
     source_type: str = "whatsapp"
     source_reference_id: str
 
 class CourseRequest(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     course_code: str
     course_name: str
+    short_name: Optional[str] = None
     aliases: List[str] = Field(default_factory=list)
 
 class CourseAliasesRequest(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     aliases: List[str] = Field(default_factory=list)
 
 class RegisterRequest(BaseModel):
     name: str
-    email: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    university: Optional[str] = None
     password: str
 
 class AbbreviationRequest(BaseModel):
@@ -233,7 +277,7 @@ class LoginRequest(BaseModel):
     password: str
 
 class ManualNotificationRequest(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[Any] = None
     title: str
     course: Optional[str] = None
     description: Optional[str] = None
@@ -241,6 +285,15 @@ class ManualNotificationRequest(BaseModel):
     deadline: Optional[str] = None
     due_date: Optional[str] = None
     due_time: Optional[str] = None
+
+class OnboardingProgressRequest(BaseModel):
+    user_id: Optional[Any] = None
+    step: int = Field(default=0, ge=0, le=6)
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+class OnboardingCompleteRequest(BaseModel):
+    user_id: Optional[Any] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 class NotificationCompletionRequest(BaseModel):
     completed: bool = True
@@ -273,6 +326,9 @@ def validate_email_address(email: str) -> bool:
 def normalize_auth_email(email: str) -> str:
     return (email or "").strip().lower()
 
+def normalize_phone_number(phone: Optional[str]) -> str:
+    return re.sub(r"\D+", "", phone or "")
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -289,6 +345,10 @@ def serialize_user(user_row: Dict[str, Any]) -> Dict[str, str]:
         "id": str(user_row["id"]),
         "name": user_row["full_name"],
         "email": user_row["email"],
+        "phone": user_row.get("whatsapp_number") or "",
+        "university": user_row.get("university") or "",
+        "degree": user_row.get("degree") or "",
+        "semester": user_row.get("semester") or "",
     }
 
 def create_access_token(user_row: Dict[str, Any]) -> str:
@@ -356,23 +416,30 @@ def get_header(headers, name):
             return header.get("value", "")
     return ""
 
-def classifier_stub(text):
+def classifier_stub_with_confidence(text):
     """
     Temporary classifier that labels messages based on keywords.
     In the next phase, this will be replaced by the XLM-RoBERTa model.
     """
-    text = text.lower()
-    if any(k in text for k in ["assignment", "submit", "deadline", "hand in"]):
-        return "assignment"
-    if any(k in text for k in ["quiz", "test", "exam"]):
-        return "quiz"
-    if any(k in text for k in ["cancel", "room", "venue", "postpone"]):
-        return "announcement"
-    if any(k in text for k in ["slide", "pdf", "book", "material", "notes"]):
-        return "material"
-    if any(k in text for k in ["event", "society", "workshop", "seminar"]):
-        return "event"
-    return "announcement"
+    text = (text or "").lower()
+    if any(k in text for k in ["bhai koi hai", "koi hai", "anyone", "hello", "salam", "ok", "thanks"]):
+        return {"label": "noise", "confidence": 0.9, "source": "keyword_stub"}
+    if any(k in text for k in ["assignment", "submit", "submission", "deadline", "hand in", "homework"]):
+        return {"label": "assignment", "confidence": 0.95, "source": "keyword_stub"}
+    if any(k in text for k in ["quiz", "test"]):
+        return {"label": "quiz", "confidence": 0.95, "source": "keyword_stub"}
+    if any(k in text for k in ["exam schedule", "date sheet", "datesheet", "final exam", "midterm exam"]):
+        return {"label": "exam_schedule", "confidence": 0.9, "source": "keyword_stub"}
+    if any(k in text for k in ["cancel", "cancelled", "canceled", "room", "venue", "postpone", "reschedule"]):
+        return {"label": "announcement", "confidence": 0.88, "source": "keyword_stub"}
+    if any(k in text for k in ["slide", "slides", "pdf", "book", "material", "notes", "upload kar di", "uploaded"]):
+        return {"label": "material", "confidence": 0.93, "source": "keyword_stub"}
+    if any(k in text for k in ["event", "society", "workshop", "seminar", "webinar", "competition"]):
+        return {"label": "event", "confidence": 0.9, "source": "keyword_stub"}
+    return {"label": "noise", "confidence": 0.65, "source": "keyword_stub"}
+
+def classifier_stub(text):
+    return classifier_stub_with_confidence(text)["label"]
 
 # --- Groq / AI Logic ---
 
@@ -626,9 +693,14 @@ def normalize_received_at(value):
     if isinstance(value, datetime):
         return value
     if isinstance(value, (int, float)):
+        if value > 10_000_000_000:
+            value = value / 1000
         return datetime.fromtimestamp(value, tz=timezone.utc)
     if isinstance(value, str) and value.strip().isdigit():
-        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+        numeric_value = int(value)
+        if numeric_value > 10_000_000_000:
+            numeric_value = numeric_value / 1000
+        return datetime.fromtimestamp(numeric_value, tz=timezone.utc)
     return value
 
 def normalize_roman_urdu_datetime_text(value: str) -> str:
@@ -696,6 +768,64 @@ def parse_manual_deadline(deadline=None, due_date=None, due_time=None):
 
     return None
 
+def _match_context_course(text: str, context: Optional[dict]) -> Optional[str]:
+    courses = (context or {}).get("courses") or []
+    text_lower = (text or "").lower()
+    for course in courses:
+        candidates = [
+            course.get("course_code"),
+            course.get("course_name"),
+            *(course.get("aliases") or []),
+        ]
+        for candidate in candidates:
+            if candidate and re.search(rf"\b{re.escape(str(candidate).lower())}\b", text_lower):
+                return course.get("course_code") or course.get("course_name")
+    return None
+
+def detect_roman_urdu_chat_action(message: str, context: Optional[dict] = None) -> dict:
+    text = (message or "").strip()
+    text_lower = text.lower()
+    uuid_match = re.search(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        text_lower,
+    )
+
+    if uuid_match and any(keyword in text_lower for keyword in ["complete", "done", "ho gaya", "kar do"]):
+        return {
+            "action": "complete_task",
+            "arguments": {"notification_id": uuid_match.group(0)},
+        }
+
+    if any(keyword in text_lower for keyword in ["pending", "dikhao", "kya submit", "submit karna"]):
+        return {
+            "action": "list_tasks",
+            "arguments": {"include_completed": False},
+        }
+
+    if any(keyword in text_lower for keyword in ["add", "add kar", "deadline", "assignment", "quiz"]):
+        category = "quiz" if "quiz" in text_lower else "assignment"
+        deadline = None
+        if "kal raat" in text_lower:
+            deadline = "tomorrow 11pm" if re.search(r"\b11\s*pm\b", text_lower) else "tomorrow 11:59 PM"
+        elif "kal" in text_lower:
+            deadline = "tomorrow"
+        elif "sunday raat" in text_lower:
+            deadline = "Sunday 11:59 PM"
+        elif "sunday" in text_lower:
+            deadline = "Sunday"
+
+        return {
+            "action": "create_task",
+            "arguments": {
+                "category": category,
+                "course": _match_context_course(text, context),
+                "deadline": deadline,
+                "title": text,
+            },
+        }
+
+    return {"action": "none", "arguments": {}}
+
 def normalize_manual_category(raw_value):
     value = (raw_value or "assignment").strip().lower().replace("-", "_").replace(" ", "_")
     allowed = {"assignment", "quiz", "announcement", "material", "event", "exam_schedule", "noise"}
@@ -708,6 +838,9 @@ def serialize_notification_row(row):
         "id": str(row["id"]),
         "user_id": str(row["user_id"]) if row.get("user_id") else None,
         "course_id": str(row["course_id"]) if row.get("course_id") else None,
+        "course_name": row.get("course_name"),
+        "course_code": row.get("course_code"),
+        "short_name": row.get("short_name"),
         "source_type": row.get("source_type"),
         "source_reference_id": row.get("source_reference_id"),
         "external_message_id": row.get("external_message_id"),
@@ -727,6 +860,7 @@ def serialize_course_row(row):
     return {
         "id": str(row["id"]),
         "course_code": row.get("course_code"),
+        "short_name": row.get("short_name"),
         "course_name": row.get("course_name"),
         "aliases": row.get("aliases") or [],
     }
@@ -745,6 +879,7 @@ def serialize_course_source_mapping_row(row):
         "user_id": str(row["user_id"]),
         "course_id": str(row["course_id"]),
         "course_code": row.get("course_code"),
+        "short_name": row.get("short_name"),
         "course_name": row.get("course_name"),
         "source_type": row.get("source_type"),
         "source_reference_id": row.get("source_reference_id"),
@@ -792,6 +927,318 @@ def build_manual_message_text(title: str, course: Optional[str] = None, descript
 
 def summarize_notification_for_action(row: Dict[str, Any]) -> Dict[str, Any]:
     return serialize_notification_row(row) if row else {}
+
+def get_onboarding_status_for_user(user_id: str) -> Dict[str, Any]:
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT onboarding_completed, onboarding_step
+            FROM users
+            WHERE id = %s
+            LIMIT 1;
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone() or {}
+        return {
+            "completed": bool(row.get("onboarding_completed")),
+            "current_step": int(row.get("onboarding_step") or 0),
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+def save_onboarding_progress_for_user(user_id: str, step: int, data: Dict[str, Any]) -> None:
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE users
+            SET onboarding_step = GREATEST(COALESCE(onboarding_step, 0), %s),
+                university = COALESCE(NULLIF(%s, ''), university),
+                degree = COALESCE(NULLIF(%s, ''), degree),
+                semester = COALESCE(NULLIF(%s, ''), semester)
+            WHERE id = %s;
+            """,
+            (
+                step,
+                str(profile.get("university") or ""),
+                str(profile.get("degree") or ""),
+                str(profile.get("semester") or ""),
+                user_id,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO onboarding_progress (user_id, step, data, updated_at)
+            VALUES (%s, %s, %s::jsonb, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET step = EXCLUDED.step,
+                data = EXCLUDED.data,
+                updated_at = NOW();
+            """,
+            (user_id, step, json.dumps(data)),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
+    mappings = data.get("mappings") if isinstance(data.get("mappings"), list) else []
+    timetable_entries = data.get("timetable") if isinstance(data.get("timetable"), list) else []
+    selected_groups = data.get("selectedGroups") if isinstance(data.get("selectedGroups"), list) else []
+    society_groups = data.get("societyGroups") if isinstance(data.get("societyGroups"), list) else []
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE users
+            SET onboarding_completed = TRUE,
+                onboarding_step = 6,
+                university = COALESCE(NULLIF(%s, ''), university),
+                degree = COALESCE(NULLIF(%s, ''), degree),
+                semester = COALESCE(NULLIF(%s, ''), semester)
+            WHERE id = %s;
+            """,
+            (
+                str(profile.get("university") or ""),
+                str(profile.get("degree") or ""),
+                str(profile.get("semester") or ""),
+                user_id,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_settings (
+                user_id, whatsapp_enabled, gmail_enabled, classroom_enabled, updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+                gmail_enabled = EXCLUDED.gmail_enabled,
+                classroom_enabled = EXCLUDED.classroom_enabled,
+                updated_at = NOW();
+            """,
+            (
+                user_id,
+                bool(platforms.get("whatsapp", True)),
+                bool(platforms.get("gmail", True)),
+                bool(platforms.get("classroom", True)),
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO onboarding_progress (user_id, step, data, updated_at)
+            VALUES (%s, 6, %s::jsonb, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET step = 6,
+                data = EXCLUDED.data,
+                updated_at = NOW();
+            """,
+            (user_id, json.dumps(data)),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    saved_mappings = 0
+    saved_timetable_entries = 0
+
+    for group in selected_groups[:50]:
+        if isinstance(group, dict):
+            group_name = str(group.get("group_name") or group.get("name") or group.get("group") or "").strip()
+            group_id = str(group.get("group_id") or group.get("id") or group_name).strip()
+        else:
+            group_name = str(group).strip()
+            group_id = group_name
+        if group_id:
+            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=False)
+
+    for group in society_groups[:50]:
+        if isinstance(group, dict):
+            group_name = str(group.get("group_name") or group.get("name") or group.get("group") or "").strip()
+            group_id = str(group.get("group_id") or group.get("id") or group_name).strip()
+        else:
+            group_name = str(group).strip()
+            group_id = group_name
+        if group_id:
+            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=True)
+
+    for mapping in mappings[:100]:
+        source_type = str(mapping.get("source_type") or mapping.get("sourceType") or "whatsapp").strip().lower()
+        source_reference_id = str(
+            mapping.get("source_reference_id")
+            or mapping.get("group_id")
+            or mapping.get("classroom_id")
+            or mapping.get("group")
+            or mapping.get("source")
+            or ""
+        ).strip()
+        course_name = str(mapping.get("course") or "").strip()
+        if source_type not in {"whatsapp", "classroom"} or not source_reference_id or not course_name:
+            continue
+        course_id = upsert_course(
+            course_code=re.sub(r"[^A-Za-z0-9]+", "", course_name).upper()[:12] or "COURSE",
+            course_name=course_name,
+            short_name=str(mapping.get("short_name") or "").strip() or None,
+            aliases=[],
+            user_id=user_id,
+        )
+        if course_id:
+            if source_type == "whatsapp":
+                record_whatsapp_group(
+                    source_reference_id,
+                    group_name=str(mapping.get("group_name") or mapping.get("group") or source_reference_id),
+                    user_id=user_id,
+                    is_general=bool(mapping.get("is_general")),
+                )
+            elif source_type == "classroom":
+                record_classroom_course(
+                    source_reference_id,
+                    classroom_name=str(mapping.get("classroom_name") or mapping.get("source_name") or source_reference_id),
+                    user_id=user_id,
+                )
+            upsert_course_source_mapping(
+                user_id=user_id,
+                course_id=course_id,
+                source_type=source_type,
+                source_reference_id=source_reference_id,
+            )
+            saved_mappings += 1
+
+    for entry in timetable_entries[:100]:
+        course_name = str(entry.get("course") or entry.get("subject") or "").strip()
+        day_value = entry.get("day")
+        start_time = str(entry.get("start_time") or entry.get("startTime") or "").strip()
+        end_time = str(entry.get("end_time") or entry.get("endTime") or "").strip()
+        room_number = str(entry.get("room") or entry.get("room_number") or "").strip()
+        if not course_name or not start_time or not end_time:
+            continue
+        day_lookup = {
+            "monday": 1, "mon": 1,
+            "tuesday": 2, "tue": 2,
+            "wednesday": 3, "wed": 3,
+            "thursday": 4, "thu": 4,
+            "friday": 5, "fri": 5,
+            "saturday": 6, "sat": 6,
+            "sunday": 7, "sun": 7,
+        }
+        try:
+            day_of_week = int(day_value)
+        except (TypeError, ValueError):
+            day_of_week = day_lookup.get(str(day_value or "").strip().lower())
+        if not day_of_week or day_of_week < 1 or day_of_week > 7:
+            continue
+        course_id = upsert_course(
+            course_code=re.sub(r"[^A-Za-z0-9]+", "", course_name).upper()[:12] or "COURSE",
+            course_name=course_name,
+            short_name=str(entry.get("short_name") or "").strip() or None,
+            aliases=[],
+            user_id=user_id,
+        )
+        if not course_id:
+            continue
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO timetable_entries (user_id, course_id, day_of_week, start_time, end_time, room_number)
+                VALUES (%s, %s, %s, %s, %s, %s);
+                """,
+                (user_id, course_id, day_of_week, start_time, end_time, room_number or None),
+            )
+            conn.commit()
+            saved_timetable_entries += 1
+        except Exception:
+            conn.rollback()
+            logger.exception("Failed to save onboarding timetable entry")
+        finally:
+            cur.close()
+            conn.close()
+
+    invalidate_chat_context(user_id)
+    return {"saved_mappings": saved_mappings, "saved_timetable_entries": saved_timetable_entries}
+
+def archive_and_reset_semester(user_id: str, semester_label: Optional[str] = None) -> Dict[str, Any]:
+    label = semester_label or f"Semester archived {datetime.now(PAKISTAN_TZ).strftime('%Y-%m-%d')}"
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO archived_notifications (
+                id, user_id, course_id, source_type, source_reference_id, external_message_id,
+                sender_name, message_text, category, deadline, urgency_score, urgency_label,
+                urgency_level, is_completed, received_at, created_at, expanded_text,
+                archived_at, semester_label
+            )
+            SELECT
+                id, user_id, course_id, source_type, source_reference_id, external_message_id,
+                sender_name, message_text, category, deadline, urgency_score, urgency_label,
+                urgency_level, is_completed, received_at, created_at, expanded_text,
+                NOW(), %s
+            FROM notifications
+            WHERE user_id = %s
+            ON CONFLICT (id) DO NOTHING;
+            """,
+            (label, user_id),
+        )
+        archived_count = cur.rowcount
+        cur.execute("DELETE FROM notifications WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM timetable_entries WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM course_source_mappings WHERE user_id = %s;", (user_id,))
+        conn.commit()
+        return {"archived_count": archived_count, "semester_label": label}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+def list_archived_notifications(user_id: str, category: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        clauses = ["user_id = %s"]
+        params = [user_id]
+        if category and category.lower() != "all":
+            clauses.append("LOWER(category) = LOWER(%s)")
+            params.append(category)
+        if search:
+            clauses.append("message_text ILIKE %s")
+            params.append(f"%{search}%")
+
+        cur.execute(
+            f"""
+            SELECT *
+            FROM archived_notifications
+            WHERE {" AND ".join(clauses)}
+            ORDER BY archived_at DESC, received_at DESC;
+            """,
+            params,
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
 
 def resolve_default_student_user_id() -> str:
     return str(get_or_create_user("Default Student", "student@example.com"))
@@ -905,7 +1352,7 @@ def first_deadline_date(deadlines):
             return value
     return None
 
-DEADLINE_CATEGORIES = {"assignment", "quiz", "exam_schedule"}
+DEADLINE_CATEGORIES = {"assignment", "quiz", "exam_schedule", "announcement", "event"}
 
 def parse_structured_classroom_due_date(due_date, due_time=None):
     if not due_date:
@@ -925,7 +1372,8 @@ def run_pipeline(
     notification_id: Optional[str], 
     source_type: str, 
     structured_deadline=None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    category_override: Optional[str] = None,
 ) -> dict:
     """
     Unified notification pipeline for WhatsApp, Gmail, Classroom, and future sources.
@@ -977,9 +1425,14 @@ def run_pipeline(
             cur.close()
             conn.close()
     
-    # STEP 2: Classify using EXPANDED text
-    local_classification = classify_with_local_model(expanded_text)
-    category = local_classification["label"] if local_classification else classifier_stub(expanded_text)
+    # STEP 2: Classify using EXPANDED text, unless a source-specific classifier
+    # has already produced a reliable category for this notification.
+    local_classification = None
+    if category_override:
+        category = normalize_manual_category(category_override)
+    else:
+        local_classification = classify_with_local_model(expanded_text)
+        category = local_classification["label"] if local_classification else classifier_stub(expanded_text)
     update_notification_category(notification_id, category)
 
     result = {
@@ -995,8 +1448,8 @@ def run_pipeline(
         "urgency_score": 0,
         "urgency_color": "grey",
         "llm_called": False,
-        "classifier_source": local_classification["source"] if local_classification else "keyword_stub",
-        "classifier_confidence": local_classification["score"] if local_classification else None,
+        "classifier_source": "category_override" if category_override else (local_classification["source"] if local_classification else "keyword_stub"),
+        "classifier_confidence": None if category_override else (local_classification["score"] if local_classification else None),
         "abbreviations_expanded": expanded_text != original_text,
         "expanded_text": expanded_text,
     }
@@ -1134,6 +1587,96 @@ def parse_deadline_response(llm_output: str):
 
     return {"has_deadline": has_deadline, "deadline": deadline_datetime}
 
+def extract_single_deadline(text: str) -> dict:
+    raw_text = text or ""
+    normalized_text = raw_text.strip().lower()
+    if not normalized_text:
+        return {"has_deadline": False, "deadline": None}
+
+    no_deadline_markers = [
+        "no deadline",
+        "without deadline",
+        "no due date",
+        "koi deadline nahi",
+        "deadline nahi",
+    ]
+    if any(marker in normalized_text for marker in no_deadline_markers):
+        return {"has_deadline": False, "deadline": None}
+
+    now = datetime.now(PAKISTAN_TZ)
+    relative_deadline = None
+    if any(marker in normalized_text for marker in ["aaj raat", "tonight"]):
+        relative_deadline = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    elif any(marker in normalized_text for marker in ["aglay hafte", "agle hafte", "next week"]):
+        days_until_next_monday = (7 - now.weekday()) or 7
+        relative_deadline = (now + timedelta(days=days_until_next_monday)).replace(
+            hour=23, minute=59, second=0, microsecond=0
+        )
+    elif re.search(r"\bkal\b|\btomorrow\b", normalized_text):
+        relative_deadline = (now + timedelta(days=1)).replace(hour=23, minute=59, second=0, microsecond=0)
+    else:
+        weekdays = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        for weekday_name, weekday_index in weekdays.items():
+            if re.search(rf"\b{weekday_name}\b", normalized_text):
+                days_ahead = (weekday_index - now.weekday()) % 7
+                if days_ahead == 0:
+                    days_ahead = 7
+                relative_deadline = (now + timedelta(days=days_ahead)).replace(
+                    hour=23, minute=59, second=0, microsecond=0
+                )
+                break
+
+    if relative_deadline:
+        return {
+            "has_deadline": True,
+            "deadline": relative_deadline.strftime("%Y-%m-%dT%H:%M"),
+        }
+
+    deadline_cues = [
+        "assignment",
+        "submit",
+        "submission",
+        "deadline",
+        "due",
+        "tak",
+        "by ",
+        "before",
+        "quiz",
+        "exam",
+    ]
+    has_date_like_text = bool(re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", normalized_text))
+    if not has_date_like_text and not any(cue in normalized_text for cue in deadline_cues):
+        return {"has_deadline": False, "deadline": None}
+
+    try:
+        parsed = parse_deadline_response(extract_deadline_json_from_text(raw_text))
+        if parsed.get("has_deadline") and parsed.get("deadline"):
+            return {
+                "has_deadline": True,
+                "deadline": parsed["deadline"].strftime("%Y-%m-%dT%H:%M"),
+            }
+    except Exception as exc:
+        logger.warning("Single deadline LLM extraction failed: %s", exc)
+
+    candidates = extract_deadlines_hybrid(raw_text)
+    first_deadline = first_deadline_date(candidates)
+    parsed_deadline = parse_strict_deadline_datetime(first_deadline)
+    if parsed_deadline:
+        return {
+            "has_deadline": True,
+            "deadline": parsed_deadline.strftime("%Y-%m-%dT%H:%M"),
+        }
+
+    return {"has_deadline": False, "deadline": None}
+
 def extract_deadline_json_from_text(text):
     """Ask Groq for the compact deadline object used by the DB update path."""
     return call_groq_with_retry([
@@ -1184,6 +1727,7 @@ def get_all_courses_from_db(user_id=None):
             SELECT
                 c.id::text AS id,
                 c.course_code,
+                c.short_name,
                 c.course_name,
                 COALESCE(
                     ARRAY_AGG(DISTINCT ca.alias)
@@ -1199,7 +1743,7 @@ def get_all_courses_from_db(user_id=None):
             LEFT JOIN course_aliases ca ON ca.course_id = c.id
             LEFT JOIN user_courses uc ON uc.course_id = c.id
             {where_clause}
-            GROUP BY c.id, c.course_code, c.course_name
+            GROUP BY c.id, c.course_code, c.short_name, c.course_name
             ORDER BY c.course_code, c.course_name
             """,
             (user_id,) if user_id else None,
@@ -1233,6 +1777,7 @@ def contains_normalized_term(message, term):
 def course_match_terms(course):
     return {
         "course_code": normalized_terms([course.get("course_code")]),
+        "short_name": normalized_terms([course.get("short_name")]),
         "course_name": normalized_terms([course.get("course_name")]),
         "aliases": normalized_terms(course.get("aliases") or []),
         "professors": normalized_terms(course.get("professor_names") or []),
@@ -1259,6 +1804,8 @@ def exact_match_course(message, courses):
         
         if any(contains_normalized_term(normalized_message, term) for term in terms["course_code"]):
             scores[course_id] += 100
+        if any(contains_normalized_term(normalized_message, term) for term in terms["short_name"]):
+            scores[course_id] += 95
         if any(contains_normalized_term(normalized_message, term) for term in terms["aliases"]):
             scores[course_id] += 80
         if any(contains_normalized_term(normalized_message, term) for term in terms["course_name"]):
@@ -1290,6 +1837,8 @@ def fuzzy_match_course(message, courses, threshold=75):
         terms = course_match_terms(course)
         weighted_terms = [
             (term, 1.0) for term in terms["course_code"]
+        ] + [
+            (term, 0.98) for term in terms["short_name"]
         ] + [
             (term, 0.95) for term in terms["aliases"]
         ] + [
@@ -1874,7 +2423,7 @@ async def classify_with_fallback(text: str) -> str:
 
     hf_model = os.getenv("HF_MODEL_NAME")
     hf_token = os.getenv("HF_TOKEN")
-    labels = ["announcement", "assignment", "event", "quiz", "noise"]
+    labels = ["announcement", "assignment", "event", "quiz", "noise", "material", "exam_schedule"]
 
     # Try Hugging Face Inference API
     if hf_model and hf_token:
@@ -1910,7 +2459,7 @@ async def classify_with_fallback(text: str) -> str:
     # Fallback to Groq (existing LLM path)
     try:
         prompt = [
-            {"role": "system", "content": "You are an assistant that must classify the following message into one of: announcement, assignment, event, quiz, noise. Respond with ONLY the single label string."},
+            {"role": "system", "content": "You are an assistant that must classify the following message into one of: announcement, assignment, event, quiz, noise, material, exam_schedule. Respond with ONLY the single label string."},
             {"role": "user", "content": text},
         ]
         result = call_groq_with_retry(prompt).strip().lower()
@@ -2030,26 +2579,21 @@ async def process_gmail_message(user_id: uuid.UUID, gmail_message: dict) -> Opti
             logger.warning("Failed to insert notification for Gmail %s", msg_id)
             return None
 
-        # Gmail-only deadline and urgency updates.
-        deadline = None
-        if category in {"assignment", "quiz", "announcement", "event"}:
-            deadline_candidates = extract_deadlines_hybrid(classification_text)
-            first_deadline = first_deadline_date(deadline_candidates)
-            if first_deadline:
-                deadline = parse_strict_deadline_datetime(first_deadline)
-                if deadline:
-                    update_notification_deadline(notif_id, deadline)
-
-        if category in {"assignment", "quiz"} and deadline is not None:
-            urgency = calculate_urgency(deadline)
-            update_notification_urgency(notif_id, urgency["score"], urgency["label"])
+        pipeline = run_pipeline(
+            classification_text,
+            notif_id,
+            "gmail",
+            user_id=str(user_id),
+            category_override=category,
+        )
 
         # TODO: Persist attachments metadata to `attachments` table if insertion helper exists.
         logger.info(
-            "Processed Gmail message %s (thread %s) with %d attachment(s)",
+            "Processed Gmail message %s (thread %s) with %d attachment(s); pipeline=%s",
             msg_id,
             thread_id,
             len(attachments),
+            pipeline,
         )
 
         # Return the inserted notification id
@@ -2086,41 +2630,64 @@ def execute_google_api_call(request):
 @app.post("/auth/register")
 def register_user(request: RegisterRequest):
     name = (request.name or "").strip()
-    email = normalize_auth_email(request.email)
+    phone = normalize_phone_number(request.phone)
+    email = normalize_auth_email(request.email) or (f"{phone}@acadpulse.local" if phone else "")
+    university = (request.university or "").strip()
     password = request.password or ""
 
     if not name:
         raise HTTPException(status_code=422, detail="Name is required")
+    if not phone:
+        raise HTTPException(status_code=422, detail="Phone number is required")
     if not validate_email_address(email):
         raise HTTPException(status_code=422, detail="Invalid email address")
     if len(password) < 8:
         raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
-    if get_user_by_email(email):
-        raise HTTPException(status_code=400, detail="Email already exists")
+    existing_user = get_user_by_login(phone) or get_user_by_login(email)
+    if existing_user and existing_user.get("password_hash"):
+        raise HTTPException(status_code=400, detail="Account already exists. Please login with the same phone/email.")
 
     try:
-        create_user_account(name, email, hash_password(password))
+        password_hash = hash_password(password)
+        if existing_user:
+            user_id = update_existing_user_account(
+                existing_user["id"],
+                full_name=name,
+                email=email,
+                password_hash=password_hash,
+                phone=phone,
+                university=university,
+            )
+        else:
+            user_id = create_user_account(name, email, password_hash, phone=phone, university=university)
+        user = get_user_by_email(email)
     except Exception as exc:
         logger.exception("Account registration failed for %s", email)
         raise HTTPException(status_code=500, detail="Unable to create account") from exc
 
-    return {"status": "success", "message": "Account created"}
+    return {
+        "status": "success",
+        "message": "Account created",
+        "token": create_access_token(user),
+        "user": serialize_user(user),
+        "user_id": str(user_id),
+    }
 
 @app.post("/auth/login")
 def login_user(request: LoginRequest):
-    email = normalize_auth_email(request.email)
+    identifier = (request.email or "").strip()
     password = request.password or ""
 
-    if not validate_email_address(email):
-        raise HTTPException(status_code=422, detail="Invalid email address")
+    if not identifier:
+        raise HTTPException(status_code=422, detail="Phone or email is required")
     if not password:
         raise HTTPException(status_code=422, detail="Password is required")
 
-    user = get_user_by_email(email)
+    user = get_user_by_login(identifier)
     if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email")
+        raise HTTPException(status_code=404, detail="No account found with this phone or email")
     if not verify_password(password, user.get("password_hash")):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
+        raise HTTPException(status_code=401, detail="Incorrect phone/email or password")
 
     return {
         "status": "success",
@@ -2253,14 +2820,25 @@ def create_manual_notification(request: ManualNotificationRequest):
     if not notification_id:
         raise HTTPException(status_code=500, detail="Unable to create manual notification")
 
+    pipeline = run_pipeline(
+        message_text,
+        notification_id,
+        "manual",
+        structured_deadline=deadline_dt,
+        user_id=user_id,
+    )
+    if request.type:
+        update_notification_category(notification_id, category)
+
     # Invalidate cache
     invalidate_chat_context(user_id)
 
-    urgency = calculate_urgency(deadline_dt) if deadline_dt else {"score": 0, "label": "none", "color": "grey"}
-    if deadline_dt:
-        update_notification_urgency(notification_id, urgency["score"], urgency["label"])
-
     notification = get_notification_by_id(notification_id)
+    urgency = {
+        "score": notification.get("urgency_score", 0) if notification else 0,
+        "label": notification.get("urgency_label", "none") if notification else "none",
+    }
+
 
     return {
         "status": "success",
@@ -2270,6 +2848,7 @@ def create_manual_notification(request: ManualNotificationRequest):
             "manual_course": course or None,
         },
         "urgency": urgency,
+        "pipeline": pipeline,
     }
 
 @app.patch("/notifications/{notification_id}/complete")
@@ -2318,6 +2897,7 @@ def save_course(request: CourseRequest):
         course_id = upsert_course(
             course_code=course_code,
             course_name=course_name,
+            short_name=request.short_name,
             aliases=request.aliases,
             user_id=user_id,
         )
@@ -2503,17 +3083,41 @@ def refresh_urgency_endpoint(user_id: str = Query(...)):
 
 @app.post("/whatsapp/status")
 def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
+    now_iso = datetime.now(PAKISTAN_TZ).isoformat()
     whatsapp_status_state.update({
         "status": status_update.status,
         "reason": status_update.reason,
         "user_id": status_update.user_id,
-        "updated_at": datetime.now(PAKISTAN_TZ).isoformat(),
+        "updated_at": now_iso,
     })
+    if status_update.qr:
+        whatsapp_status_state["qr"] = status_update.qr
+        whatsapp_status_state["qr_updated_at"] = now_iso
+    elif status_update.status in {"connected", "logged_out"}:
+        whatsapp_status_state["qr"] = None
+        whatsapp_status_state["qr_updated_at"] = None
     return {"status": "success", "whatsapp": whatsapp_status_state}
 
 @app.get("/whatsapp/status")
 def get_whatsapp_status():
     return {"status": "success", "whatsapp": whatsapp_status_state}
+
+@app.get("/whatsapp/qr")
+def get_whatsapp_qr():
+    qr_value = whatsapp_status_state.get("qr")
+    if qr_value:
+        return {
+            "status": "success",
+            "qr": qr_value,
+            "qr_updated_at": whatsapp_status_state.get("qr_updated_at"),
+            "message": "Scan this QR code with WhatsApp to connect AcadPulse.",
+        }
+
+    return {
+        "status": "pending",
+        "qr": None,
+        "message": "QR code is not available yet. Start the WhatsApp bridge and wait for qr_required status.",
+    }
 
 @app.get("/whatsapp/health")
 def whatsapp_health():
@@ -2738,6 +3342,82 @@ async def sync_everything():
         "classroom_sync": classroom_res,
         "database_status": "Integrity check passed (no duplicates created)"
     }
+
+@app.get("/onboarding/status")
+def get_onboarding_status(user_id: Optional[str] = Query(default=None)):
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    try:
+        return get_onboarding_status_for_user(resolved_user_id)
+    except Exception as exc:
+        logger.exception("Failed to load onboarding status")
+        raise HTTPException(status_code=500, detail="Unable to load onboarding status") from exc
+
+@app.post("/onboarding/progress")
+def save_onboarding_progress(request: OnboardingProgressRequest):
+    resolved_user_id = resolve_mapping_user_id(request.user_id)
+    try:
+        save_onboarding_progress_for_user(resolved_user_id, request.step, request.data)
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "current_step": request.step,
+        }
+    except Exception as exc:
+        logger.exception("Failed to save onboarding progress")
+        raise HTTPException(status_code=500, detail="Unable to save onboarding progress") from exc
+
+@app.post("/onboarding/complete")
+def complete_onboarding(request: OnboardingCompleteRequest):
+    resolved_user_id = resolve_mapping_user_id(request.user_id)
+    try:
+        result = save_onboarding_complete_for_user(resolved_user_id, request.data)
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "completed": True,
+            **result,
+        }
+    except Exception as exc:
+        logger.exception("Failed to complete onboarding")
+        raise HTTPException(status_code=500, detail="Unable to complete onboarding") from exc
+
+@app.post("/semester/reset")
+def reset_semester(
+    user_id: Optional[str] = Query(default=None),
+    semester_label: Optional[str] = Query(default=None),
+):
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    try:
+        result = archive_and_reset_semester(resolved_user_id, semester_label)
+        invalidate_chat_context(resolved_user_id)
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            **result,
+        }
+    except Exception as exc:
+        logger.exception("Failed to reset semester")
+        raise HTTPException(status_code=500, detail="Unable to reset semester") from exc
+
+@app.get("/archives")
+def get_archives(
+    user_id: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+):
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    try:
+        rows = list_archived_notifications(resolved_user_id, category=category, search=search)
+        return {
+            "status": "success",
+            "archives": [serialize_notification_row(row) | {
+                "archived_at": row.get("archived_at").isoformat() if row.get("archived_at") else None,
+                "semester_label": row.get("semester_label") or "Archived Semester",
+            } for row in rows],
+        }
+    except Exception as exc:
+        logger.exception("Failed to load archives")
+        raise HTTPException(status_code=500, detail="Unable to load archives") from exc
 
 # --- Groq Chatbot & Deadline Extraction Endpoints ---
 
@@ -2979,6 +3659,15 @@ def extract_deadlines(request: DeadlineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Deadline extraction error: {str(e)}")
 
+@app.post("/extract-deadline", response_model=SingleDeadlineResponse)
+def extract_deadline_compat(request: DeadlineRequest):
+    if env_flag("ENABLE_DEADLINE_SAFETY_CHECK") and check_message_safety(request.text) and not request.confirm_malicious:
+        return SingleDeadlineResponse(has_deadline=False, deadline=None)
+    try:
+        return SingleDeadlineResponse(**extract_single_deadline(request.text))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deadline extraction error: {str(e)}")
+
 @app.post("/deadlines/extract-batch")
 def extract_deadlines_batch(texts: List[str], confirm_malicious: bool = False):
     """
@@ -3013,6 +3702,19 @@ def extract_deadlines_batch(texts: List[str], confirm_malicious: bool = False):
         "total_deadlines_extracted": total_deadlines,
         "results": results
     }
+
+@app.post("/classify", response_model=ClassificationResponse)
+async def classify_message(request: ClassificationRequest):
+    local_classification = classify_with_local_model(request.text)
+    if local_classification:
+        return ClassificationResponse(
+            label=local_classification["label"],
+            confidence=round(float(local_classification["score"]), 4),
+            source=local_classification["source"],
+        )
+
+    result = classifier_stub_with_confidence(request.text)
+    return ClassificationResponse(**result)
 
 @app.post("/messages/classify-course", response_model=CourseMappingResponse)
 def classify_message_course(request: CourseMappingRequest):
@@ -3146,13 +3848,16 @@ async def process_incoming_message(payload: Dict[str, Any]):
             "notifications_created": notification_ids,
             "count": len(notification_ids),
         }
-    except Exception:
+    except Exception as exc:
         logger.exception("WhatsApp webhook processing failed")
-        return {
-            "success": True,
-            "notifications_created": [],
-            "count": 0,
-        }
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "error": "whatsapp_processing_failed",
+                "message": str(exc),
+            },
+        ) from exc
 
 
 # ===== ABBREVIATION DICTIONARY ENDPOINTS =====

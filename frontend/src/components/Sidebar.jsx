@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
-export default function Sidebar({ onOpenAccount, onOpenChatbot, chatbotOpen, collapsed, onToggle }) {
+export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterReset, chatbotOpen, collapsed, onToggle }) {
   const { user } = useAppContext();
   const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : "SC";
 
@@ -88,8 +88,17 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, chatbotOpen, col
             <span className="nav-status-pill status-pill-muted nav-label">2h ago</span>
           </div>
         </NavLink>
+
+        <div className="sidebar-divider"></div>
+        <div className="nav-section nav-section-accent">History</div>
+        <NavLink to="/archives" className={({isActive}) => isActive ? "nav-item active" : "nav-item"} title="Archives">
+          <i className="fa-solid fa-box-archive"></i> <span className="nav-label">Archives</span>
+        </NavLink>
       </nav>
       <div className="sidebar-footer">
+        <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset}>
+          New Semester
+        </button>
         <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings">
           <div className="avatar">{initials}</div>
           <div className="user-info nav-label">

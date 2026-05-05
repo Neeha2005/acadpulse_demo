@@ -352,14 +352,18 @@ def get_course_by_name(course_name, user_id):
     try:
         cur.execute(
             """
-            SELECT c.id, c.course_name, c.course_code
+            SELECT c.id, c.course_name, c.course_code, c.short_name
             FROM courses c
             JOIN user_courses uc ON uc.course_id = c.id
             WHERE uc.user_id = %s 
-              AND (LOWER(c.course_name) = LOWER(%s) OR LOWER(c.course_code) = LOWER(%s))
+              AND (
+                  LOWER(c.course_name) = LOWER(%s)
+                  OR LOWER(c.course_code) = LOWER(%s)
+                  OR LOWER(COALESCE(c.short_name, '')) = LOWER(%s)
+              )
             LIMIT 1
             """,
-            (user_id, course_name, course_name),
+            (user_id, course_name, course_name, course_name),
         )
         return cur.fetchone()
     finally:
@@ -375,14 +379,14 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         params = []
 
         if user_id:
-            clauses.append("user_id = %s")
+            clauses.append("n.user_id = %s")
             params.append(user_id)
 
         if not include_completed:
-            clauses.append("is_completed = FALSE")
+            clauses.append("n.is_completed = FALSE")
 
         if source_type:
-            clauses.append("LOWER(source_type) = LOWER(%s)")
+            clauses.append("LOWER(n.source_type) = LOWER(%s)")
             params.append(source_type)
 
         where_sql = ""
@@ -394,29 +398,33 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         cur.execute(
             f"""
             SELECT
-                id,
-                user_id,
-                course_id,
-                source_type,
-                source_reference_id,
-                external_message_id,
-                sender_name,
-                message_text,
-                category,
-                deadline,
-                urgency_score,
-                urgency_label,
-                urgency_level,
-                is_completed,
-                received_at,
-                created_at
-            FROM notifications
+                n.id,
+                n.user_id,
+                n.course_id,
+                c.course_name,
+                c.course_code,
+                c.short_name,
+                n.source_type,
+                n.source_reference_id,
+                n.external_message_id,
+                n.sender_name,
+                n.message_text,
+                n.category,
+                n.deadline,
+                n.urgency_score,
+                n.urgency_label,
+                n.urgency_level,
+                n.is_completed,
+                n.received_at,
+                n.created_at
+            FROM notifications n
+            LEFT JOIN courses c ON c.id = n.course_id
             {where_sql}
             ORDER BY
-                CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
-                deadline ASC NULLS LAST,
-                received_at DESC NULLS LAST,
-                created_at DESC
+                CASE WHEN n.deadline IS NULL THEN 1 ELSE 0 END,
+                n.deadline ASC NULLS LAST,
+                n.received_at DESC NULLS LAST,
+                n.created_at DESC
             LIMIT %s;
             """,
             params,
@@ -442,6 +450,7 @@ def list_courses(user_id=None):
             SELECT
                 c.id,
                 c.course_code,
+                c.short_name,
                 c.course_name,
                 COALESCE(
                     ARRAY_AGG(DISTINCT ca.alias)
@@ -452,7 +461,7 @@ def list_courses(user_id=None):
             LEFT JOIN course_aliases ca ON ca.course_id = c.id
             LEFT JOIN user_courses uc ON uc.course_id = c.id
             {user_filter}
-            GROUP BY c.id, c.course_code, c.course_name
+            GROUP BY c.id, c.course_code, c.short_name, c.course_name
             ORDER BY c.course_code, c.course_name;
             """,
             params,
@@ -481,6 +490,7 @@ def get_course_by_id(course_id, user_id=None):
             SELECT
                 c.id,
                 c.course_code,
+                c.short_name,
                 c.course_name,
                 COALESCE(
                     ARRAY_AGG(DISTINCT ca.alias)
@@ -492,7 +502,7 @@ def get_course_by_id(course_id, user_id=None):
             LEFT JOIN user_courses uc ON uc.course_id = c.id
             WHERE c.id = %s
               {user_filter}
-            GROUP BY c.id, c.course_code, c.course_name
+            GROUP BY c.id, c.course_code, c.short_name, c.course_name
             LIMIT 1;
             """,
             params,
@@ -541,10 +551,11 @@ def replace_course_aliases(course_id, aliases):
         cur.close()
         conn.close()
 
-def upsert_course(course_code, course_name, aliases=None, user_id=None):
+def upsert_course(course_code, course_name, aliases=None, user_id=None, short_name=None):
     """Create or update a course by course code, then replace aliases."""
     code = (course_code or "").strip()
     name = (course_name or "").strip()
+    short = (short_name or "").strip() or None
     if not code or not name:
         return None
 
@@ -568,19 +579,20 @@ def upsert_course(course_code, course_name, aliases=None, user_id=None):
                 """
                 UPDATE courses
                 SET course_code = %s,
-                    course_name = %s
+                    course_name = %s,
+                    short_name = %s
                 WHERE id = %s;
                 """,
-                (code, name, course_id),
+                (code, name, short, course_id),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO courses (course_code, course_name)
-                VALUES (%s, %s)
+                INSERT INTO courses (course_code, course_name, short_name)
+                VALUES (%s, %s, %s)
                 RETURNING id;
                 """,
-                (code, name),
+                (code, name, short),
             )
             course_id = cur.fetchone()[0]
 
@@ -811,6 +823,7 @@ def list_course_source_mappings(user_id=None, source_type="whatsapp"):
                 csm.user_id,
                 csm.course_id,
                 c.course_code,
+                c.short_name,
                 c.course_name,
                 csm.source_type,
                 csm.source_reference_id,
@@ -906,7 +919,7 @@ def get_user_by_email(email):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, password_hash, university, degree, semester
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
             FROM users
             WHERE email = %s
             LIMIT 1
@@ -914,6 +927,52 @@ def get_user_by_email(email):
             (email,),
         )
         return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_user_by_login(identifier):
+    normalized_email = (identifier or "").strip().lower()
+    normalized_phone = "".join(ch for ch in str(identifier or "") if ch.isdigit())
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
+            FROM users
+            WHERE LOWER(email) = %s
+               OR regexp_replace(COALESCE(whatsapp_number, ''), '\\D', '', 'g') = %s
+            LIMIT 1
+            """,
+            (normalized_email, normalized_phone),
+        )
+        return cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+
+def update_existing_user_account(user_id, full_name=None, email=None, password_hash=None, phone=None, university=None):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE users
+            SET full_name = COALESCE(NULLIF(%s, ''), full_name),
+                email = COALESCE(NULLIF(%s, ''), email),
+                whatsapp_number = COALESCE(NULLIF(%s, ''), whatsapp_number),
+                university = COALESCE(NULLIF(%s, ''), university),
+                password_hash = COALESCE(%s, password_hash)
+            WHERE id = %s
+            """,
+            (full_name or "", email or "", phone or "", university or "", password_hash, user_id),
+        )
+        conn.commit()
+        return user_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         cur.close()
         conn.close()
@@ -953,14 +1012,17 @@ def get_chatbot_context_data(user_id):
         # 2. Get course names
         cur.execute(
             """
-            SELECT c.course_name, c.course_code
+            SELECT c.course_name, c.course_code, c.short_name
             FROM courses c
             JOIN user_courses uc ON uc.course_id = c.id
             WHERE uc.user_id = %s
             """,
             (user_id,)
         )
-        courses = [f"{row['course_code']} {row['course_name']}".strip() for row in cur.fetchall()]
+        courses = [
+            f"{row['course_code']} {row.get('short_name') or ''} {row['course_name']}".strip()
+            for row in cur.fetchall()
+        ]
 
         # 3. Get notification summary stats
         cur.execute(
@@ -1057,17 +1119,17 @@ def get_chatbot_context_data(user_id):
         cur.close()
         conn.close()
 
-def create_user_account(full_name, email, password_hash):
+def create_user_account(full_name, email, password_hash, phone=None, university=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO users (full_name, email, password_hash)
-            VALUES (%s, %s, %s)
+            INSERT INTO users (full_name, email, whatsapp_number, university, password_hash)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (full_name, email, password_hash),
+            (full_name, email, phone, university, password_hash),
         )
         user_id = cur.fetchone()[0]
         conn.commit()

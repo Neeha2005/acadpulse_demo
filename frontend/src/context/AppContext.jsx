@@ -1,4 +1,5 @@
-import React, {
+/* eslint-disable react-hooks/set-state-in-effect, react-refresh/only-export-components */
+import {
   createContext,
   useCallback,
   useContext,
@@ -9,7 +10,7 @@ import React, {
 } from 'react'
 
 const AppContext = createContext()
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8005'
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
@@ -17,10 +18,15 @@ const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule']
 function getStoredUser() {
   const storedName = localStorage.getItem('acadpulse_user')
   const storedEmail = localStorage.getItem('acadpulse_user_email')
+  const storedId = localStorage.getItem('acadpulse_user_id')
+  const storedPhone = localStorage.getItem('acadpulse_user_phone')
+  const storedUniversity = localStorage.getItem('acadpulse_university')
   return {
+    id: storedId || '',
     fullName: storedName || 'Scholar',
     email: storedEmail || 'student@university.edu',
-    phone: '+92 300 1234567',
+    phone: storedPhone || '',
+    university: storedUniversity || '',
   }
 }
 
@@ -77,6 +83,29 @@ function mapUrgencyLabelToTaskUrgency(label) {
   if (['high', 'critical', 'overdue'].includes(label)) return 'urgent'
   if (label === 'medium') return 'warning'
   return 'normal'
+}
+
+function getDeadlineTime(deadline) {
+  if (!deadline) return Number.POSITIVE_INFINITY
+  const parsed = new Date(deadline)
+  return Number.isNaN(parsed.getTime()) ? Number.POSITIVE_INFINITY : parsed.getTime()
+}
+
+function sortTasksByPriority(tasks) {
+  const urgencyWeight = {
+    critical: 5,
+    high: 4,
+    medium: 3,
+    low: 2,
+    overdue: 1,
+    none: 0,
+  }
+
+  return tasks.slice().sort((a, b) => {
+    const scoreDiff = (urgencyWeight[b.urgencyLabel] || 0) - (urgencyWeight[a.urgencyLabel] || 0)
+    if (scoreDiff !== 0) return scoreDiff
+    return getDeadlineTime(a.deadline) - getDeadlineTime(b.deadline)
+  })
 }
 
 function getSourceMeta(sourceType) {
@@ -157,6 +186,7 @@ function buildUiNotification(notification) {
     receivedAt: notification.received_at || null,
     createdAt: notification.created_at || null,
     rawText: notification.message_text || '',
+    course: notification.short_name || notification.course_code || notification.course_name || extractManualCourse(notification.message_text) || '',
     deadline: notification.deadline || null,
     category: notification.category || null,
     urgencyLabel: notification.urgency_label || 'none',
@@ -173,7 +203,12 @@ function buildTaskFromNotification(notification) {
   }
 
   const meta = getSourceMeta(notification.source_type)
-  const course = extractManualCourse(notification.message_text) || notification.sender_name || meta.sourceLabel
+  const course = notification.short_name
+    || notification.course_code
+    || notification.course_name
+    || extractManualCourse(notification.message_text)
+    || notification.sender_name
+    || meta.sourceLabel
 
   return {
     id: String(notification.id),
@@ -184,6 +219,7 @@ function buildTaskFromNotification(notification) {
     deadline: notification.deadline || null,
     category: category || (isManual ? 'assignment' : null),
     content: extractNotificationPreview(notification.message_text),
+    rawText: notification.message_text || '',
     urgency: mapUrgencyLabelToTaskUrgency(notification.urgency_label),
     urgencyLabel: notification.urgency_label || 'none',
     source: meta.source,
@@ -205,22 +241,28 @@ export function AppProvider({ children }) {
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
 
   const persistUser = useCallback((nextUser) => {
+    localStorage.setItem('acadpulse_user_id', nextUser.id || '')
     localStorage.setItem('acadpulse_user', nextUser.fullName)
     localStorage.setItem('acadpulse_user_email', nextUser.email || '')
+    localStorage.setItem('acadpulse_user_phone', nextUser.phone || '')
+    if (nextUser.university) localStorage.setItem('acadpulse_university', nextUser.university)
     setUser(nextUser)
     setAuthUser(nextUser)
   }, [])
 
   const clearAuthSession = useCallback(() => {
     localStorage.removeItem('acadpulse_token')
+    localStorage.removeItem('acadpulse_user_id')
     localStorage.removeItem('acadpulse_user')
     localStorage.removeItem('acadpulse_user_email')
+    localStorage.removeItem('acadpulse_user_phone')
     setAuthToken(null)
     setAuthUser(null)
     setUser({
       fullName: 'Scholar',
       email: 'student@university.edu',
-      phone: '+92 300 1234567',
+      phone: '',
+      university: '',
     })
   }, [])
 
@@ -228,11 +270,15 @@ export function AppProvider({ children }) {
     localStorage.setItem('acadpulse_token', token)
     setAuthToken(token)
     persistUser({
+      id: nextUser.id || '',
       fullName: nextUser.name || nextUser.fullName || 'Scholar',
       email: nextUser.email || '',
-      phone: user.phone,
+      phone: nextUser.phone || user.phone,
+      university: nextUser.university || user.university || '',
+      degree: nextUser.degree || user.degree || '',
+      semester: nextUser.semester || user.semester || '',
     })
-  }, [persistUser, user.phone])
+  }, [persistUser, user])
 
   const apiFetch = useCallback(
     async (path, options = {}, requireAuth = true) => {
@@ -282,9 +328,13 @@ export function AppProvider({ children }) {
     try {
       const payload = await apiFetch('/auth/me')
       const nextUser = {
+        id: payload.user.id,
         fullName: payload.user.name,
         email: payload.user.email,
-        phone: user.phone,
+        phone: payload.user.phone || user.phone,
+        university: payload.user.university || user.university || '',
+        degree: payload.user.degree || user.degree || '',
+        semester: payload.user.semester || user.semester || '',
       }
       persistUser(nextUser)
       setAuthReady(true)
@@ -296,13 +346,13 @@ export function AppProvider({ children }) {
       setAuthReady(true)
       return null
     }
-  }, [apiFetch, authToken, clearAuthSession, persistUser, user.phone])
+  }, [apiFetch, authToken, clearAuthSession, persistUser, user])
 
   const refreshNotifications = useCallback(async () => {
-    const payload = await apiFetch('/notifications?include_completed=false&limit=200', {}, false)
+    const payload = await apiFetch('/notifications?include_completed=true&limit=200', {}, false)
     const backendRows = Array.isArray(payload?.notifications) ? payload.notifications : []
     const nextNotifications = backendRows.map(buildUiNotification)
-    const nextTasks = backendRows.map(buildTaskFromNotification).filter(Boolean)
+    const nextTasks = sortTasksByPriority(backendRows.map(buildTaskFromNotification).filter(Boolean))
     setNotifications(nextNotifications)
     setTasks(nextTasks)
     return {
@@ -339,7 +389,7 @@ export function AppProvider({ children }) {
     }
 
     tasks
-      .filter((task) => ['high', 'critical'].includes(task.urgencyLabel))
+      .filter((task) => !task.isCompleted && ['high', 'critical'].includes(task.urgencyLabel))
       .forEach((task) => {
         const notificationKey = String(task.backendId || task.id)
         if (notifiedTaskIdsRef.current.has(notificationKey)) {
@@ -373,16 +423,23 @@ export function AppProvider({ children }) {
     return payload
   }, [apiFetch, completeLoginSession])
 
-  const register = useCallback(async (name, email, password) => {
-    return apiFetch(
+  const register = useCallback(async (input, maybeEmail, maybePassword) => {
+    const payloadBody = typeof input === 'object'
+      ? input
+      : { name: input, email: maybeEmail, password: maybePassword }
+    const payload = await apiFetch(
       '/auth/register',
       {
         method: 'POST',
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify(payloadBody),
       },
       false,
     )
-  }, [apiFetch])
+    if (payload?.token && payload?.user) {
+      completeLoginSession(payload.token, payload.user)
+    }
+    return payload
+  }, [apiFetch, completeLoginSession])
 
   const logout = useCallback(() => {
     clearAuthSession()
@@ -407,7 +464,7 @@ export function AppProvider({ children }) {
           title: taskInput.title,
           course: taskInput.course || '',
           description: taskInput.content || '',
-          type: 'assignment',
+          type: taskInput.type || 'assignment',
           due_date: taskInput.dueDate,
           due_time: taskInput.dueTime,
         }),

@@ -1,103 +1,122 @@
-import { BrainCircuit, GraduationCap, Smartphone, Globe, Zap, RadioTower } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-
-const options = [
-  {
-    key: 'google',
-    title: 'Continue with Google',
-    subtitle: 'Use your university Gmail account',
-    icon: Globe,
-    iconClass: 'signup-method-google',
-    path: '/signup/google',
-    cardClass: 'signup-choice-card-left',
-  },
-  {
-    key: 'whatsapp',
-    title: 'Continue with WhatsApp',
-    subtitle: 'Use your WhatsApp number to verify',
-    icon: Smartphone,
-    iconClass: 'signup-method-whatsapp',
-    path: '/signup/whatsapp',
-    cardClass: 'signup-choice-card-right',
-  },
-];
+import { Link, useNavigate } from 'react-router-dom';
+import { GraduationCap, Lock, Mail, Phone, School, TriangleAlert, User } from 'lucide-react';
+import AuthShell from '../components/AuthShell';
+import { useAppContext } from '../context/AppContext';
 
 export default function Signup() {
   const navigate = useNavigate();
-  const [selectedMethod, setSelectedMethod] = useState('');
+  const { register } = useAppContext();
+  const [form, setForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    university: '',
+    password: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [formError, setFormError] = useState('');
 
-  const chooseMethod = (option) => {
-    setSelectedMethod(option.key);
-    window.setTimeout(() => navigate(option.path), 300);
+  const updateField = (field, value) => {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFormError('');
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!form.name.trim() || !form.phone.trim() || !form.university.trim() || form.password.length < 8) {
+      setFormError('Name, phone, university, and an 8 character password are required.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await register({
+        name: form.name.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim() || undefined,
+        university: form.university.trim(),
+        password: form.password,
+      });
+      localStorage.removeItem('acadpulse_onboarding_complete');
+      navigate('/onboarding', { replace: true });
+    } catch (error) {
+      setFormError(error?.payload?.detail || error?.message || 'Unable to create account');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="signup-onboarding">
-      <div className="signup-floating-orb orb-a"></div>
-      <div className="signup-floating-orb orb-b"></div>
-      <div className="signup-floating-orb orb-c"></div>
-
-      <div className="signup-header">
-        <div className="signup-header-logo">
-          <div className="signup-header-mark">
-            <GraduationCap size={24} />
+    <AuthShell>
+      <div className="auth-card auth-signin-card auth-card-enter">
+        {formError && (
+          <div className="auth-banner auth-banner-danger auth-banner-fade">
+            <TriangleAlert size={16} />
+            <span>{formError}</span>
           </div>
-          <div className="signup-header-wordmark">AcadPulse</div>
-        </div>
-        <div className="signup-progress">
-          <span className="signup-progress-dot signup-progress-active"></span>
-          <span className="signup-progress-dot"></span>
-          <span className="signup-progress-dot"></span>
-        </div>
-      </div>
+        )}
 
-      <div className="signup-hero">
-        <h1>How would you like to join?</h1>
-        <p>Choose your preferred way to get started</p>
-      </div>
-
-      <div className="signup-choice-grid">
-        {options.map((option) => {
-          const Icon = option.icon;
-          return (
-            <button
-              key={option.key}
-              type="button"
-              className={`signup-choice-card ${option.cardClass} ${selectedMethod === option.key ? 'selected' : ''}`}
-              onClick={() => chooseMethod(option)}
-            >
-              <div className={`signup-choice-icon ${option.iconClass}`}>
-                <Icon size={44} />
-              </div>
-              <h2>{option.title}</h2>
-              <p>{option.subtitle}</p>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="signup-feature-strip">
-        <div className="signup-feature-chip">
-          <RadioTower size={14} />
-          <span>Connects everything</span>
+        <div className="auth-card-header">
+          <span className="auth-kicker">New account</span>
+          <h2>Create AcadPulse account</h2>
+          <p>Use your own phone number and university details.</p>
         </div>
-        <div className="signup-feature-chip">
-          <BrainCircuit size={14} />
-          <span>Understands Roman Urdu</span>
-        </div>
-        <div className="signup-feature-chip">
-          <Zap size={14} />
-          <span>Never miss a deadline</span>
-        </div>
-      </div>
 
-      <div className="signup-footer-link">
-        <span>Already have an account?</span>
-        <Link to="/login" className="auth-link auth-link-strong">
-          Sign in
-        </Link>
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <div className="auth-field-group">
+            <label htmlFor="signup-name">Full name</label>
+            <div className="auth-input-wrap">
+              <User size={16} />
+              <input id="signup-name" value={form.name} onChange={(event) => updateField('name', event.target.value)} placeholder="Areeba Khan" />
+            </div>
+          </div>
+
+          <div className="auth-field-group">
+            <label htmlFor="signup-phone">Phone number</label>
+            <div className="auth-input-wrap">
+              <Phone size={16} />
+              <input id="signup-phone" value={form.phone} onChange={(event) => updateField('phone', event.target.value)} placeholder="+92 300 1234567" />
+            </div>
+          </div>
+
+          <div className="auth-field-group">
+            <label htmlFor="signup-email">Email address <span style={{ color: 'var(--text-muted)' }}>optional</span></label>
+            <div className="auth-input-wrap">
+              <Mail size={16} />
+              <input id="signup-email" type="email" value={form.email} onChange={(event) => updateField('email', event.target.value)} placeholder="student@university.edu" />
+            </div>
+          </div>
+
+          <div className="auth-field-group">
+            <label htmlFor="signup-university">University</label>
+            <div className="auth-input-wrap">
+              <School size={16} />
+              <input id="signup-university" value={form.university} onChange={(event) => updateField('university', event.target.value)} placeholder="FAST, LUMS, COMSATS..." />
+            </div>
+          </div>
+
+          <div className="auth-field-group">
+            <label htmlFor="signup-password">Password</label>
+            <div className="auth-input-wrap">
+              <Lock size={16} />
+              <input id="signup-password" type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} placeholder="At least 8 characters" />
+            </div>
+          </div>
+
+          <button type="submit" className="auth-submit-btn" disabled={loading}>
+            {loading ? <span className="auth-spinner"></span> : 'Create account'}
+          </button>
+        </form>
+
+        <div className="auth-card-footer">
+          <GraduationCap size={16} />
+          <span>Already have an account?</span>
+          <Link to="/login" className="auth-link auth-link-strong auth-link-arrow">
+            {'Sign in ->'}
+          </Link>
+        </div>
       </div>
-    </div>
+    </AuthShell>
   );
 }

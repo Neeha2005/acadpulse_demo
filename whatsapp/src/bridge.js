@@ -15,7 +15,12 @@ export async function sendIncomingMessage(message) {
   const delivered = await postMessage(endpoint, message);
 
   if (!delivered) {
-    await queueMessage(message);
+    await queueMessage(message).catch((error) => {
+      logger.error(
+        { error: error.message },
+        "Could not queue WhatsApp message after FastAPI bridge failure",
+      );
+    });
   }
 }
 
@@ -74,8 +79,15 @@ async function flushQueuedMessages(endpoint) {
   for (const entry of entries) {
     const delivered = await postMessage(endpoint, entry.message);
 
-    if (!delivered && entry.attempts + 1 < MAX_ATTEMPTS) {
-      retryEntries.push({ ...entry, attempts: entry.attempts + 1 });
+    if (!delivered) {
+      if (entry.attempts + 1 < MAX_ATTEMPTS) {
+        retryEntries.push({ ...entry, attempts: entry.attempts + 1 });
+      } else {
+        logger.error(
+          { attempts: entry.attempts + 1, messageId: entry.message?.message_id },
+          "Dropping WhatsApp message after max FastAPI bridge retry attempts",
+        );
+      }
     }
   }
 

@@ -1,11 +1,13 @@
 import { ArrowLeft, BookOpen, Building2, CheckCircle2, Globe, GraduationCap } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
+import { useAppContext } from '../context/AppContext'
 
 const semesters = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th']
 
 export default function SignupGoogle() {
   const navigate = useNavigate()
+  const { register, login } = useAppContext()
   const [step, setStep] = useState('oauth')
   const [loading, setLoading] = useState(false)
   const [form, setForm] = useState({
@@ -22,15 +24,29 @@ export default function SignupGoogle() {
     }, 1000)
   }
 
-  const completeSetup = (event) => {
+  const completeSetup = async (event) => {
     event.preventDefault()
+    const email = 'google-demo@acadpulse.local'
+    const password = 'AcadPulse@12345'
     setStep('success')
-    setTimeout(() => {
+    try {
+      await register('Google Student', email, password)
+    } catch {
+      // Demo signup may already exist; login below handles the existing account.
+    }
+    try {
+      await login(email, password)
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      navigate('/onboarding', {
+        replace: true,
+        state: { firstRun: true },
+      })
+    } catch {
       navigate('/login', {
         replace: true,
-        state: { signupSuccess: 'Account created! Welcome to AcadPulse.' },
+        state: { signupSuccess: 'Account is ready. Please sign in.' },
       })
-    }, 1500)
+    }
   }
 
   return (

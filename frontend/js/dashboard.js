@@ -34,14 +34,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const card = document.createElement('div');
             card.className = `task-card ${task.urgency === 'urgent' ? 'urgent' : ''}`;
             
-            let colorCls = '';
+            const colorCls = task.source === 'whatsapp'
+                ? 'text-whatsapp'
+                : task.source === 'classroom'
+                    ? 'text-warning'
+                    : task.source === 'gmail'
+                        ? 'text-urgent'
+                        : 'text-primary';
             // fa-brands or fa-solid fallback fix
             let iconFormat = task.source === 'gmail' || task.source === 'manual' ? 'fa-solid' : 'fa-brands';
-
-            if(task.source === 'whatsapp') colorCls = 'text-whatsapp';
-            else if(task.source === 'classroom') colorCls = 'text-warning';
-            else if(task.source === 'gmail') colorCls = 'text-urgent';
-            else colorCls = 'text-primary';
 
             card.innerHTML = `
                 <div class="task-top">

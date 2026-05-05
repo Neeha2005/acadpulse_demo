@@ -15,8 +15,10 @@ LABEL_ALIASES = {
     "LABEL_2": "event",
     "LABEL_3": "quiz",
     "LABEL_4": "noise",
+    "LABEL_5": "material",
+    "LABEL_6": "exam_schedule",
 }
-ALLOWED_LABELS = {"announcement", "assignment", "event", "quiz", "noise"}
+ALLOWED_LABELS = {"announcement", "assignment", "event", "quiz", "noise", "material", "exam_schedule"}
 
 
 def get_local_classifier_path() -> Path:

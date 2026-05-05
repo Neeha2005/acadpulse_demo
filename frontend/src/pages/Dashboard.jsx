@@ -8,16 +8,17 @@ export default function Dashboard() {
   const [isTasksExpanded, setIsTasksExpanded] = useState(false);
   
   const firstName = user.fullName ? user.fullName.split(' ')[0] : 'Scholar';
-  const urgentCount = tasks.filter(task => task.urgency === 'urgent').length;
-  const pendingCount = tasks.length;
+  const pendingTasks = tasks.filter(task => !task.isCompleted);
+  const urgentCount = pendingTasks.filter(task => task.urgency === 'urgent').length;
+  const pendingCount = pendingTasks.length;
   const messageCount = notifications.length;
-  const risingCount = Math.max(0, Math.ceil(tasks.length / 2));
+  const risingCount = Math.max(0, Math.ceil(pendingTasks.length / 2));
 
   const filteredNotifs = activeFilter === 'All' 
      ? notifications 
      : notifications.filter(n => n.source.toLowerCase() === activeFilter.toLowerCase());
 
-  const urgentTasks = isTasksExpanded ? tasks : tasks.slice(0, 3);
+  const urgentTasks = isTasksExpanded ? pendingTasks : pendingTasks.slice(0, 3);
 
   return (
     <div className="dashboard-scroll">
@@ -103,6 +104,7 @@ export default function Dashboard() {
                <button className={`filter-btn glass-filter-pill ${activeFilter === 'WhatsApp' ? 'active' : ''}`} onClick={() => setActiveFilter('WhatsApp')}>WhatsApp</button>
                <button className={`filter-btn glass-filter-pill ${activeFilter === 'Classroom' ? 'active' : ''}`} onClick={() => setActiveFilter('Classroom')}>Classroom</button>
                <button className={`filter-btn glass-filter-pill ${activeFilter === 'Gmail' ? 'active' : ''}`} onClick={() => setActiveFilter('Gmail')}>Gmail</button>
+               <button className={`filter-btn glass-filter-pill ${activeFilter === 'Manual' ? 'active' : ''}`} onClick={() => setActiveFilter('Manual')}>Manual</button>
             </div>
           </div>
           <div className="notification-stream" style={{padding: '0 24px 24px'}}>
@@ -112,6 +114,7 @@ export default function Dashboard() {
                   <div className="notif-content">
                      <div className="notif-header">
                         <span className="notif-sender">{n.sender}</span>
+                        <span className={`source-mini-badge ${n.source}`}>{n.sourceLabel}</span>
                         <span className="notif-time">{n.time}</span>
                      </div>
                      <h4 className="notif-title">{n.title}</h4>

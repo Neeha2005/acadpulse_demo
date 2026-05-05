@@ -1,11 +1,13 @@
 import { ArrowLeft, BookOpen, Building2, CheckCircle2, GraduationCap, Phone, ShieldCheck } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAppContext } from '../context/AppContext'
 
 const semesters = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th']
 
 export default function SignupWhatsApp() {
   const navigate = useNavigate()
+  const { register, login } = useAppContext()
   const [step, setStep] = useState('phone')
   const [phone, setPhone] = useState('')
   const [sendingCode, setSendingCode] = useState(false)
@@ -82,15 +84,30 @@ export default function SignupWhatsApp() {
     setStep('profile')
   }
 
-  const completeSetup = (event) => {
+  const completeSetup = async (event) => {
     event.preventDefault()
+    const normalizedPhone = phone.replace(/\D/g, '') || '3000000000'
+    const email = `whatsapp-${normalizedPhone}@acadpulse.local`
+    const password = 'AcadPulse@12345'
     setStep('success')
-    window.setTimeout(() => {
+    try {
+      await register('WhatsApp Student', email, password)
+    } catch {
+      // Demo signup may already exist; login below handles the existing account.
+    }
+    try {
+      await login(email, password)
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      navigate('/onboarding', {
+        replace: true,
+        state: { firstRun: true },
+      })
+    } catch {
       navigate('/login', {
         replace: true,
-        state: { signupSuccess: 'Account created! Welcome to AcadPulse.' },
+        state: { signupSuccess: 'Account is ready. Please sign in.' },
       })
-    }, 1500)
+    }
   }
 
   return (

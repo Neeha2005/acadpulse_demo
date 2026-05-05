@@ -1,4 +1,3 @@
-import React from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function SearchDropdown({ query, onSelect }) {
@@ -14,11 +13,13 @@ export default function SearchDropdown({ query, onSelect }) {
     (t.course && t.course.toLowerCase().includes(lowerQuery)) ||
     (t.content && t.content.toLowerCase().includes(lowerQuery))
   ).map(t => {
-    let colorCls = '';
-    if(t.source === 'whatsapp') colorCls = 'text-whatsapp';
-    else if(t.source === 'classroom') colorCls = 'text-warning';
-    else if(t.source === 'gmail') colorCls = 'text-urgent';
-    else colorCls = 'text-primary';
+    const colorCls = t.source === 'whatsapp'
+      ? 'text-whatsapp'
+      : t.source === 'classroom'
+        ? 'text-warning'
+        : t.source === 'gmail'
+          ? 'text-urgent'
+          : 'text-primary';
     
     let iconFormat = (t.source === 'gmail' || t.source === 'manual') ? 'fa-solid' : 'fa-brands';
 
@@ -38,11 +39,13 @@ export default function SearchDropdown({ query, onSelect }) {
     (n.sender && n.sender.toLowerCase().includes(lowerQuery)) ||
     (n.preview && n.preview.toLowerCase().includes(lowerQuery))
   ).map(n => {
-    let colorCls = '';
-    if(n.source === 'whatsapp') colorCls = 'text-whatsapp';
-    else if(n.source === 'classroom') colorCls = 'text-warning';
-    else if(n.source === 'gmail') colorCls = 'text-urgent';
-    else colorCls = 'text-primary';
+    const colorCls = n.source === 'whatsapp'
+      ? 'text-whatsapp'
+      : n.source === 'classroom'
+        ? 'text-warning'
+        : n.source === 'gmail'
+          ? 'text-urgent'
+          : 'text-primary';
 
     return {
       id: `notif_${n.id}`,

@@ -3,7 +3,7 @@ import { useAppContext } from '../context/AppContext';
 
 export default function AddTaskModal({ onClose }) {
   const { createManualTask } = useAppContext();
-  const [formData, setFormData] = useState({ title: '', course: '', dueDate: '', dueTime: '', content: '' });
+  const [formData, setFormData] = useState({ title: '', course: '', dueDate: '', dueTime: '', content: '', type: 'assignment' });
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -47,6 +47,17 @@ export default function AddTaskModal({ onClose }) {
             <div>
               <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>Task Title <span className="text-urgent">*</span></label>
               <input type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required placeholder="e.g. Write Introduction for Research Paper" style={{width: '100%', padding: '12px 16px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}} />
+            </div>
+            <div>
+              <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>Category</label>
+              <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} style={{width: '100%', padding: '12px 16px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}}>
+                <option value="assignment">Assignment</option>
+                <option value="quiz">Quiz</option>
+                <option value="announcement">Announcement</option>
+                <option value="material">Material</option>
+                <option value="event">Event</option>
+                <option value="exam_schedule">Exam Schedule</option>
+              </select>
             </div>
             
             <div style={{display: 'flex', gap: 16}}>

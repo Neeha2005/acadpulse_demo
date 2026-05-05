@@ -15,6 +15,7 @@ backend/token.json
 node_modules/
 npm-debug.log*
 yarn-error.log*
+*.log
 frontend/dist/
 
 # ── WhatsApp session credentials (NEVER commit) ───

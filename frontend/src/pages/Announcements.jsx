@@ -41,6 +41,7 @@ function getAnnouncementTone(notification) {
 export default function Announcements() {
   const { notifications, refreshNotifications } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
+  const [courseFilter, setCourseFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -54,13 +55,20 @@ export default function Announcements() {
 
   const visibleAnnouncements = useMemo(() => announcements.filter((announcement) => {
     const source = (announcement.sourceLabel || announcement.source || '').toLowerCase();
+    const course = announcement.course || 'Unassigned';
 
     if (sourceFilter !== 'All' && source !== sourceFilter.toLowerCase()) return false;
+    if (courseFilter !== 'All' && course !== courseFilter) return false;
     if (dateFilter === 'Today' && !isToday(announcement.deadline || announcement.receivedAt || announcement.createdAt)) return false;
     if (dateFilter === 'This Week' && !isThisWeek(announcement.deadline || announcement.receivedAt || announcement.createdAt)) return false;
     if (dateFilter === 'With Deadline' && !announcement.deadline) return false;
     return true;
-  }), [announcements, dateFilter, sourceFilter]);
+  }), [announcements, courseFilter, dateFilter, sourceFilter]);
+
+  const courseOptions = useMemo(
+    () => ['All', ...Array.from(new Set(announcements.map((item) => item.course || 'Unassigned'))).sort()],
+    [announcements],
+  );
 
   const classroomCount = announcements.filter((item) => item.source === 'classroom').length;
   const gmailCount = announcements.filter((item) => item.source === 'gmail').length;
@@ -149,6 +157,11 @@ export default function Announcements() {
               </button>
             ))}
           </div>
+          <select className="input-field" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+            {courseOptions.map((course) => (
+              <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
+            ))}
+          </select>
           <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
             {DATE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>

@@ -19,13 +19,23 @@ export default function TaskCard({ task }) {
   };
 
   let iconFormat = task.source === 'gmail' || task.source === 'manual' ? 'fa-solid' : 'fa-brands';
-  let colorCls = '';
-  if(task.source === 'whatsapp') colorCls = 'text-whatsapp';
-  else if(task.source === 'classroom') colorCls = 'text-warning';
-  else if(task.source === 'gmail') colorCls = 'text-urgent';
-  else colorCls = 'text-primary';
+  const colorCls = task.source === 'whatsapp'
+    ? 'text-whatsapp'
+    : task.source === 'classroom'
+      ? 'text-warning'
+      : task.source === 'gmail'
+        ? 'text-urgent'
+        : 'text-primary';
 
   const { setActiveTaskModal } = useAppContext();
+  const urgencyLabel = (task.urgencyLabel || 'none').toLowerCase();
+  const urgencyBadgeClass = urgencyLabel === 'overdue'
+    ? 'badge-muted'
+    : task.urgency === 'urgent'
+      ? 'badge-warning'
+      : task.urgency === 'warning'
+        ? 'badge-warning'
+        : 'badge-success';
 
   return (
     <div 
@@ -43,6 +53,7 @@ export default function TaskCard({ task }) {
       <h3 className="task-title">{task.title}</h3>
       <div className="task-footer">
         <span className={`task-source ${colorCls}`}><i className={`${iconFormat} ${task.icon}`}></i> {task.sourceLabel}</span>
+        {urgencyLabel !== 'none' && <span className={`badge ${urgencyBadgeClass}`}>{urgencyLabel}</span>}
         <button className="icon-btn complete-task-btn" style={{width: 28, height: 28, fontSize: 12}} onClick={handleComplete}>
           {completeState === 'syncing' ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-check"></i>}
         </button>

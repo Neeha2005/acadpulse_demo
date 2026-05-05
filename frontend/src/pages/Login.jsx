@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff, Lock, Mail, TriangleAlert, WifiOff } from 'lucide-react'
 import AuthShell from '../components/AuthShell'
+import { useAppContext } from '../context/AppContext'
 
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { apiFetch, login, authUser, completeLoginSession } = useAppContext()
+  const oauthParams = useMemo(() => new URLSearchParams(location.search), [location.search])
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -13,7 +16,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [shake, setShake] = useState(false)
   const [networkError, setNetworkError] = useState('')
-  const [formError, setFormError] = useState('')
+  const [formError, setFormError] = useState(() => oauthParams.get('oauth_error') || '')
   const [failedAttempts, setFailedAttempts] = useState(0)
   const [fieldErrors, setFieldErrors] = useState({})
 
@@ -21,6 +24,21 @@ export default function Login() {
     () => location.state?.signupSuccess || '',
     [location.state],
   )
+
+  useEffect(() => {
+    const oauthToken = oauthParams.get('oauth_token')
+
+    if (oauthToken) {
+      const oauthName = oauthParams.get('oauth_name') || 'Google User'
+      const oauthEmail = oauthParams.get('oauth_email') || ''
+      completeLoginSession(oauthToken, {
+        name: oauthName,
+        fullName: oauthName,
+        email: oauthEmail,
+      })
+      navigate('/onboarding', { replace: true })
+    }
+  }, [completeLoginSession, navigate, oauthParams])
 
   useEffect(() => {
     const syncStatus = () => {
@@ -41,7 +59,7 @@ export default function Login() {
   const validate = () => {
     const nextErrors = {}
 
-    if (!email.trim()) nextErrors.email = 'Email address is required'
+    if (!email.trim()) nextErrors.email = 'Phone or email is required'
     if (!password.trim()) nextErrors.password = 'Password is required'
 
     setFieldErrors(nextErrors)
@@ -64,10 +82,20 @@ export default function Login() {
       return
     }
 
-    setLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 900))
-    setLoading(false)
-    navigate('/dashboard')
+    try {
+      setLoading(true)
+      await login(email.trim(), password)
+      const storedUserId = localStorage.getItem('acadpulse_user_id') || authUser?.id || ''
+      const query = storedUserId ? `?user_id=${encodeURIComponent(storedUserId)}` : ''
+      const payload = await apiFetch(`/onboarding/status${query}`, {}, false)
+      navigate(payload?.completed ? '/dashboard' : '/onboarding')
+    } catch (error) {
+      setFormError(error?.payload?.detail || error?.message || 'Unable to sign in')
+      setFailedAttempts((prev) => prev + 1)
+      triggerShake()
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -112,13 +140,13 @@ export default function Login() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <div className="auth-field-group">
-            <label htmlFor="login-email">Email address</label>
+            <label htmlFor="login-email">Phone or email</label>
             <div className={`auth-input-wrap ${fieldErrors.email ? 'has-error' : ''}`}>
               <Mail size={16} />
               <input
                 id="login-email"
-                type="email"
-                placeholder="student@university.edu"
+                type="text"
+                placeholder="+92 300 1234567 or student@university.edu"
                 value={email}
                 onChange={(event) => {
                   setEmail(event.target.value)
@@ -173,27 +201,6 @@ export default function Login() {
 
           <button type="submit" className="auth-submit-btn" disabled={loading}>
             {loading ? <span className="auth-spinner"></span> : 'Sign In'}
-          </button>
-
-          <div className="auth-divider">
-            <span>or continue with</span>
-          </div>
-
-          <button
-            type="button"
-            className="auth-google-btn"
-            onClick={() => {
-              setLoading(true)
-              setTimeout(() => {
-                setLoading(false)
-                navigate('/dashboard')
-              }, 800)
-            }}
-          >
-            <span className="auth-google-mark" aria-hidden="true">
-              <span className="auth-google-g">G</span>
-            </span>
-            <span>Continue with Google</span>
           </button>
         </form>
 

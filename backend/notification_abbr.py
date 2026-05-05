@@ -47,23 +47,6 @@ DEFAULT_SYSTEM_ABBREVIATIONS = {
         "HW": "homework",
         "marks": "marks",
     },
-    "course": {
-        "NLP": "Natural Language Processing",
-        "OS": "Operating Systems",
-        "DSA": "Data Structures and Algorithms",
-        "DB": "Database Systems",
-        "SE": "Software Engineering",
-        "AI": "Artificial Intelligence",
-        "ML": "Machine Learning",
-        "CN": "Computer Networks",
-        "TOC": "Theory of Computation",
-        "HCI": "Human Computer Interaction",
-        "OOP": "Object Oriented Programming",
-        "DS": "Data Structures",
-        "LA": "Linear Algebra",
-        "DLD": "Digital Logic Design",
-        "CA": "Computer Architecture",
-    },
     "general": {
         "OK": "OK",
         "PM": "PM",
@@ -114,6 +97,7 @@ def _load_user_abbreviations(user_id: int) -> Dict[str, str]:
             SELECT abbreviation, expansion
             FROM abbreviations
             WHERE user_id = %s
+              AND category <> 'course'
             ORDER BY LENGTH(abbreviation) DESC
             """,
             (user_id,),
@@ -124,6 +108,35 @@ def _load_user_abbreviations(user_id: int) -> Dict[str, str]:
     except Exception as e:
         logger.error(f"Error loading abbreviations for user {user_id}: {e}")
         return {}
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _load_user_course_terms(user_id: int) -> set:
+    """Load course codes, short names, names, and aliases so they are not treated as unknown abbreviations."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    terms = set()
+    try:
+        cur.execute(
+            """
+            SELECT c.course_code, c.short_name, c.course_name, ca.alias
+            FROM courses c
+            JOIN user_courses uc ON uc.course_id = c.id
+            LEFT JOIN course_aliases ca ON ca.course_id = c.id
+            WHERE uc.user_id = %s
+            """,
+            (user_id,),
+        )
+        for row in cur.fetchall():
+            for value in row:
+                if value:
+                    terms.add(str(value).strip().lower())
+        return terms
+    except Exception as e:
+        logger.debug(f"Error loading course terms for unknown abbreviation detection: {e}")
+        return set()
     finally:
         cur.close()
         conn.close()
@@ -261,7 +274,7 @@ def add_or_update_abbreviation(
     if not expansion or len(expansion) > 100:
         return False, {"error": "Expansion must be 1-100 characters"}
     
-    if category not in ["course", "time", "action", "general"]:
+    if category not in ["time", "action", "general"]:
         return False, {"error": "Invalid category"}
     
     conn = get_db_connection()
@@ -372,6 +385,7 @@ def get_user_abbreviations(user_id: int) -> Dict:
             SELECT category, abbreviation, expansion, source, use_count
             FROM abbreviations
             WHERE user_id = %s
+              AND category <> 'course'
             ORDER BY category, abbreviation
             """,
             (user_id,),
@@ -418,8 +432,9 @@ def detect_unknown_abbreviations(text: str, user_id: int) -> List[str]:
     if not text or not user_id:
         return []
     
-    # Get existing abbreviations
+    # Get existing non-course abbreviations
     abbr_dict = _get_cached_abbreviations(user_id)
+    course_terms = _load_user_course_terms(user_id)
     
     # Common English words to exclude
     common_words = {"I", "A", "OK", "TV", "PM", "AM", "GO", "NO", "YES", "OR", "AND"}
@@ -428,7 +443,7 @@ def detect_unknown_abbreviations(text: str, user_id: int) -> List[str]:
     potential_abbrs = set()
     for match in re.finditer(r'\b[A-Z]{2,4}\b', text):
         word = match.group(0)
-        if word not in common_words and word.lower() not in abbr_dict:
+        if word not in common_words and word.lower() not in abbr_dict and word.lower() not in course_terms:
             potential_abbrs.add(word)
     
     conn = get_db_connection()
