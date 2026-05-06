@@ -18,10 +18,12 @@ export default function AddTaskModal({ onClose }) {
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    apiFetch('/courses', {}, false)
+    const userId = authUser?.id || localStorage.getItem('acadpulse_user_id') || '';
+    const query = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+    apiFetch(`/courses${query}`, {}, false)
       .then(payload => setCourses(Array.isArray(payload?.courses) ? payload.courses : []))
       .catch(() => {});
-  }, [apiFetch]);
+  }, [apiFetch, authUser?.id]);
 
   const needsDeadline = DEADLINE_REQUIRED.has(formData.type);
 

@@ -231,15 +231,6 @@ function buildTaskFromNotification(notification) {
   }
 }
 
-function getStoredTheme() {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY)
-  return stored === 'light' ? 'light' : 'dark'
-}
-
-function applyThemeToDocument(theme) {
-  document.documentElement.setAttribute('data-theme', theme)
-}
-
 export function AppProvider({ children }) {
   const [tasks, setTasks] = useState([])
   const [notifications, setNotifications] = useState([])
@@ -251,21 +242,12 @@ export function AppProvider({ children }) {
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
   const [googleConnected, setGoogleConnected] = useState(false)
   const [whatsappStatus, setWhatsappStatus] = useState('unknown')
-  const [theme, setTheme] = useState(() => {
-    const t = getStoredTheme()
-    applyThemeToDocument(t)
-    return t
-  })
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
   const userRef = useRef(user)
 
-  const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
-      const next = prev === 'dark' ? 'light' : 'dark'
-      localStorage.setItem(THEME_STORAGE_KEY, next)
-      applyThemeToDocument(next)
-      return next
-    })
+  useEffect(() => {
+    localStorage.setItem(THEME_STORAGE_KEY, 'dark')
+    document.documentElement.setAttribute('data-theme', 'dark')
   }, [])
 
   const persistUser = useCallback((nextUser) => {
@@ -402,18 +384,20 @@ export function AppProvider({ children }) {
   // Fetch integration connection statuses when authenticated
   useEffect(() => {
     if (!authToken || !authReady) return
+    const uid = authUser?.id || userRef.current?.id || localStorage.getItem('acadpulse_user_id') || ''
     const refreshIntegrationStatuses = () => {
       apiFetch('/google/status').then(payload => {
       setGoogleConnected(Boolean(payload?.connected))
     }).catch(() => {})
-      apiFetch('/whatsapp/status', {}, false).then(payload => {
+      const whatsappPath = uid ? `/whatsapp/status?user_id=${encodeURIComponent(uid)}` : '/whatsapp/status'
+      apiFetch(whatsappPath, {}, false).then(payload => {
       setWhatsappStatus(payload?.whatsapp?.status || 'unknown')
     }).catch(() => {})
     }
     refreshIntegrationStatuses()
     window.addEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
     return () => window.removeEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
-  }, [authToken, authReady, apiFetch])
+  }, [authToken, authReady, apiFetch, authUser?.id])
 
   useEffect(() => {
     if (!authToken) {
@@ -520,6 +504,7 @@ export function AppProvider({ children }) {
       {
         method: 'POST',
         body: JSON.stringify({
+          user_id: taskInput.user_id || authUser?.id || userRef.current?.id || undefined,
           title: taskInput.title,
           course: taskInput.course || '',
           description: taskInput.content || '',
@@ -545,7 +530,7 @@ export function AppProvider({ children }) {
 
     await refreshNotifications()
     return null
-  }, [apiFetch, refreshNotifications])
+  }, [apiFetch, refreshNotifications, authUser?.id])
 
   const completeTask = useCallback(async (task) => {
     if (task?.backendId) {
@@ -594,8 +579,6 @@ export function AppProvider({ children }) {
       completeLoginSession,
       refreshAuthenticatedUser,
       refreshNotifications,
-      theme,
-      toggleTheme,
       googleConnected,
       whatsappStatus,
     }),
@@ -620,8 +603,6 @@ export function AppProvider({ children }) {
       completeLoginSession,
       refreshAuthenticatedUser,
       refreshNotifications,
-      theme,
-      toggleTheme,
       googleConnected,
       whatsappStatus,
     ],

@@ -14,7 +14,6 @@ import Integrations from './pages/Integrations'
 import WhatsAppIntegration from './pages/WhatsAppIntegration'
 import ClassroomIntegration from './pages/ClassroomIntegration'
 import GmailIntegration from './pages/GmailIntegration'
-import Chatbot from './pages/Chatbot'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import SignupGoogle from './pages/SignupGoogle'
@@ -94,13 +93,13 @@ function App() {
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/dashboard" element={<DashboardGate><Dashboard /></DashboardGate>} />
-        <Route path="/chat" element={<DashboardGate><Chatbot /></DashboardGate>} />
         <Route path="/assignments" element={<RequireAuth><AssignmentsQuizzes /></RequireAuth>} />
         <Route path="/events" element={<RequireAuth><Events /></RequireAuth>} />
         <Route path="/announcements" element={<RequireAuth><Announcements /></RequireAuth>} />
         <Route path="/materials" element={<RequireAuth><Materials /></RequireAuth>} />
         <Route path="/timetable" element={<RequireAuth><Timetable /></RequireAuth>} />
         <Route path="/courses" element={<RequireAuth><Courses /></RequireAuth>} />
+        <Route path="/chat" element={<Navigate to="/dashboard" replace />} />
         <Route path="/chatbot" element={<Navigate to="/dashboard" replace />} />
         <Route path="/integrations" element={<RequireAuth><Integrations /></RequireAuth>} />
         <Route path="/integrations/whatsapp" element={<RequireAuth><WhatsAppIntegration /></RequireAuth>} />

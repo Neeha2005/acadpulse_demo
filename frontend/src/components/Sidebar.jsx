@@ -14,9 +14,8 @@ function IntegrationStatusPill({ status }) {
   return <span className="nav-status-pill status-pill-muted nav-label">–</span>;
 }
 
-export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterReset, chatbotOpen, collapsed, onToggle }) {
-  const { user, theme, toggleTheme, googleConnected, whatsappStatus } = useAppContext();
-  const isLight = theme === 'light';
+export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed, onToggle }) {
+  const { user, googleConnected, whatsappStatus } = useAppContext();
   const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'SC';
 
   const waStatus = whatsappStatus === 'connected' ? 'connected'
@@ -64,14 +63,6 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
         <NavLink to="/courses" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Courses">
           <i className="fa-solid fa-book"></i> <span className="nav-label">Courses</span>
         </NavLink>
-        <button
-          className={`nav-item nav-button chat-nav-trigger ${chatbotOpen ? 'chat-open' : ''}`}
-          type="button"
-          title="Chatbot"
-          onClick={onOpenChatbot}
-        >
-          <i className="fa-solid fa-comments"></i> <span className="nav-label">Chatbot</span>
-        </button>
         <NavLink to="/onboarding" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Onboarding">
           <i className="fa-solid fa-compass"></i> <span className="nav-label">Onboarding</span>
         </NavLink>
@@ -109,15 +100,6 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
       <div className="sidebar-footer">
         <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset}>
           New Semester
-        </button>
-        <button
-          className="theme-toggle-btn"
-          type="button"
-          onClick={toggleTheme}
-          title={isLight ? 'Switch to dark mode' : 'Switch to light mode'}
-        >
-          <i className={`fa-solid ${isLight ? 'fa-moon' : 'fa-sun'}`}></i>
-          <span className="theme-toggle-label">{isLight ? 'Dark Mode' : 'Light Mode'}</span>
         </button>
         <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings">
           <div className="avatar">{initials}</div>

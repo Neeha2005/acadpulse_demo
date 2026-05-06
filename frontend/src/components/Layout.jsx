@@ -1,5 +1,5 @@
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import AccountModal from './AccountModal';
@@ -10,7 +10,6 @@ import { useAppContext } from '../context/AppContext';
 
 export default function Layout() {
   const location = useLocation();
-  const navigate = useNavigate();
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [showChatbot, setShowChatbot] = useState(false);
@@ -21,17 +20,8 @@ export default function Layout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { activeTaskModal, setActiveTaskModal, apiFetch, refreshNotifications } = useAppContext();
 
-  useEffect(() => {
-    if (location.pathname === '/chat') {
-      window.setTimeout(() => setShowChatbot(true), 0);
-    }
-  }, [location.pathname]);
-
   const closeChatbot = () => {
     setShowChatbot(false);
-    if (location.pathname === '/chat') {
-      navigate('/dashboard', { replace: true });
-    }
   };
 
   const handleSemesterReset = async () => {
@@ -56,13 +46,8 @@ export default function Layout() {
   return (
     <>
       <Sidebar 
-        onOpenAccount={() => setShowAccountModal(true)} 
+        onOpenAccount={() => setShowAccountModal(true)}
         onOpenSemesterReset={() => setShowSemesterReset(true)}
-        onOpenChatbot={() => {
-          setShowChatbot(true);
-          navigate('/chat');
-        }}
-        chatbotOpen={showChatbot}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
@@ -74,6 +59,16 @@ export default function Layout() {
       </div>
       {showAccountModal && <AccountModal onClose={() => setShowAccountModal(false)} />}
       {showAddTaskModal && <AddTaskModal onClose={() => setShowAddTaskModal(false)} />}
+      <button
+        className={`chat-fab ${showChatbot ? 'is-open' : ''}`}
+        type="button"
+        onClick={() => setShowChatbot(true)}
+        aria-label="Open AcadPulse AI"
+        title="AcadPulse AI"
+      >
+        <span className="chat-fab-glow"></span>
+        <i className="fa-solid fa-robot"></i>
+      </button>
       <Chatbot open={showChatbot} onClose={closeChatbot} />
       {showSemesterReset && (
         <div className="modal-overlay">

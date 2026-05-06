@@ -65,31 +65,17 @@ function ScheduleItem({ task, compact = false, onOpen }) {
 
   return (
     <button
+      className={`schedule-item ${compact ? 'compact' : ''}`}
       type="button"
       onClick={() => onOpen(task)}
       title={`${task.title} - ${task.course}\nDue: ${task.due || 'No deadline set'}`}
-      style={{
-        width: '100%',
-        background: 'rgba(0,0,0,0.35)',
-        border: '1px solid var(--border)',
-        borderLeft: `4px solid ${borderColor}`,
-        borderRadius: 6,
-        padding: compact ? '7px 8px' : 12,
-        cursor: 'pointer',
-        color: 'var(--text)',
-        textAlign: 'left',
-        transition: 'background 0.2s ease, border-color 0.2s ease',
-      }}
+      style={{ '--schedule-color': borderColor }}
     >
-      <span style={{ fontSize: compact ? 10 : 11, color: borderColor, fontWeight: 700, display: 'block', marginBottom: 4 }}>
+      <span className="schedule-item-time">
         {task.deadlineDate ? formatTaskTime(task.deadlineDate) : 'No time'}
       </span>
-      <h4 style={{ fontSize: compact ? 11 : 13, margin: 0, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {task.title}
-      </h4>
-      <p style={{ fontSize: compact ? 10 : 11, margin: '4px 0 0', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {task.course}
-      </p>
+      <h4>{task.title}</h4>
+      <p>{task.course}</p>
     </button>
   );
 }
@@ -118,7 +104,7 @@ function fmt12(hhmm) {
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-function ClassScheduleSection({ apiFetch, authUser }) {
+function ClassScheduleSection({ apiFetch, userId }) {
   const [slots, setSlots] = useState([]);
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -135,7 +121,7 @@ function ClassScheduleSection({ apiFetch, authUser }) {
     try {
       const [slotsRes, coursesRes] = await Promise.all([
         apiFetch('/timetable', {}, false),
-        apiFetch('/courses', {}, false),
+        apiFetch(`/courses${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
       ]);
       setSlots(Array.isArray(slotsRes?.slots) ? slotsRes.slots : []);
       setCourses(Array.isArray(coursesRes?.courses) ? coursesRes.courses : []);
@@ -144,7 +130,7 @@ function ClassScheduleSection({ apiFetch, authUser }) {
     } finally {
       setLoading(false);
     }
-  }, [apiFetch]);
+  }, [apiFetch, userId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -352,7 +338,8 @@ void DOW_LABELS;
 
 export default function Timetable() {
   const [view, setView] = useState('week');
-  const { tasks, setActiveTaskModal, apiFetch, authUser } = useAppContext();
+  const { tasks, setActiveTaskModal, apiFetch, authUser, user } = useAppContext();
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || '';
 
   const today = startOfDay(new Date());
   const weekStart = addDays(today, -today.getDay());
@@ -378,16 +365,15 @@ export default function Timetable() {
 
   const monthCells = buildMonthCells(today, scheduledTasks);
   const upcomingCount = scheduledTasks.filter((task) => task.deadlineDate >= today).length;
-  const urgentCount = scheduledTasks.filter((task) => task.urgency === 'urgent').length;
   const todayCount = scheduledTasks.filter((task) => sameDay(task.deadlineDate, today)).length;
 
   return (
     <div className="dashboard-scroll">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
-          <span className="hero-kicker">TIME BLOCKS</span>
-          <h1 className="hero-title">Master Timetable</h1>
-          <p>Your dated assignments, quizzes, events, and exam schedules organized by real deadlines.</p>
+          <span className="hero-kicker">TIMETABLE</span>
+          <h1 className="hero-title">Schedule</h1>
+          <p>Classes and dated academic items in one clean view.</p>
         </div>
         <div className="hero-pill-group">
           <div className="hero-pill hero-pill-critical">
@@ -405,34 +391,7 @@ export default function Timetable() {
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-calendar-day"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">dated queue</div>
-          </div>
-          <div className="stat-value stat-value-pending">{scheduledTasks.length}</div>
-          <div className="stat-label">Scheduled Items</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-fire"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">live urgency</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{urgentCount}</div>
-          <div className="stat-label">Urgent Slots</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-solid fa-calendar-xmark"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">needs date</div>
-          </div>
-          <div className="stat-value stat-value-messages">{unscheduledTasks.length}</div>
-          <div className="stat-label">Unscheduled Items</div>
-        </div>
-      </div>
-
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
+      <div className="panel glass-panel panel-accent timetable-panel">
         <div className="panel-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
           <div>
             <h2 className="panel-title"><i className="fa-regular fa-calendar text-primary"></i> {view === 'week' ? 'This Week' : formatMonthLabel(today)}</h2>
@@ -513,21 +472,7 @@ export default function Timetable() {
         </div>
       </div>
 
-      {unscheduledTasks.length > 0 && (
-        <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-          <div className="panel-header">
-            <h2 className="panel-title"><i className="fa-solid fa-calendar-xmark text-warning"></i> Unscheduled Items</h2>
-            <span className="badge badge-warning">{unscheduledTasks.length} need dates</span>
-          </div>
-          <div className="tasks-list" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-            {unscheduledTasks.slice(0, 6).map((task) => (
-              <ScheduleItem key={task.id} task={task} onOpen={setActiveTaskModal} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <ClassScheduleSection apiFetch={apiFetch} authUser={authUser} />
+      <ClassScheduleSection apiFetch={apiFetch} userId={userId} />
     </div>
   );
 }

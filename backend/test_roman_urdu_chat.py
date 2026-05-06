@@ -1,6 +1,8 @@
 from datetime import datetime
 
 from main import (
+    _is_clear_deterministic_chat_action,
+    classifier_stub_with_confidence,
     detect_roman_urdu_chat_action,
     parse_manual_deadline,
 )
@@ -62,3 +64,23 @@ def test_roman_urdu_manual_deadline_parsing():
 
     assert isinstance(parsed, datetime)
     assert parsed.tzinfo is not None
+
+
+def test_classifier_recognizes_roman_urdu_assignment():
+    result = classifier_stub_with_confidence("OS assignment kal raat 11 baje submit karni hai")
+
+    assert result["label"] == "assignment"
+    assert result["confidence"] >= 0.8
+
+
+def test_classifier_recognizes_exam_schedule_over_general_words():
+    result = classifier_stub_with_confidence("Final exam date sheet upload ho gai hai")
+
+    assert result["label"] == "exam_schedule"
+
+
+def test_deterministic_create_requires_clear_add_intent():
+    action = detect_roman_urdu_chat_action("assignment deadline extend ho gayi hai", CONTEXT)
+
+    assert action["action"] == "create_task"
+    assert _is_clear_deterministic_chat_action("assignment deadline extend ho gayi hai", action) is False

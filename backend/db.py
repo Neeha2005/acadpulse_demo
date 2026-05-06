@@ -195,7 +195,7 @@ def update_notification_urgency(notification_id, score, label):
         cur.close()
         conn.close()
 
-def update_notification_completion(notification_id, completed=True):
+def update_notification_completion(notification_id, completed=True, user_id=None):
     """Update completion status. Returns the updated row or None if not found."""
     if not notification_id:
         return None
@@ -203,11 +203,17 @@ def update_notification_completion(notification_id, completed=True):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        user_filter = "AND user_id = %s" if user_id else ""
+        params = [completed, notification_id]
+        if user_id:
+            params.append(user_id)
+
         cur.execute(
-            """
+            f"""
             UPDATE notifications
             SET is_completed = %s
             WHERE id = %s
+              {user_filter}
             RETURNING
                 id,
                 user_id,
@@ -221,7 +227,7 @@ def update_notification_completion(notification_id, completed=True):
                 received_at,
                 created_at;
             """,
-            (completed, notification_id),
+            params,
         )
         row = cur.fetchone()
         conn.commit()

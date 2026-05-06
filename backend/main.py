@@ -192,6 +192,7 @@ app = FastAPI(
     version="1.1.0",
 )
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 app.add_middleware(
     CORSMiddleware,
@@ -490,6 +491,14 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
         )
     return user
 
+def get_optional_current_user(token: Optional[str] = Depends(optional_oauth2_scheme)) -> Optional[Dict[str, Any]]:
+    if not token:
+        return None
+    try:
+        return get_current_user(token)
+    except HTTPException:
+        return None
+
 def clean_html(html_content):
     """Strip HTML tags and return clean text."""
     if not html_content:
@@ -520,27 +529,91 @@ def get_header(headers, name):
             return header.get("value", "")
     return ""
 
+CLASSIFIER_KEYWORDS = {
+    "assignment": [
+        "assignment", "assign", "assig", "homework", "hw", "task", "submit",
+        "submission", "deadline", "due", "hand in", "turn in", "upload karna",
+        "upload krna", "jama", "jma", "bhej do", "bhejna", "file submit",
+    ],
+    "quiz": [
+        "quiz", "mcq", "mcqs", "short quiz", "surprise quiz", "class test",
+        "test hoga", "test hai", "test kal", "test on", "viva",
+    ],
+    "exam_schedule": [
+        "exam schedule", "date sheet", "datesheet", "final exam", "finals",
+        "midterm exam", "mids", "paper schedule", "exam timetable",
+        "timetable for exam", "practical exam", "viva schedule",
+    ],
+    "announcement": [
+        "cancel", "cancelled", "canceled", "postpone", "postponed",
+        "reschedule", "rescheduled", "room", "venue", "class nahi",
+        "class ni", "class cancel", "lecture cancel", "timing change",
+        "time change", "makeup class", "make-up class", "shifted",
+    ],
+    "material": [
+        "slide", "slides", "pdf", "book", "material", "notes", "handout",
+        "lecture notes", "recording", "chapter", "ppt", "pptx", "uploaded",
+        "upload kar di", "upload kr di", "link", "drive link", "resource",
+    ],
+    "event": [
+        "event", "society", "workshop", "seminar", "webinar", "competition",
+        "orientation", "session", "guest speaker", "registration", "register",
+    ],
+}
+
+CLASSIFIER_NOISE_PHRASES = [
+    "bhai koi hai", "koi hai", "anyone", "hello", "hi", "salam", "assalam",
+    "ok", "okay", "thanks", "thank you", "jazakallah", "received", "noted",
+]
+
+CLASSIFIER_CATEGORY_PRIORITY = {
+    "exam_schedule": 6,
+    "quiz": 5,
+    "assignment": 4,
+    "material": 3,
+    "announcement": 2,
+    "event": 1,
+}
+
+
+def _keyword_score(text: str, keywords: List[str]) -> int:
+    score = 0
+    for keyword in keywords:
+        pattern = rf"(?<!\w){re.escape(keyword)}(?!\w)" if keyword.isalnum() else re.escape(keyword)
+        matches = re.findall(pattern, text)
+        if matches:
+            score += len(matches) * (3 if " " in keyword else 1)
+    return score
+
+
 def classifier_stub_with_confidence(text):
     """
-    Temporary classifier that labels messages based on keywords.
-    In the next phase, this will be replaced by the XLM-RoBERTa model.
+    Fast keyword classifier fallback for local/dev use.
+    The ingestion pipeline can still prefer the local model, HF, or Groq before this.
     """
-    text = (text or "").lower()
-    if any(k in text for k in ["bhai koi hai", "koi hai", "anyone", "hello", "salam", "ok", "thanks"]):
-        return {"label": "noise", "confidence": 0.9, "source": "keyword_stub"}
-    if any(k in text for k in ["assignment", "submit", "submission", "deadline", "hand in", "homework"]):
-        return {"label": "assignment", "confidence": 0.95, "source": "keyword_stub"}
-    if any(k in text for k in ["quiz", "test"]):
-        return {"label": "quiz", "confidence": 0.95, "source": "keyword_stub"}
-    if any(k in text for k in ["exam schedule", "date sheet", "datesheet", "final exam", "midterm exam"]):
-        return {"label": "exam_schedule", "confidence": 0.9, "source": "keyword_stub"}
-    if any(k in text for k in ["cancel", "cancelled", "canceled", "room", "venue", "postpone", "reschedule"]):
-        return {"label": "announcement", "confidence": 0.88, "source": "keyword_stub"}
-    if any(k in text for k in ["slide", "slides", "pdf", "book", "material", "notes", "upload kar di", "uploaded"]):
-        return {"label": "material", "confidence": 0.93, "source": "keyword_stub"}
-    if any(k in text for k in ["event", "society", "workshop", "seminar", "webinar", "competition"]):
-        return {"label": "event", "confidence": 0.9, "source": "keyword_stub"}
-    return {"label": "noise", "confidence": 0.65, "source": "keyword_stub"}
+    normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+    if not normalized:
+        return {"label": "noise", "confidence": 0.65, "source": "keyword_stub"}
+
+    noise_score = _keyword_score(normalized, CLASSIFIER_NOISE_PHRASES)
+    scores = {
+        label: _keyword_score(normalized, keywords)
+        for label, keywords in CLASSIFIER_KEYWORDS.items()
+    }
+
+    if all(score == 0 for score in scores.values()):
+        if noise_score:
+            return {"label": "noise", "confidence": 0.9, "source": "keyword_stub"}
+        return {"label": "noise", "confidence": 0.65, "source": "keyword_stub"}
+
+    label, score = max(
+        scores.items(),
+        key=lambda item: (item[1], CLASSIFIER_CATEGORY_PRIORITY.get(item[0], 0)),
+    )
+    confidence = min(0.97, 0.72 + (score * 0.06))
+    if noise_score and score <= noise_score and score < 3:
+        return {"label": "noise", "confidence": 0.82, "source": "keyword_stub"}
+    return {"label": label, "confidence": round(confidence, 4), "source": "keyword_stub"}
 
 def classifier_stub(text):
     return classifier_stub_with_confidence(text)["label"]
@@ -678,7 +751,7 @@ def execute_function_call(function_name: str, arguments: dict, user_id: str) -> 
     try:
         if function_name == "mark_item_done":
             notif_id = arguments.get("notification_id")
-            row = update_notification_completion(notif_id, True)
+            row = update_notification_completion(notif_id, True, user_id=user_id)
             if row:
                 invalidate_chat_context(user_id)
                 return f"Success: Task {notif_id} marked as done."
@@ -714,6 +787,9 @@ def execute_function_call(function_name: str, arguments: dict, user_id: str) -> 
         if function_name == "update_deadline":
             notif_id = arguments.get("notification_id")
             new_deadline = arguments.get("new_deadline")
+            existing = get_notification_by_id(notif_id)
+            if not existing or str(existing.get("user_id")) != str(user_id):
+                return f"Error: notification ID {notif_id} not found."
             deadline_dt = parse_manual_deadline(deadline=new_deadline)
             
             if not deadline_dt:
@@ -929,6 +1005,112 @@ def detect_roman_urdu_chat_action(message: str, context: Optional[dict] = None) 
         }
 
     return {"action": "none", "arguments": {}}
+
+
+def _is_clear_deterministic_chat_action(message: str, action: dict) -> bool:
+    text_lower = (message or "").lower()
+    action_name = action.get("action")
+    if action_name in {"complete_task", "list_tasks"}:
+        return True
+    if action_name != "create_task":
+        return False
+
+    has_add_intent = any(
+        keyword in text_lower
+        for keyword in ["add", "add kar", "add karo", "add kr", "save", "yaad"]
+    )
+    has_task_type = any(keyword in text_lower for keyword in ["assignment", "quiz", "task", "deadline"])
+    return has_add_intent and has_task_type
+
+
+def _format_chat_context_item(item: dict) -> str:
+    course = item.get("course_code") or item.get("course_name") or "General"
+    category = item.get("category") or "task"
+    text = (item.get("message_text") or item.get("expanded_text") or "").strip()
+    title = re.sub(r"\s+", " ", text)[:90] or "Untitled"
+    deadline = item.get("deadline")
+    deadline_text = f" | deadline: {deadline}" if deadline else ""
+    return f"- {item.get('id')} | {course} | {category}: {title}{deadline_text}"
+
+
+def _filter_context_tasks_for_prompt(prompt: str, items: List[dict]) -> List[dict]:
+    text_lower = (prompt or "").lower()
+    filtered = items
+    if "quiz" in text_lower:
+        filtered = [item for item in filtered if item.get("category") == "quiz"]
+    elif any(keyword in text_lower for keyword in ["assignment", "assignments"]):
+        filtered = [item for item in filtered if item.get("category") == "assignment"]
+    return filtered[:10]
+
+
+def handle_deterministic_chat_action(prompt: str, user_id: str, db_context: dict) -> Optional[ChatResponse]:
+    action = detect_roman_urdu_chat_action(prompt, db_context)
+    if not _is_clear_deterministic_chat_action(prompt, action):
+        return None
+
+    action_name = action["action"]
+    args = action.get("arguments") or {}
+
+    if action_name == "list_tasks":
+        items = (db_context.get("urgent_items") or []) + (db_context.get("pending_items") or [])
+        seen_ids = set()
+        unique_items = []
+        for item in items:
+            item_id = str(item.get("id"))
+            if item_id and item_id not in seen_ids:
+                seen_ids.add(item_id)
+                unique_items.append(item)
+
+        visible_items = _filter_context_tasks_for_prompt(prompt, unique_items)
+        if not visible_items:
+            return ChatResponse(
+                response="Koi pending task context mein nahi hai.",
+                is_safe=True,
+                context_loaded=True,
+                context_counts=db_context.get("summary", {}),
+                action="list_tasks",
+                action_result={"count": 0},
+            )
+
+        response_text = "Pending tasks:\n" + "\n".join(_format_chat_context_item(item) for item in visible_items)
+        return ChatResponse(
+            response=response_text,
+            is_safe=True,
+            context_loaded=True,
+            context_counts=db_context.get("summary", {}),
+            action="list_tasks",
+            action_result={"count": len(visible_items)},
+        )
+
+    if action_name == "complete_task":
+        result = execute_function_call("mark_item_done", args, user_id)
+        return ChatResponse(
+            response=result,
+            is_safe=True,
+            context_loaded=True,
+            context_counts=db_context.get("summary", {}),
+            action="mark_item_done",
+            action_result={"message": result},
+        )
+
+    if action_name == "create_task":
+        tool_args = {
+            "category": normalize_manual_category(args.get("category")),
+            "course": args.get("course") or "General",
+            "text": args.get("title") or prompt,
+            "deadline": args.get("deadline"),
+        }
+        result = execute_function_call("add_manual_notification", tool_args, user_id)
+        return ChatResponse(
+            response=result,
+            is_safe=True,
+            context_loaded=True,
+            context_counts=db_context.get("summary", {}),
+            action="add_manual_notification",
+            action_result={"message": result, "arguments": tool_args},
+        )
+
+    return None
 
 def normalize_manual_category(raw_value):
     value = (raw_value or "assignment").strip().lower().replace("-", "_").replace(" ", "_")
@@ -3096,10 +3278,12 @@ def get_notifications(
     source: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ):
+    effective_user_id = user_id or (str(current_user["id"]) if current_user else None)
     try:
         rows = list_notifications(
-            user_id=user_id,
+            user_id=effective_user_id,
             include_completed=include_completed,
             source_type=source_type or source,
             limit=limit,
@@ -3116,7 +3300,10 @@ def get_notifications(
     }
 
 @app.post("/notifications/manual")
-def create_manual_notification(request: ManualNotificationRequest):
+def create_manual_notification(
+    request: ManualNotificationRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
     title = (request.title or "").strip()
     if not title:
         raise HTTPException(status_code=422, detail="Title is required")
@@ -3131,7 +3318,7 @@ def create_manual_notification(request: ManualNotificationRequest):
     if any([request.deadline, request.due_date]) and deadline_dt is None:
         raise HTTPException(status_code=422, detail="Deadline format is invalid")
 
-    user_id = request.user_id or get_or_create_user("Manual User", "manual@acadpulse.local")
+    user_id = request.user_id or (str(current_user["id"]) if current_user else None) or get_or_create_user("Manual User", "manual@acadpulse.local")
     description = (request.description or "").strip()
     course = (request.course or "").strip()
 
@@ -3189,8 +3376,16 @@ def create_manual_notification(request: ManualNotificationRequest):
     }
 
 @app.patch("/notifications/{notification_id}/complete")
-def complete_notification(notification_id: str, request: NotificationCompletionRequest):
-    updated = update_notification_completion(notification_id, request.completed)
+def complete_notification(
+    notification_id: str,
+    request: NotificationCompletionRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    updated = update_notification_completion(
+        notification_id,
+        request.completed,
+        user_id=str(current_user["id"]),
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Notification not found")
 
@@ -3205,8 +3400,12 @@ def complete_notification(notification_id: str, request: NotificationCompletionR
     }
 
 @app.get("/courses")
-def get_courses(user_id: Optional[str] = Query(default=None)):
-    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+def get_courses(
+    user_id: Optional[str] = Query(default=None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
+    effective_user_id = user_id or (str(current_user["id"]) if current_user else None)
+    resolved_user_id = resolve_mapping_user_id(effective_user_id) if effective_user_id else None
     try:
         rows = list_courses(user_id=resolved_user_id)
     except Exception as exc:
@@ -3220,7 +3419,10 @@ def get_courses(user_id: Optional[str] = Query(default=None)):
     }
 
 @app.post("/courses")
-def save_course(request: CourseRequest):
+def save_course(
+    request: CourseRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
     course_code = (request.course_code or "").strip()
     course_name = (request.course_name or "").strip()
 
@@ -3229,7 +3431,7 @@ def save_course(request: CourseRequest):
     if not course_name:
         raise HTTPException(status_code=422, detail="course_name is required")
 
-    user_id = resolve_mapping_user_id(request.user_id)
+    user_id = resolve_mapping_user_id(request.user_id or (str(current_user["id"]) if current_user else None))
     try:
         course_id = upsert_course(
             course_code=course_code,
@@ -3250,8 +3452,13 @@ def save_course(request: CourseRequest):
     }
 
 @app.patch("/courses/{course_id}/aliases")
-def update_course_aliases(course_id: str, request: CourseAliasesRequest):
-    user_id = resolve_mapping_user_id(request.user_id) if request.user_id else None
+def update_course_aliases(
+    course_id: str,
+    request: CourseAliasesRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
+    effective_user_id = request.user_id or (str(current_user["id"]) if current_user else None)
+    user_id = resolve_mapping_user_id(effective_user_id) if effective_user_id else None
     existing = get_course_by_id(course_id, user_id=user_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -3601,8 +3808,12 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     return {"status": "success", "whatsapp": session_state}
 
 @app.get("/whatsapp/status")
-def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
-    if not user_id:
+def get_whatsapp_status(
+    user_id: Optional[str] = Query(default=None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
+    effective_user_id = user_id or (str(current_user["id"]) if current_user else None)
+    if not effective_user_id:
         return {
             "status": "success",
             "whatsapp": {
@@ -3614,7 +3825,7 @@ def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
                 "updated_at": whatsapp_status_state.get("updated_at"),
             },
         }
-    requested_user_id = resolve_mapping_user_id(user_id)
+    requested_user_id = resolve_mapping_user_id(effective_user_id)
     session_state = get_whatsapp_session_state(requested_user_id)
     state_user_id = str(session_state.get("user_id") or "")
     state_status = str(session_state.get("status") or "")
@@ -4094,6 +4305,10 @@ def chat_with_bot(request: ChatRequest):
         user_id = resolve_mapping_user_id(request.user_id)
         context_json = build_user_context(user_id)
         db_context = json.loads(context_json)
+
+        deterministic_response = handle_deterministic_chat_action(request.prompt, user_id, db_context)
+        if deterministic_response:
+            return deterministic_response
 
         # 1. Start message history
         sanitized_history = []
@@ -4644,7 +4859,16 @@ def seed_test_data(
     seeded: Dict[str, int] = {"notifications": 0, "timetable_slots": 0}
     try:
         # Fetch existing courses for this user
-        cur.execute("SELECT id, course_code FROM courses WHERE user_id = %s LIMIT 6", (user_id,))
+        cur.execute(
+            """
+            SELECT c.id, c.course_code
+            FROM courses c
+            JOIN user_courses uc ON uc.course_id = c.id
+            WHERE uc.user_id = %s
+            LIMIT 6
+            """,
+            (user_id,),
+        )
         courses = cur.fetchall()
         course_ids = [str(c["id"]) for c in courses] if courses else []
 
@@ -4674,7 +4898,7 @@ def seed_test_data(
                 cur.execute(
                     """
                     INSERT INTO notifications
-                        (user_id, external_message_id, source_type, sender_name, message_text, category, urgency_label, deadline, course_id, received_at)
+                        (user_id, external_message_id, source_type, sender_name, message_text, category, urgency_level, deadline, course_id, received_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
                     """,
