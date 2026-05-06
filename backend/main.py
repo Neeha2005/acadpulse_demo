@@ -3575,6 +3575,18 @@ def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
         }
     requested_user_id = resolve_mapping_user_id(user_id)
     state_user_id = str(whatsapp_status_state.get("user_id") or "")
+    state_status = str(whatsapp_status_state.get("status") or "")
+    if (
+        requested_user_id
+        and state_status in {"connected", "open"}
+        and state_user_id in {"", "test-user", "acadpulse-demo-onboarding"}
+    ):
+        whatsapp_status_state["user_id"] = requested_user_id
+        whatsapp_status_state["pending_user_id"] = None
+        whatsapp_status_state["qr"] = None
+        whatsapp_status_state["qr_updated_at"] = None
+        state_user_id = requested_user_id
+        persist_whatsapp_status_state()
     if requested_user_id and state_user_id and state_user_id != requested_user_id:
         return {
             "status": "success",

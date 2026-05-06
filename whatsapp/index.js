@@ -380,10 +380,10 @@ setInterval(() => {
     const readyState = sock?.ws?.readyState;
 
     if (readyState !== 1) {
-      logger.warn({ userId, readyState }, "WhatsApp session appears dead; restarting");
-      startSessionWithMonitor(userId).catch((error) => {
-        logger.error({ userId, error }, "Failed to restart dead WhatsApp session");
-      });
+      logger.warn(
+        { userId, readyState },
+        "WhatsApp socket is not open; waiting for Baileys connection.update before restarting",
+      );
       continue;
     }
 
