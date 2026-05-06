@@ -1407,8 +1407,11 @@ def resolve_whatsapp_user_id(user_id: Optional[Any] = None) -> str:
     """Resolve WhatsApp bridge placeholder IDs to the account waiting on QR scan."""
     raw_user_id = str(user_id or "").strip()
     pending_user_id = str(whatsapp_status_state.get("pending_user_id") or "").strip()
+    connected_user_id = str(whatsapp_status_state.get("user_id") or "").strip()
     if pending_user_id and (not raw_user_id or raw_user_id in {"test-user", "acadpulse-demo-onboarding"}):
         return resolve_mapping_user_id(pending_user_id)
+    if connected_user_id and (not raw_user_id or raw_user_id in {"test-user", "acadpulse-demo-onboarding"}):
+        return resolve_mapping_user_id(connected_user_id)
     return resolve_mapping_user_id(raw_user_id)
 
 def ensure_timezone_aware(value):
