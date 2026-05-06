@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 export default function WhatsAppIntegration() {
-  const { notifications, apiFetch } = useAppContext();
+  const { notifications, apiFetch, authUser, user } = useAppContext();
   const [isSyncing, setIsSyncing] = useState(false);
   const [groupFilter, setGroupFilter] = useState('All');
   const [courses, setCourses] = useState([]);
@@ -19,6 +19,9 @@ export default function WhatsAppIntegration() {
   const [waStatus, setWaStatus] = useState({ status: 'unknown' });
   const [qrState, setQrState] = useState({ loading: false, value: '', error: '' });
   const [showQrPanel, setShowQrPanel] = useState(false);
+  const [detectedGroups, setDetectedGroups] = useState([]);
+  const [selectedDetectedGroupIds, setSelectedDetectedGroupIds] = useState(() => new Set());
+  const [savingGroupSelection, setSavingGroupSelection] = useState(false);
 
   const whatsappNotifs = notifications.filter(n => n.source === 'whatsapp');
   const mappedGroupIds = useMemo(() => new Set(mappings.map(m => m.source_reference_id)), [mappings]);
@@ -31,25 +34,31 @@ export default function WhatsAppIntegration() {
   }), [groupFilter, groups, mappedGroupIds]);
   const selectedGroupInfo = useMemo(() => groups.find(g => g.group_id === selectedGroup), [groups, selectedGroup]);
   const selectedMapping = selectedGroup ? mappingByGroupId.get(selectedGroup) : null;
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || '';
+  const userQuery = userId ? `user_id=${encodeURIComponent(userId)}` : '';
+  const withUserQuery = useCallback((path) => {
+    if (!userQuery) return path;
+    return `${path}${path.includes('?') ? '&' : '?'}${userQuery}`;
+  }, [userQuery]);
 
   const loadWaStatus = useCallback(async () => {
     try {
-      const payload = await apiFetch('/whatsapp/status', {}, false);
+      const payload = await apiFetch(withUserQuery('/whatsapp/status'), {}, false);
       setWaStatus(payload?.whatsapp || { status: 'unknown' });
       if (payload?.whatsapp?.status === 'qr_required') setShowQrPanel(true);
     } catch {
       setWaStatus({ status: 'unknown' });
     }
-  }, [apiFetch]);
+  }, [apiFetch, withUserQuery]);
 
   const loadMappingData = useCallback(async () => {
     setLoadingMappings(true);
     setMappingError('');
     try {
       const [coursesPayload, groupsPayload, mappingsPayload] = await Promise.all([
-        apiFetch('/courses', {}, false),
-        apiFetch('/whatsapp/groups', {}, false),
-        apiFetch('/course-source-mappings?source_type=whatsapp', {}, false),
+        apiFetch(withUserQuery('/courses'), {}, false),
+        apiFetch(withUserQuery('/whatsapp/groups'), {}, false),
+        apiFetch(withUserQuery('/course-source-mappings?source_type=whatsapp'), {}, false),
       ]);
       const nextCourses = Array.isArray(coursesPayload?.courses) ? coursesPayload.courses : [];
       const nextGroups = Array.isArray(groupsPayload?.groups) ? groupsPayload.groups : [];
@@ -67,17 +76,59 @@ export default function WhatsAppIntegration() {
     } finally {
       setLoadingMappings(false);
     }
-  }, [apiFetch]);
+  }, [apiFetch, withUserQuery]);
+
+  const loadDetectedGroups = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const payload = await apiFetch(withUserQuery('/whatsapp/groups/detected'), {}, false);
+      const nextGroups = Array.isArray(payload?.groups) ? payload.groups : [];
+      setDetectedGroups(nextGroups);
+      setSelectedDetectedGroupIds(new Set(nextGroups.filter(group => group.is_selected).map(group => group.group_id)));
+    } catch {
+      setDetectedGroups([]);
+    }
+  }, [apiFetch, userId, withUserQuery]);
 
   useEffect(() => {
     loadWaStatus();
     loadMappingData();
-  }, [loadWaStatus, loadMappingData]);
+    loadDetectedGroups();
+  }, [loadWaStatus, loadMappingData, loadDetectedGroups]);
+
+  const toggleDetectedGroup = (groupId) => {
+    setSelectedDetectedGroupIds(current => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
+  const saveDetectedGroupSelection = async () => {
+    if (!userId) return;
+    setSavingGroupSelection(true);
+    setMappingError('');
+    setMappingStatus('');
+    try {
+      await apiFetch('/whatsapp/groups/selection', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, group_ids: Array.from(selectedDetectedGroupIds) }),
+      }, false);
+      setMappingStatus('WhatsApp group selection saved.');
+      await loadDetectedGroups();
+      await loadMappingData();
+    } catch (error) {
+      setMappingError(error.message || 'Unable to save WhatsApp group selection.');
+    } finally {
+      setSavingGroupSelection(false);
+    }
+  };
 
   const loadQrCode = async () => {
     setQrState({ loading: true, value: '', error: '' });
     try {
-      const payload = await apiFetch('/whatsapp/qr', {}, false);
+      const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
       const rawQr = payload?.qr || '';
       const qrImage = rawQr
         ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
@@ -107,7 +158,7 @@ export default function WhatsAppIntegration() {
     try {
       await apiFetch('/whatsapp/groups', {
         method: 'POST',
-        body: JSON.stringify({ group_id: groupId, group_name: manualGroupName.trim() || groupId }),
+        body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), group_id: groupId, group_name: manualGroupName.trim() || groupId, selected: true }),
       }, false);
       setManualGroupId('');
       setManualGroupName('');
@@ -130,7 +181,7 @@ export default function WhatsAppIntegration() {
     try {
       const payload = await apiFetch('/course-source-mappings', {
         method: 'POST',
-        body: JSON.stringify({ source_type: 'whatsapp', source_reference_id: selectedGroup, course_id: selectedCourse }),
+        body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), source_type: 'whatsapp', source_reference_id: selectedGroup, course_id: selectedCourse }),
       }, false);
       setMappings(Array.isArray(payload?.mappings) ? payload.mappings : []);
       setMappingStatus('Mapping saved. Future messages from this group will attach to this course.');
@@ -223,6 +274,35 @@ export default function WhatsAppIntegration() {
                 <i className="fa-solid fa-rotate"></i> Refresh QR Code
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isConnected && detectedGroups.length > 0 && (
+        <div className="panel glass-panel panel-accent" style={{ marginTop: 0 }}>
+          <div className="panel-header">
+            <h2 className="panel-title"><i className="fa-brands fa-whatsapp text-whatsapp"></i> Select WhatsApp Groups</h2>
+            <span className="badge badge-success">{selectedDetectedGroupIds.size} selected</span>
+          </div>
+          <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'grid', gap: 10, maxHeight: 300, overflow: 'auto' }}>
+              {detectedGroups.map(group => (
+                <label key={group.group_id} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 10, alignItems: 'center', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedDetectedGroupIds.has(group.group_id)}
+                    onChange={() => toggleDetectedGroup(group.group_id)}
+                  />
+                  <span style={{ minWidth: 0 }}>
+                    <strong style={{ display: 'block', fontSize: 14 }}>{group.group_name || group.group_id}</strong>
+                    <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <button className="btn btn-primary" type="button" onClick={saveDetectedGroupSelection} disabled={savingGroupSelection}>
+              {savingGroupSelection ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Save Selected Groups</>}
+            </button>
           </div>
         </div>
       )}

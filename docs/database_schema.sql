@@ -66,6 +66,10 @@ CREATE TABLE whatsapp_groups (
 CREATE TABLE user_whatsapp_groups (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     whatsapp_group_id UUID NOT NULL REFERENCES whatsapp_groups(id) ON DELETE CASCADE,
+    is_selected BOOLEAN NOT NULL DEFAULT TRUE,
+    is_ignored BOOLEAN NOT NULL DEFAULT FALSE,
+    detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, whatsapp_group_id)
 );
 

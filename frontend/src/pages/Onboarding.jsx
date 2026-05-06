@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
-  AlertTriangle,
-  Bell,
   BookOpen,
   Building2,
   Calendar,
@@ -12,11 +10,9 @@ import {
   ChevronLeft,
   Clock,
   ExternalLink,
-  Flame,
   GraduationCap,
   Hash,
   Loader2,
-  Lock,
   Mail,
   MapPin,
   MessageCircle,
@@ -31,7 +27,7 @@ import {
 import { useAppContext } from '../context/AppContext'
 import '../onboarding.css'
 
-const TOTAL_STEPS = 9
+const TOTAL_STEPS = 7
 const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
 const DAYS = [
   [1, 'Monday'],
@@ -51,7 +47,7 @@ const DEFAULT_DATA = {
     semester: localStorage.getItem('acadpulse_semester') || '',
     section: localStorage.getItem('acadpulse_section') || '',
   },
-  platforms: { whatsapp: true, gmail: true, classroom: true },
+  platforms: { whatsapp: false, gmail: false, classroom: false },
   preferences: {
     desktopPopups: true,
     morningDigest: true,
@@ -65,6 +61,7 @@ const DEFAULT_DATA = {
       { id: 'gmail-1', source: '', course: '' },
       { id: 'gmail-2', source: '', course: '' },
     ],
+    classroom: [],
   },
   courses: [
     { id: 'course-1', course_code: '', course_name: '', short_name: '' },
@@ -261,25 +258,25 @@ function ProfileStep({ data, setData, errors, clearError }) {
   )
 }
 
-function PlatformCard({ platform, checked, connection, onToggle, onOAuth }) {
+function PlatformCard({ platform, checked, onToggle }) {
   const details = {
     whatsapp: {
       icon: <MessageCircle size={26} />,
       name: 'WhatsApp Groups',
       description: 'Monitor your class WhatsApp groups for assignments, quizzes and announcements',
-      status: connection.whatsapp ? 'Connected' : "Not connected yet - you'll scan QR in the next step",
+      status: checked ? "You'll scan QR in the next step" : 'Not selected',
     },
     gmail: {
       icon: <Mail size={26} />,
       name: 'Gmail',
       description: 'Fetch academic emails from your university Gmail inbox',
-      status: connection.gmailEmail ? `Connected as: ${connection.gmailEmail}` : 'Connect Gmail',
+      status: checked ? 'Google sign-in appears in the next step' : 'Not selected',
     },
     classroom: {
       icon: <School size={26} />,
       name: 'Google Classroom',
       description: 'Sync assignments, coursework and announcements from your courses',
-      status: connection.google ? `${connection.classroomCourses.length} courses found` : 'Connect Classroom',
+      status: checked ? 'Google sign-in appears in the next step' : 'Not selected',
     },
   }[platform]
 
@@ -293,20 +290,14 @@ function PlatformCard({ platform, checked, connection, onToggle, onOAuth }) {
       </div>
       <Toggle checked={checked} onChange={onToggle} label={`Toggle ${details.name}`} />
       <div className="onb-platform-status">
-        <span className={connection[platform] || (platform !== 'whatsapp' && connection.google) ? 'live' : ''} />
-        {platform === 'gmail' && checked && !connection.gmailEmail ? (
-          <button type="button" onClick={onOAuth}>Connect Gmail</button>
-        ) : platform === 'classroom' && checked && !connection.google ? (
-          <button type="button" onClick={onOAuth}>Connect Classroom</button>
-        ) : (
-          <span>{details.status}</span>
-        )}
+        <span className={checked ? 'live' : ''} />
+        <span>{details.status}</span>
       </div>
     </div>
   )
 }
 
-function PlatformsStep({ data, setData, connection, onOAuth, platformError }) {
+function PlatformsStep({ data, setData, platformError }) {
   const update = (platform, value) => {
     setData((current) => ({ ...current, platforms: { ...current.platforms, [platform]: value } }))
   }
@@ -325,9 +316,7 @@ function PlatformsStep({ data, setData, connection, onOAuth, platformError }) {
             key={platform}
             platform={platform}
             checked={data.platforms[platform]}
-            connection={connection}
             onToggle={(value) => update(platform, value)}
-            onOAuth={onOAuth}
           />
         ))}
       </div>
@@ -335,11 +324,27 @@ function PlatformsStep({ data, setData, connection, onOAuth, platformError }) {
   )
 }
 
-function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, onOAuth }) {
+function SetupStep({
+  data,
+  connection,
+  qr,
+  qrMessage,
+  qrLoading,
+  setupUnlocked,
+  refreshQr,
+  onOAuth,
+  detectedGroups,
+  selectedDetectedGroupIds,
+  toggleDetectedGroup,
+  saveDetectedGroups,
+  groupSelectionSaving,
+  groupSelectionPending,
+}) {
   const selected = data.platforms
   const needsNothing = (!selected.whatsapp || connection.whatsapp)
-    && (!selected.gmail || connection.google)
-    && (!selected.classroom || connection.google)
+    && (!selected.gmail || connection.gmail)
+    && (!selected.classroom || connection.classroom)
+    && !groupSelectionPending
 
   return (
     <section className="onb-step">
@@ -354,14 +359,51 @@ function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, 
           <div className="onb-setup-section">
             <h3><MessageCircle size={18} /> Scan WhatsApp QR Code</h3>
             {connection.whatsapp ? (
-              <div className="onb-connected-pill">WhatsApp already connected</div>
+              <>
+                <div className="onb-connected-pill">WhatsApp already connected</div>
+                {detectedGroups.length > 0 && (
+                  <div className="onb-group-picker">
+                    <div className="onb-group-picker-head">
+                      <strong>Select WhatsApp groups to monitor</strong>
+                      <span>{selectedDetectedGroupIds.size} selected</span>
+                    </div>
+                    <div className="onb-group-picker-list">
+                      {detectedGroups.map((group) => (
+                        <label className="onb-group-check" key={group.group_id}>
+                          <input
+                            type="checkbox"
+                            checked={selectedDetectedGroupIds.has(group.group_id)}
+                            onChange={() => toggleDetectedGroup(group.group_id)}
+                          />
+                          <span>
+                            <strong>{group.group_name || group.group_id}</strong>
+                            <em>{group.group_id}</em>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      className="onb-primary-btn"
+                      type="button"
+                      onClick={saveDetectedGroups}
+                      disabled={groupSelectionSaving}
+                    >
+                      {groupSelectionSaving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
+                      Save selected groups
+                    </button>
+                  </div>
+                )}
+                {groupSelectionPending && detectedGroups.length === 0 && (
+                  <div className="onb-waiting"><Loader2 size={15} /> Loading WhatsApp groups...</div>
+                )}
+              </>
             ) : (
               <>
                 <p>Open WhatsApp on your phone, tap Linked Devices, then scan this code.</p>
                 <div className="onb-qr-box">
                   {qrLoading && <div className="onb-shimmer" />}
                   {!qrLoading && qr && <img src={qr} alt="WhatsApp QR code" />}
-                  {!qrLoading && !qr && <span>QR not available yet</span>}
+                  {!qrLoading && !qr && <span>{qrMessage || 'QR not available yet'}</span>}
                 </div>
                 <div className="onb-waiting"><Loader2 size={15} /> Waiting for scan...</div>
                 <button className="onb-ghost-btn" type="button" onClick={refreshQr}><RefreshCw size={14} /> Refresh QR</button>
@@ -372,12 +414,12 @@ function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, 
         {selected.gmail && (
           <div className="onb-setup-section">
             <h3><Mail size={18} /> Connect Gmail</h3>
-            {connection.google ? (
+            {connection.gmail ? (
               <div className="onb-connected-pill">Connected as: {connection.gmailEmail || 'Google account'}</div>
             ) : (
-              <button className="onb-google-btn" type="button" onClick={onOAuth}>
+              <button className="onb-google-btn" type="button" onClick={() => onOAuth('gmail')}>
                 <span>G</span>
-                Sign in with Google
+                Continue with Google for Gmail
                 <ExternalLink size={14} />
               </button>
             )}
@@ -386,7 +428,7 @@ function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, 
         {selected.classroom && (
           <div className="onb-setup-section">
             <h3><School size={18} /> Google Classroom</h3>
-            {connection.google ? (
+            {connection.classroom ? (
               <>
                 <div className="onb-connected-pill">Google Classroom authorized</div>
                 <div className="onb-course-pills">
@@ -396,7 +438,11 @@ function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, 
                 </div>
               </>
             ) : (
-              <p>Classroom uses the same Google authorization as Gmail.</p>
+              <button className="onb-google-btn" type="button" onClick={() => onOAuth('classroom')}>
+                <span>G</span>
+                Continue with Google for Classroom
+                <ExternalLink size={14} />
+              </button>
             )}
           </div>
         )}
@@ -406,14 +452,27 @@ function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, 
   )
 }
 
-function MappingRows({ rows, onChange, leftPlaceholder, coursePlaceholder }) {
+function getCourseLabel(course) {
+  return [course.course_code, course.course_name].filter(Boolean).join(' - ') || course.short_name || ''
+}
+
+function MappingRows({ rows, onChange, leftPlaceholder, coursePlaceholder, courseOptions = [] }) {
   return (
     <div className="onb-map-list">
       {rows.map((row) => (
         <div className="onb-map-row" key={row.id}>
           <input value={row.source} onChange={(e) => onChange(row.id, 'source', e.target.value)} placeholder={leftPlaceholder} />
-          <span>→</span>
-          <input value={row.course} onChange={(e) => onChange(row.id, 'course', e.target.value)} placeholder={coursePlaceholder} />
+          <span>-&gt;</span>
+          {courseOptions.length ? (
+            <select value={row.course} onChange={(e) => onChange(row.id, 'course', e.target.value)} aria-label={coursePlaceholder}>
+              <option value="">{coursePlaceholder}</option>
+              {courseOptions.map((course) => (
+                <option key={course.id} value={course.id}>{getCourseLabel(course)}</option>
+              ))}
+            </select>
+          ) : (
+            <input value={row.course} onChange={(e) => onChange(row.id, 'course', e.target.value)} placeholder={coursePlaceholder} />
+          )}
           <button type="button" onClick={() => onChange(row.id, 'remove')} aria-label="Remove mapping"><Trash2 size={14} /></button>
         </div>
       ))}
@@ -562,6 +621,7 @@ function TimetableStep({ data, setData }) {
 }
 
 function MappingStep({ data, setData, connection, groups, addMapping }) {
+  const courseOptions = (data.courses || []).filter((course) => course.id && course.course_code?.trim() && course.course_name?.trim())
   const updateRows = (type, id, key, value) => {
     setData((current) => {
       const currentRows = current.mappings[type] || []
@@ -579,7 +639,8 @@ function MappingStep({ data, setData, connection, groups, addMapping }) {
         <h1>Map your groups to courses</h1>
         <p>Tell AcadPulse which group or inbox belongs to which subject.</p>
       </div>
-      <div className="onb-explain">This helps AcadPulse understand which messages belong to which course. You can always update this from the dashboard.</div>
+      <div className="onb-explain">Only mapped sources are monitored. Select the course each WhatsApp group, Gmail sender, or Classroom course belongs to.</div>
+      {!courseOptions.length && <div className="onb-banner danger">Add at least one course above before saving mappings.</div>}
       {connection.whatsapp && (
         <div className="onb-map-section">
           <h3><MessageCircle size={16} /> WhatsApp Groups</h3>
@@ -588,21 +649,22 @@ function MappingStep({ data, setData, connection, groups, addMapping }) {
               rows={(data.mappings.whatsapp.length ? data.mappings.whatsapp : groups.map((group, index) => ({ id: `wa-${index}`, source: group, course: '' })))}
               onChange={(id, key, value) => updateRows('whatsapp', id, key, value)}
               leftPlaceholder="WhatsApp group"
-              coursePlaceholder="Course name e.g. NLP"
+              coursePlaceholder="Select course"
+              courseOptions={courseOptions}
             />
           ) : <p className="onb-muted">No WhatsApp groups detected yet - you can map them from the dashboard once messages arrive.</p>}
           <button type="button" className="onb-ghost-btn" onClick={() => addMapping('whatsapp')}>+ Add Another</button>
         </div>
       )}
-      {connection.google && data.platforms.gmail && (
+      {connection.gmail && data.platforms.gmail && (
         <div className="onb-map-section">
           <h3><Mail size={16} /> Gmail Senders</h3>
           <p className="onb-muted">Map specific email senders or subjects to a course.</p>
-          <MappingRows rows={data.mappings.gmail} onChange={(id, key, value) => updateRows('gmail', id, key, value)} leftPlaceholder="Sender email or subject keyword" coursePlaceholder="Course name" />
+          <MappingRows rows={data.mappings.gmail} onChange={(id, key, value) => updateRows('gmail', id, key, value)} leftPlaceholder="Sender email or subject keyword" coursePlaceholder="Select course" courseOptions={courseOptions} />
           <button type="button" className="onb-ghost-btn" onClick={() => addMapping('gmail')}>+ Add Another</button>
         </div>
       )}
-      {connection.google && data.platforms.classroom && (
+      {connection.classroom && data.platforms.classroom && (
         <div className="onb-map-section">
           <h3><School size={16} /> Classroom Courses</h3>
           {connection.classroomCourses.length ? connection.classroomCourses.map((course) => {
@@ -615,51 +677,20 @@ function MappingStep({ data, setData, connection, groups, addMapping }) {
   )
 }
 
-function PreferencesStep({ data, setData, whatsappConnected, showToast }) {
-  const prefs = data.preferences
-  const update = async (key, value) => {
-    if (key === 'desktopPopups' && value && 'Notification' in window) {
-      const permission = await window.Notification.requestPermission()
-      if (permission === 'denied') showToast('Browser blocked notifications - enable them in browser settings', 'error')
-    }
-    setData((current) => ({ ...current, preferences: { ...current.preferences, [key]: value } }))
-  }
-
-  const rows = [
-    ['desktopPopups', <Bell size={20} />, 'Desktop Popups', 'Get alerts even when the browser tab is in background'],
-    ['morningDigest', <Calendar size={20} />, 'Morning Digest', 'Get a summary of your day every morning'],
-    ['criticalAlerts', <Flame size={20} />, 'Critical Deadline Alerts', 'Extra notifications when a deadline is under 2 hours away', true],
-    ...(whatsappConnected ? [['whatsappReminders', <MessageCircle size={20} />, 'WhatsApp Reminders', "Send yourself a WhatsApp message for critical deadlines"]] : []),
-  ]
-
+function CoursesAndMappingStep({ data, setData, connection, groups, addMapping }) {
   return (
-    <section className="onb-step">
-      <StepBadge>Preferences</StepBadge>
-      <div className="onb-heading">
-        <h1>How should we alert you?</h1>
-        <p>Customize how AcadPulse notifies you.</p>
+    <div className="onb-combined-step">
+      <div className="onb-combined-panel">
+        <CoursesStep data={data} setData={setData} />
       </div>
-      <div className="onb-pref-list">
-        {rows.map(([key, icon, title, description, locked]) => (
-          <div className="onb-pref-row" key={key}>
-            <div className="onb-pref-icon">{icon}</div>
-            <div>
-              <strong>{title} {locked && <Lock size={12} title="Critical alerts keep you from missing deadlines" />}</strong>
-              <p>{description}</p>
-              {key === 'morningDigest' && prefs.morningDigest && (
-                <label className="onb-time-input">Send digest at:<input type="time" value={prefs.digestTime} onChange={(e) => update('digestTime', e.target.value)} /></label>
-              )}
-              {key === 'whatsappReminders' && prefs.whatsappReminders && <small>We'll send reminders to your own number.</small>}
-            </div>
-            <Toggle checked={locked ? true : Boolean(prefs[key])} disabled={locked} onChange={(value) => update(key, value)} label={`Toggle ${title}`} />
-          </div>
-        ))}
+      <div className="onb-combined-panel">
+        <MappingStep data={data} setData={setData} connection={connection} groups={groups} addMapping={addMapping} />
       </div>
-    </section>
+    </div>
   )
 }
 
-function DoneStep({ name, data, connection, mappedCount, finishing, onFinish }) {
+function DoneStep({ name, data, connection, mappedCount }) {
   const courseCount = (data.courses || []).filter((course) => course.course_code && course.course_name).length
   const timetableCount = (data.timetable || []).filter((slot) => slot.course_id && slot.start_time && slot.end_time).length
   const summary = [
@@ -667,7 +698,8 @@ function DoneStep({ name, data, connection, mappedCount, finishing, onFinish }) 
     `${courseCount} courses saved`,
     `${timetableCount} timetable slots saved`,
     connection.whatsapp ? 'WhatsApp connected' : 'WhatsApp skipped',
-    connection.google ? `Gmail connected${connection.gmailEmail ? ` as ${connection.gmailEmail}` : ''}` : 'Gmail skipped',
+    data.platforms.gmail && connection.gmail ? `Gmail connected${connection.gmailEmail ? ` as ${connection.gmailEmail}` : ''}` : 'Gmail skipped',
+    data.platforms.classroom && connection.classroom ? 'Classroom connected' : 'Classroom skipped',
     `${mappedCount} courses mapped`,
     'Notifications configured',
   ]
@@ -694,9 +726,6 @@ function DoneStep({ name, data, connection, mappedCount, finishing, onFinish }) 
           </div>
         ))}
       </div>
-      <button className="onb-primary large" type="button" onClick={onFinish} disabled={finishing}>
-        {finishing ? <Loader2 size={18} className="spin" /> : 'Open Dashboard →'}
-      </button>
       <small>You can update any of these settings anytime from the dashboard.</small>
     </section>
   )
@@ -717,11 +746,18 @@ export default function Onboarding() {
   const [platformError, setPlatformError] = useState('')
   const [setupUnlocked, setSetupUnlocked] = useState(false)
   const [groups, setGroups] = useState([])
+  const [detectedGroups, setDetectedGroups] = useState([])
+  const [detectedGroupsLoaded, setDetectedGroupsLoaded] = useState(false)
+  const [selectedDetectedGroupIds, setSelectedDetectedGroupIds] = useState(() => new Set())
+  const [groupSelectionSaving, setGroupSelectionSaving] = useState(false)
   const [qr, setQr] = useState('')
+  const [qrMessage, setQrMessage] = useState('')
   const [qrLoading, setQrLoading] = useState(false)
   const [connection, setConnection] = useState({
     whatsapp: false,
     google: false,
+    gmail: localStorage.getItem('acadpulse_gmail_connected') === 'true',
+    classroom: localStorage.getItem('acadpulse_classroom_connected') === 'true',
     gmailEmail: '',
     classroomCourses: [],
   })
@@ -734,13 +770,19 @@ export default function Onboarding() {
     ...(data.mappings.whatsapp || []),
     ...(data.mappings.gmail || []),
   ].filter((row) => row.source?.trim() && row.course?.trim()).length + (connection.classroomCourses?.length || 0)
+  const whatsappGroupSelectionPending = data.platforms.whatsapp
+    && connection.whatsapp
+    && (!detectedGroupsLoaded || (
+      detectedGroups.length > 0 && !detectedGroups.some((group) => group.is_selected)
+    ))
 
   const showToast = useCallback((message, type = 'success') => setToast({ message, type }), [])
   const clearError = useCallback((key) => setErrors((current) => ({ ...current, [key]: '' })), [])
 
-  const oauthUrl = useMemo(() => {
+  const getOAuthUrl = useCallback((integration) => {
     const params = new URLSearchParams({ next_path: 'onboarding' })
     if (userId) params.set('user_id', userId)
+    if (integration) params.set('integration', integration)
     return `${API_BASE_URL}/auth/google?${params.toString()}`
   }, [API_BASE_URL, userId])
 
@@ -749,6 +791,20 @@ export default function Onboarding() {
     connections: connection,
     selectedGroups: groups,
   }), [connection, data, groups])
+
+  const saveIntegrationSettings = useCallback(async (platforms) => {
+    try {
+      await apiFetch('/onboarding/integrations', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(userId ? { user_id: userId } : {}),
+          platforms,
+        }),
+      }, false)
+    } catch {
+      showToast('Integration settings save failed - continuing locally', 'error')
+    }
+  }, [apiFetch, showToast, userId])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -764,38 +820,130 @@ export default function Onboarding() {
     const quiet = silent === true
     if (!quiet) setQrLoading(true)
     try {
-      const payload = await apiFetch('/whatsapp/qr', {}, false)
+      const payload = await apiFetch(`/whatsapp/qr${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false)
       const raw = payload?.qr || payload?.qr_code || ''
       if (payload?.qr_image || payload?.qr_url) {
         setQr(payload.qr_image || payload.qr_url)
+        setQrMessage('')
       } else if (raw) {
         setQr(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(raw)}`)
+        setQrMessage('')
+      } else {
+        setQr('')
+        setQrMessage(payload?.message || 'QR not available yet')
       }
     } catch {
+      setQr('')
+      setQrMessage('WhatsApp QR is not available yet')
       if (!quiet) showToast('WhatsApp QR is not available yet', 'error')
     } finally {
       if (!quiet) setQrLoading(false)
     }
   }, [apiFetch, showToast])
 
-  const fetchConnectionState = useCallback(async () => {
+  const fetchConnectionState = useCallback(async (syncClassroom = false) => {
     try {
+      const classroomParams = new URLSearchParams()
+      if (userId) classroomParams.set('user_id', userId)
+      if (syncClassroom) classroomParams.set('sync', 'true')
+      const classroomPath = `/classroom/courses${classroomParams.toString() ? `?${classroomParams.toString()}` : ''}`
+      const whatsappPath = `/whatsapp/status${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`
       const [google, whatsapp, classroom] = await Promise.allSettled([
         apiFetch('/google/status'),
-        apiFetch('/whatsapp/status', {}, false),
-        apiFetch(`/classroom/courses${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
+        apiFetch(whatsappPath, {}, false),
+        apiFetch(classroomPath, {}, false),
       ])
       setConnection((current) => ({
         ...current,
         google: google.status === 'fulfilled' ? Boolean(google.value?.connected) : current.google,
         gmailEmail: google.status === 'fulfilled' ? (google.value?.email || current.gmailEmail) : current.gmailEmail,
         whatsapp: whatsapp.status === 'fulfilled' ? whatsapp.value?.whatsapp?.status === 'connected' : current.whatsapp,
+        gmail: current.gmail || localStorage.getItem('acadpulse_gmail_connected') === 'true',
+        classroom: current.classroom || localStorage.getItem('acadpulse_classroom_connected') === 'true',
         classroomCourses: classroom.status === 'fulfilled' && Array.isArray(classroom.value?.courses) ? classroom.value.courses : current.classroomCourses,
       }))
     } catch {
       showToast('Could not refresh connection status', 'error')
     }
   }, [apiFetch, showToast, userId])
+
+  const refreshSelectedGroups = useCallback(async () => {
+    const payload = await apiFetch(`/whatsapp/groups${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false)
+    const nextGroups = (payload?.groups || []).map((group) => group.group_id || group.group_name || group.name).filter(Boolean)
+    setGroups(nextGroups)
+    setData((current) => ({
+      ...current,
+      mappings: {
+        ...current.mappings,
+        whatsapp: nextGroups.map((groupId, index) => {
+          const existing = current.mappings.whatsapp?.find((row) => row.source === groupId)
+          return existing || { id: `wa-${index}-${groupId}`, source: groupId, course: '' }
+        }),
+      },
+    }))
+    return nextGroups
+  }, [apiFetch, userId])
+
+  const loadDetectedGroups = useCallback(async () => {
+    if (!userId) return
+    try {
+      const payload = await apiFetch(`/whatsapp/groups/detected?user_id=${encodeURIComponent(userId)}`, {}, false)
+      const nextDetected = Array.isArray(payload?.groups) ? payload.groups : []
+      setDetectedGroups(nextDetected)
+      setSelectedDetectedGroupIds(new Set(nextDetected.filter((group) => group.is_selected).map((group) => group.group_id)))
+    } catch {
+      setDetectedGroups([])
+    } finally {
+      setDetectedGroupsLoaded(true)
+    }
+  }, [apiFetch, userId])
+
+  const toggleDetectedGroup = useCallback((groupId) => {
+    setSelectedDetectedGroupIds((current) => {
+      const next = new Set(current)
+      if (next.has(groupId)) next.delete(groupId)
+      else next.add(groupId)
+      return next
+    })
+  }, [])
+
+  const saveDetectedGroups = useCallback(async () => {
+    if (!userId) return
+    setGroupSelectionSaving(true)
+    try {
+      const payload = await apiFetch('/whatsapp/groups/selection', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: userId,
+          group_ids: Array.from(selectedDetectedGroupIds),
+        }),
+      }, false)
+      const nextGroups = (payload?.groups || []).map((group) => group.group_id || group.group_name).filter(Boolean)
+      setGroups(nextGroups)
+      setData((current) => ({
+        ...current,
+        mappings: {
+          ...current.mappings,
+          whatsapp: nextGroups.map((groupId, index) => {
+            const existing = current.mappings.whatsapp?.find((row) => row.source === groupId)
+            return existing || { id: `wa-${index}-${groupId}`, source: groupId, course: '' }
+          }),
+        },
+      }))
+      await loadDetectedGroups()
+      showToast('WhatsApp group selection saved')
+    } catch {
+      showToast('WhatsApp group selection could not be saved', 'error')
+    } finally {
+      setGroupSelectionSaving(false)
+    }
+  }, [apiFetch, loadDetectedGroups, selectedDetectedGroupIds, showToast, userId])
+
+  useEffect(() => {
+    if (!connection.whatsapp) return
+    loadDetectedGroups()
+    refreshSelectedGroups().catch(() => {})
+  }, [connection.whatsapp, loadDetectedGroups, refreshSelectedGroups])
 
   useEffect(() => {
     let mounted = true
@@ -809,7 +957,7 @@ export default function Onboarding() {
         ])
         if (!mounted) return
         if (groupsPayload.status === 'fulfilled') {
-          const nextGroups = (groupsPayload.value?.groups || []).map((group) => group.group_name || group.name || group.group_id).filter(Boolean)
+          const nextGroups = (groupsPayload.value?.groups || []).map((group) => group.group_id || group.group_name || group.name).filter(Boolean)
           setGroups(nextGroups)
           setData((current) => {
             if (current.mappings.whatsapp?.length || !nextGroups.length) return current
@@ -879,22 +1027,41 @@ export default function Onboarding() {
     if (params.get('google_connected') !== '1') return undefined
 
     const storedEmail = localStorage.getItem('acadpulse_user_email') || user?.email || authUser?.email || ''
+    const integration = params.get('google_integration')
+    if (integration === 'gmail') localStorage.setItem('acadpulse_gmail_connected', 'true')
+    if (integration === 'classroom') localStorage.setItem('acadpulse_classroom_connected', 'true')
+    const nextPlatforms = {
+      ...data.platforms,
+      ...(integration === 'gmail' ? { gmail: true } : {}),
+      ...(integration === 'classroom' ? { classroom: true } : {}),
+    }
+    setData((current) => ({
+      ...current,
+      platforms: {
+        ...current.platforms,
+        ...(integration === 'gmail' ? { gmail: true } : {}),
+        ...(integration === 'classroom' ? { classroom: true } : {}),
+      },
+    }))
     setConnection((current) => ({
       ...current,
       google: true,
+      gmail: current.gmail || integration === 'gmail',
+      classroom: current.classroom || integration === 'classroom',
       gmailEmail: current.gmailEmail || storedEmail,
     }))
-    showToast('Google connected successfully', 'success')
-    fetchConnectionState()
-    const retryOne = setTimeout(fetchConnectionState, 1000)
-    const retryTwo = setTimeout(fetchConnectionState, 3000)
+    saveIntegrationSettings(nextPlatforms)
+    showToast(`${integration === 'classroom' ? 'Classroom' : 'Gmail'} connected successfully`, 'success')
+    fetchConnectionState(integration === 'classroom')
+    const retryOne = setTimeout(() => fetchConnectionState(integration === 'classroom'), 1000)
+    const retryTwo = setTimeout(() => fetchConnectionState(integration === 'classroom'), 3000)
     window.history.replaceState({}, '', '/onboarding')
 
     return () => {
       clearTimeout(retryOne)
       clearTimeout(retryTwo)
     }
-  }, [authUser?.email, fetchConnectionState, location.search, showToast, user?.email])
+  }, [authUser?.email, data.platforms, fetchConnectionState, location.search, saveIntegrationSettings, showToast, user?.email])
 
   useEffect(() => {
     if (step !== 4 || !data.platforms.whatsapp || connection.whatsapp) return undefined
@@ -911,21 +1078,21 @@ export default function Onboarding() {
   useEffect(() => {
     if (step !== 4) return undefined
     setSetupUnlocked(false)
-    const timer = setTimeout(() => setSetupUnlocked(true), 30000)
+    const timer = setTimeout(() => setSetupUnlocked(true), 5000)
     return () => clearTimeout(timer)
   }, [step])
 
   useEffect(() => {
     if (step !== 4) return undefined
-    const allDone = (!data.platforms.whatsapp || connection.whatsapp)
-      && (!data.platforms.gmail || connection.google)
-      && (!data.platforms.classroom || connection.google)
-    if (!allDone) return undefined
+      const allDone = (!data.platforms.whatsapp || connection.whatsapp)
+      && (!data.platforms.gmail || connection.gmail)
+      && (!data.platforms.classroom || connection.classroom)
+    if (!allDone || whatsappGroupSelectionPending) return undefined
     const timer = setTimeout(() => goNext(), 1500)
     return () => clearTimeout(timer)
     // goNext is intentionally omitted to avoid re-arming auto-advance on save state changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection.google, connection.whatsapp, data.platforms.classroom, data.platforms.gmail, data.platforms.whatsapp, step])
+  }, [connection.classroom, connection.gmail, connection.whatsapp, data.platforms.classroom, data.platforms.gmail, data.platforms.whatsapp, step, whatsappGroupSelectionPending])
 
   const saveProgress = useCallback(async (targetStep = step) => {
     try {
@@ -954,6 +1121,10 @@ export default function Onboarding() {
     if (step === 3 && selectedCount === 0) {
       setPlatformError('Please select at least one platform to continue')
       setTimeout(() => setPlatformError(''), 2200)
+      return false
+    }
+    if (step === 4 && whatsappGroupSelectionPending) {
+      showToast('Save selected WhatsApp groups first', 'error')
       return false
     }
     if (step === 5) {
@@ -986,11 +1157,20 @@ export default function Onboarding() {
     localStorage.setItem('acadpulse_section', data.profile.section)
   }
 
-  const saveMappings = async () => {
+  const saveMappings = async (coursesOverride = data.courses) => {
+    const savedCourses = (coursesOverride || []).filter((course) => course.id && course.course_code?.trim() && course.course_name?.trim())
+    const courseIdByLabel = new Map(savedCourses.flatMap((course) => ([
+      [course.id, course.id],
+      [course.course_code, course.id],
+      [course.course_name, course.id],
+      [getCourseLabel(course), course.id],
+    ])))
     const rows = [
       ...(data.mappings.whatsapp || []).map((row) => ({ ...row, type: 'whatsapp' })),
       ...(data.mappings.gmail || []).map((row) => ({ ...row, type: 'gmail' })),
-    ].filter((row) => row.source?.trim() && row.course?.trim())
+    ]
+      .map((row) => ({ ...row, course_id: courseIdByLabel.get(row.course) || row.course }))
+      .filter((row) => row.source?.trim() && row.course_id?.trim())
     if (!rows.length) return
     const failures = []
     try {
@@ -1001,7 +1181,7 @@ export default function Onboarding() {
           mappings: rows.map((row) => ({
             source_type: row.type,
             source_reference_id: row.source,
-            course_id: row.course,
+            course_id: row.course_id,
           })),
         }),
       }, false)
@@ -1014,7 +1194,7 @@ export default function Onboarding() {
 
   const saveCourses = async () => {
     const rows = (data.courses || []).filter((course) => course.course_code?.trim() && course.course_name?.trim())
-    if (!rows.length) return
+    if (!rows.length) return []
     const saved = []
     for (const course of rows) {
       try {
@@ -1049,6 +1229,7 @@ export default function Onboarding() {
         return next ? { ...slot, course_id: next.id } : slot
       }),
     }))
+    return saved
   }
 
   const saveTimetable = async () => {
@@ -1078,9 +1259,11 @@ export default function Onboarding() {
     setSaving(true)
     try {
       if (step === 2) persistProfileLocally()
-      if (step === 5) await saveCourses()
+      if (step === 5) {
+        const savedCourses = await saveCourses()
+        await saveMappings(savedCourses.length ? savedCourses : data.courses)
+      }
       if (step === 6) await saveTimetable()
-      if (step === 7) await saveMappings()
       const next = Math.min(step + 1, TOTAL_STEPS)
       await saveProgress(next)
       setDirection('forward')
@@ -1116,6 +1299,10 @@ export default function Onboarding() {
     setFinishing(true)
     localStorage.setItem('acadpulse_onboarding_complete', 'true')
     try {
+      persistProfileLocally()
+      const savedCourses = await saveCourses()
+      await saveMappings(savedCourses.length ? savedCourses : data.courses)
+      await saveTimetable()
       await apiFetch('/onboarding/complete', {
         method: 'POST',
         body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), data: onboardingData }),
@@ -1133,17 +1320,16 @@ export default function Onboarding() {
     2: 'Continue ->',
     3: 'Continue ->',
     4: 'All Done ->',
-    5: (data.courses || []).some((course) => course.course_code?.trim() && course.course_name?.trim()) ? 'Save Courses ->' : 'Skip for Now ->',
+    5: (data.courses || []).some((course) => course.course_code?.trim() && course.course_name?.trim()) ? 'Save Courses & Mapping ->' : 'Skip for Now ->',
     6: (data.timetable || []).length ? 'Save Timetable ->' : 'Skip Timetable ->',
-    7: mappedCount ? 'Save & Continue ->' : 'Skip for Now ->',
-    8: 'Almost There ->',
   }[step]
 
   const disableContinue = saving
     || (step === 2 && (!data.profile.university || !data.profile.degree || !data.profile.semester))
     || (step === 4 && !setupUnlocked && (
-      (data.platforms.whatsapp && !connection.whatsapp)
-      || ((data.platforms.gmail || data.platforms.classroom) && !connection.google)
+      (data.platforms.gmail && !connection.gmail)
+      || (data.platforms.classroom && !connection.classroom)
+      || whatsappGroupSelectionPending
     ))
 
   return (
@@ -1159,23 +1345,45 @@ export default function Onboarding() {
             return <span key={dotStep} className={`${dotStep < step ? 'done' : ''} ${dotStep === step ? 'active' : ''}`} />
           })}
         </div>
-        {[3, 5, 6, 7, 8].includes(step) ? <button type="button" className="onb-skip" onClick={skip}>{'Skip this step ->'}</button> : <span />}
+        {[3, 5, 6].includes(step) ? <button type="button" className="onb-skip" onClick={skip}>{'Skip this step ->'}</button> : <span />}
       </div>
       {resume && <div className="onb-resume">Welcome back {displayName} - picking up where you left off.</div>}
-      <div className={`onb-content ${direction}`} key={step}>
+      <div className={`onb-content ${direction} ${step === 5 ? 'wide' : ''}`} key={step}>
         {step === 1 && <WelcomeStep name={displayName} />}
         {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} />}
-        {step === 3 && <PlatformsStep data={data} setData={setData} connection={connection} onOAuth={() => window.location.assign(oauthUrl)} platformError={platformError} />}
-        {step === 4 && <SetupStep data={data} connection={connection} qr={qr} qrLoading={qrLoading} setupUnlocked={setupUnlocked} refreshQr={() => fetchQr(false)} onOAuth={() => window.location.assign(oauthUrl)} />}
-        {step === 5 && <CoursesStep data={data} setData={setData} />}
+        {step === 3 && <PlatformsStep data={data} setData={setData} platformError={platformError} />}
+        {step === 4 && (
+          <SetupStep
+            data={data}
+            connection={connection}
+            qr={qr}
+            qrMessage={qrMessage}
+            qrLoading={qrLoading}
+            setupUnlocked={setupUnlocked}
+            refreshQr={() => fetchQr(false)}
+            onOAuth={(integration) => window.location.assign(getOAuthUrl(integration))}
+            detectedGroups={detectedGroups}
+            selectedDetectedGroupIds={selectedDetectedGroupIds}
+            toggleDetectedGroup={toggleDetectedGroup}
+            saveDetectedGroups={saveDetectedGroups}
+            groupSelectionSaving={groupSelectionSaving}
+            groupSelectionPending={whatsappGroupSelectionPending}
+          />
+        )}
+        {step === 5 && <CoursesAndMappingStep data={data} setData={setData} connection={connection} groups={groups} addMapping={addMapping} />}
         {step === 6 && <TimetableStep data={data} setData={setData} />}
-        {step === 7 && <MappingStep data={data} setData={setData} connection={connection} groups={groups} addMapping={addMapping} />}
-        {step === 8 && <PreferencesStep data={data} setData={setData} whatsappConnected={connection.whatsapp} showToast={showToast} />}
-        {step === 9 && <DoneStep name={displayName} data={data} connection={connection} mappedCount={mappedCount} finishing={finishing} onFinish={finish} />}
+        {step === 7 && <DoneStep name={displayName} data={data} connection={connection} mappedCount={mappedCount} />}
         {step < TOTAL_STEPS && (
           <button className="onb-primary" type="button" onClick={goNext} disabled={disableContinue}>
             {saving ? <Loader2 size={18} className="spin" /> : continueLabel}
           </button>
+        )}
+        {step === TOTAL_STEPS && (
+          <div className="onb-final-actions">
+            <button className="onb-primary large" type="button" onClick={finish} disabled={finishing}>
+              {finishing ? <Loader2 size={18} className="spin" /> : 'Continue to Dashboard'}
+            </button>
+          </div>
         )}
       </div>
       <Toast toast={toast} onDismiss={() => setToast({ message: '', type: 'success' })} />

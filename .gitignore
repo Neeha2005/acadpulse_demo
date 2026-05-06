@@ -25,6 +25,8 @@ whatsapp/auth/
 whatsapp/auth_info/
 whatsapp/queue/
 whatsapp/sessions/
+whatsapp/sessions-current/
+whatsapp/sessions-onboarding-fresh/
 whatsapp/baileys_store.json
 whatsapp/selected_groups.json
 whatsapp/*.log

@@ -607,7 +607,35 @@ def upsert_course(course_code, course_name, aliases=None, user_id=None, short_na
     replace_course_aliases(course_id, aliases or [])
     return course_id
 
-def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False):
+def ensure_whatsapp_group_selection_schema(cur):
+    """Keep older databases compatible with per-user WhatsApp group selection."""
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS is_selected BOOLEAN NOT NULL DEFAULT TRUE;
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS is_ignored BOOLEAN NOT NULL DEFAULT FALSE;
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        """
+    )
+
+
+def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False, selected=False):
     """Store a WhatsApp group seen by the bridge and optionally attach it to a user."""
     if not group_id:
         return None
@@ -629,13 +657,27 @@ def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=Fa
         whatsapp_group_pk = cur.fetchone()[0]
 
         if user_id:
+            ensure_whatsapp_group_selection_schema(cur)
             cur.execute(
                 """
-                INSERT INTO user_whatsapp_groups (user_id, whatsapp_group_id)
-                VALUES (%s, %s)
-                ON CONFLICT DO NOTHING;
+                INSERT INTO user_whatsapp_groups (
+                    user_id, whatsapp_group_id, is_selected, is_ignored, detected_at, updated_at
+                )
+                VALUES (%s, %s, %s, FALSE, NOW(), NOW())
+                ON CONFLICT (user_id, whatsapp_group_id) DO UPDATE
+                SET
+                    is_selected = CASE
+                        WHEN EXCLUDED.is_selected THEN TRUE
+                        WHEN user_whatsapp_groups.is_ignored THEN FALSE
+                        ELSE user_whatsapp_groups.is_selected
+                    END,
+                    is_ignored = CASE
+                        WHEN EXCLUDED.is_selected THEN FALSE
+                        ELSE user_whatsapp_groups.is_ignored
+                    END,
+                    updated_at = NOW();
                 """,
-                (user_id, whatsapp_group_pk),
+                (user_id, whatsapp_group_pk, bool(selected)),
             )
 
         conn.commit()
@@ -648,8 +690,8 @@ def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=Fa
         cur.close()
         conn.close()
 
-def list_whatsapp_groups(user_id=None):
-    """Return WhatsApp groups from saved groups and previously stored notifications."""
+def list_whatsapp_groups(user_id=None, selected_only=True):
+    """Return selected WhatsApp groups for mapping/dashboard use."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
@@ -657,8 +699,21 @@ def list_whatsapp_groups(user_id=None):
         group_user_filter = ""
         notification_user_filter = ""
         if user_id:
-            group_user_filter = "WHERE uwg.user_id = %s OR uwg.user_id IS NULL"
-            notification_user_filter = "AND n.user_id = %s"
+            ensure_whatsapp_group_selection_schema(cur)
+            selection_filter = "AND uwg.is_selected = TRUE AND uwg.is_ignored = FALSE" if selected_only else "AND uwg.is_ignored = FALSE"
+            group_user_filter = f"WHERE uwg.user_id = %s {selection_filter}"
+            notification_user_filter = """
+                  AND n.user_id = %s
+                  AND EXISTS (
+                      SELECT 1
+                      FROM whatsapp_groups nwg
+                      JOIN user_whatsapp_groups nuwg ON nuwg.whatsapp_group_id = nwg.id
+                      WHERE nuwg.user_id = n.user_id
+                        AND nwg.whatsapp_group_id = n.source_reference_id
+                        AND nuwg.is_selected = TRUE
+                        AND nuwg.is_ignored = FALSE
+                  )
+            """ if selected_only else "AND n.user_id = %s"
             params.extend([user_id, user_id])
 
         cur.execute(
@@ -668,9 +723,11 @@ def list_whatsapp_groups(user_id=None):
                     wg.whatsapp_group_id AS group_id,
                     wg.group_name,
                     wg.is_general,
+                    COALESCE(uwg.is_selected, FALSE) AS is_selected,
+                    COALESCE(uwg.is_ignored, FALSE) AS is_ignored,
                     'saved' AS source
                 FROM whatsapp_groups wg
-                LEFT JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
+                JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
                 {group_user_filter}
             ),
             notification_groups AS (
@@ -678,6 +735,8 @@ def list_whatsapp_groups(user_id=None):
                     n.source_reference_id AS group_id,
                     COALESCE(n.source_reference_id, 'WhatsApp group') AS group_name,
                     FALSE AS is_general,
+                    TRUE AS is_selected,
+                    FALSE AS is_ignored,
                     'notifications' AS source
                 FROM notifications n
                 WHERE n.source_type = 'whatsapp'
@@ -688,6 +747,8 @@ def list_whatsapp_groups(user_id=None):
                 group_id,
                 group_name,
                 is_general,
+                is_selected,
+                is_ignored,
                 source
             FROM (
                 SELECT * FROM saved_groups
@@ -700,6 +761,117 @@ def list_whatsapp_groups(user_id=None):
             params,
         )
         return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_detected_whatsapp_groups(user_id):
+    """Return all non-ignored WhatsApp groups detected for a specific user."""
+    if not user_id:
+        return []
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            SELECT
+                wg.whatsapp_group_id AS group_id,
+                wg.group_name,
+                wg.is_general,
+                uwg.is_selected,
+                uwg.is_ignored,
+                uwg.detected_at,
+                uwg.updated_at,
+                'detected' AS source
+            FROM user_whatsapp_groups uwg
+            JOIN whatsapp_groups wg ON wg.id = uwg.whatsapp_group_id
+            WHERE uwg.user_id = %s
+              AND uwg.is_ignored = FALSE
+            ORDER BY uwg.is_selected DESC, wg.group_name ASC;
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def save_user_whatsapp_group_selection(user_id, group_ids):
+    """Mark selected groups for a user and ignore all other detected groups."""
+    selected_ids = [str(group_id).strip() for group_id in (group_ids or []) if str(group_id or "").strip()]
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            UPDATE user_whatsapp_groups
+            SET is_selected = FALSE,
+                is_ignored = TRUE,
+                updated_at = NOW()
+            WHERE user_id = %s;
+            """,
+            (user_id,),
+        )
+        if selected_ids:
+            cur.execute(
+                """
+                UPDATE user_whatsapp_groups uwg
+                SET is_selected = TRUE,
+                    is_ignored = FALSE,
+                    updated_at = NOW()
+                FROM whatsapp_groups wg
+                WHERE uwg.whatsapp_group_id = wg.id
+                  AND uwg.user_id = %s
+                  AND wg.whatsapp_group_id = ANY(%s);
+                """,
+                (user_id, selected_ids),
+            )
+        cur.execute(
+            """
+            DELETE FROM course_source_mappings csm
+            USING whatsapp_groups wg
+            JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
+            WHERE csm.user_id = %s
+              AND uwg.user_id = %s
+              AND csm.source_type = 'whatsapp'
+              AND csm.source_reference_id = wg.whatsapp_group_id
+              AND uwg.is_ignored = TRUE;
+            """,
+            (user_id, user_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+    return list_whatsapp_groups(user_id=user_id, selected_only=True)
+
+
+def is_user_whatsapp_group_selected(user_id, group_id):
+    if not user_id or not group_id:
+        return False
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            SELECT COALESCE(uwg.is_selected, FALSE) AND NOT COALESCE(uwg.is_ignored, FALSE)
+            FROM user_whatsapp_groups uwg
+            JOIN whatsapp_groups wg ON wg.id = uwg.whatsapp_group_id
+            WHERE uwg.user_id = %s
+              AND wg.whatsapp_group_id = %s;
+            """,
+            (user_id, group_id),
+        )
+        row = cur.fetchone()
+        return bool(row and row[0])
     finally:
         cur.close()
         conn.close()
@@ -909,7 +1081,8 @@ def get_user_by_email(email):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE email = %s
             LIMIT 1
@@ -929,7 +1102,8 @@ def get_user_by_login(identifier):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE LOWER(email) = %s
                OR regexp_replace(COALESCE(whatsapp_number, ''), '\\D', '', 'g') = %s
@@ -973,7 +1147,8 @@ def get_user_by_id(user_id):
     try:
         cur.execute(
             """
-            SELECT id, full_name as name, email, university, degree, semester
+            SELECT id, full_name as name, email, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE id = %s
             LIMIT 1

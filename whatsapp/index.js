@@ -41,6 +41,7 @@ async function syncGroups(sock, userId) {
         group_id: cleanJid(group.id),
         group_name: group.subject,
         is_general: false,
+        selected: false,
       });
     }
   } catch (error) {

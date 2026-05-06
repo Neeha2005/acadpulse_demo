@@ -17,6 +17,7 @@ const backendRoutes = [
   '/gmail',
   '/onboarding/status',
   '/onboarding/progress',
+  '/onboarding/integrations',
   '/onboarding/complete',
   '/archives',
   '/chat',

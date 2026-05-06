@@ -34,13 +34,17 @@ export default function Login() {
       const oauthEmail = oauthParams.get('oauth_email') || ''
       const returnTo = oauthParams.get('return_to') || ''
       const googleConnected = oauthParams.get('google_connected') === '1'
+      const googleIntegration = oauthParams.get('google_integration') || ''
       completeLoginSession(oauthToken, {
         name: oauthName,
         fullName: oauthName,
         email: oauthEmail,
       })
       if (returnTo) {
-        navigate(`/${returnTo}${googleConnected ? '?google_connected=1' : ''}`, { replace: true })
+        const params = new URLSearchParams()
+        if (googleConnected) params.set('google_connected', '1')
+        if (googleIntegration) params.set('google_integration', googleIntegration)
+        navigate(`/${returnTo}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true })
       } else {
         navigate('/onboarding', { replace: true })
       }

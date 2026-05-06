@@ -66,6 +66,9 @@ from db import (
     upsert_course,
     record_whatsapp_group,
     list_whatsapp_groups,
+    list_detected_whatsapp_groups,
+    save_user_whatsapp_group_selection,
+    is_user_whatsapp_group_selected,
     record_classroom_course,
     list_classroom_courses,
     get_course_mapping_course_id,
@@ -117,6 +120,8 @@ WHATSAPP_STATUS_STATE_FILE = Path(__file__).resolve().parent / "whatsapp_status_
 DEFAULT_WHATSAPP_STATUS_STATE = {
     "status": "unknown",
     "reason": None,
+    "user_id": None,
+    "pending_user_id": None,
     "qr": None,
     "qr_updated_at": None,
     "updated_at": None,
@@ -276,6 +281,11 @@ class WhatsAppGroupRequest(BaseModel):
     group_name: Optional[str] = None
     user_id: Optional[Any] = None
     is_general: bool = False
+    selected: bool = False
+
+class WhatsAppGroupSelectionRequest(BaseModel):
+    user_id: Optional[Any] = None
+    group_ids: List[str] = Field(default_factory=list)
 
 class ClassroomCourseRequest(BaseModel):
     classroom_id: str
@@ -327,12 +337,16 @@ class ManualNotificationRequest(BaseModel):
 
 class OnboardingProgressRequest(BaseModel):
     user_id: Optional[Any] = None
-    step: int = Field(default=0, ge=0, le=6)
+    step: int = Field(default=0, ge=0, le=7)
     data: Dict[str, Any] = Field(default_factory=dict)
 
 class OnboardingCompleteRequest(BaseModel):
     user_id: Optional[Any] = None
     data: Dict[str, Any] = Field(default_factory=dict)
+
+class OnboardingIntegrationsRequest(BaseModel):
+    user_id: Optional[Any] = None
+    platforms: Dict[str, bool] = Field(default_factory=dict)
 
 class CoursesMapRequest(BaseModel):
     user_id: Optional[Any] = None
@@ -400,6 +414,9 @@ def serialize_user(user_row: Dict[str, Any]) -> Dict[str, str]:
         "university": user_row.get("university") or "",
         "degree": user_row.get("degree") or "",
         "semester": user_row.get("semester") or "",
+        "whatsapp_connected": bool(user_row.get("whatsapp_connected")),
+        "gmail_connected": bool(user_row.get("gmail_connected")),
+        "classroom_connected": bool(user_row.get("classroom_connected")),
     }
 
 def create_access_token(user_row: Dict[str, Any]) -> str:
@@ -922,6 +939,8 @@ def serialize_whatsapp_group_row(row):
         "group_id": row.get("group_id"),
         "group_name": row.get("group_name") or row.get("group_id"),
         "is_general": bool(row.get("is_general")),
+        "is_selected": bool(row.get("is_selected")),
+        "is_ignored": bool(row.get("is_ignored")),
         "source": row.get("source"),
     }
 
@@ -1010,6 +1029,7 @@ def get_onboarding_status_for_user(user_id: str) -> Dict[str, Any]:
 
 def save_onboarding_progress_for_user(user_id: str, step: int, data: Dict[str, Any]) -> None:
     profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -1041,6 +1061,116 @@ def save_onboarding_progress_for_user(user_id: str, step: int, data: Dict[str, A
             """,
             (user_id, step, json.dumps(data)),
         )
+        if platforms:
+            cur.execute(
+                """
+                INSERT INTO user_settings (
+                    user_id, whatsapp_enabled, gmail_enabled, classroom_enabled, updated_at
+                )
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id) DO UPDATE
+                SET whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+                    gmail_enabled = EXCLUDED.gmail_enabled,
+                    classroom_enabled = EXCLUDED.classroom_enabled,
+                    updated_at = NOW();
+                """,
+                (
+                    user_id,
+                    bool(platforms.get("whatsapp", False)),
+                    bool(platforms.get("gmail", False)),
+                    bool(platforms.get("classroom", False)),
+                ),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+def save_user_integration_settings(user_id: str, platforms: Dict[str, bool]) -> None:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO user_settings (
+                user_id, whatsapp_enabled, gmail_enabled, classroom_enabled, updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+                gmail_enabled = EXCLUDED.gmail_enabled,
+                classroom_enabled = EXCLUDED.classroom_enabled,
+                updated_at = NOW();
+            """,
+            (
+                user_id,
+                bool(platforms.get("whatsapp", False)),
+                bool(platforms.get("gmail", False)),
+                bool(platforms.get("classroom", False)),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+def set_user_connected_flags(
+    user_id: str,
+    whatsapp: Optional[bool] = None,
+    gmail: Optional[bool] = None,
+    classroom: Optional[bool] = None,
+) -> None:
+    if not user_id:
+        return
+    updates = []
+    values = []
+    settings_updates = []
+    settings_values = []
+    if whatsapp is not None:
+        updates.append("whatsapp_connected = %s")
+        values.append(bool(whatsapp))
+        settings_updates.append("whatsapp_enabled = %s")
+        settings_values.append(bool(whatsapp))
+    if gmail is not None:
+        updates.append("gmail_connected = %s")
+        values.append(bool(gmail))
+        settings_updates.append("gmail_enabled = %s")
+        settings_values.append(bool(gmail))
+    if classroom is not None:
+        updates.append("classroom_connected = %s")
+        values.append(bool(classroom))
+        settings_updates.append("classroom_enabled = %s")
+        settings_values.append(bool(classroom))
+    if not updates:
+        return
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = %s;", (*values, user_id))
+        if settings_updates:
+            cur.execute(
+                """
+                INSERT INTO user_settings (user_id, updated_at)
+                VALUES (%s, NOW())
+                ON CONFLICT (user_id) DO NOTHING;
+                """,
+                (user_id,),
+            )
+            cur.execute(
+                f"""
+                UPDATE user_settings
+                SET {', '.join(settings_updates)},
+                    updated_at = NOW()
+                WHERE user_id = %s;
+                """,
+                (*settings_values, user_id),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -1052,6 +1182,7 @@ def save_onboarding_progress_for_user(user_id: str, step: int, data: Dict[str, A
 def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
     platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
+    connections = data.get("connections") if isinstance(data.get("connections"), dict) else {}
     mappings = data.get("mappings") if isinstance(data.get("mappings"), list) else []
     timetable_entries = data.get("timetable") if isinstance(data.get("timetable"), list) else []
     selected_groups = data.get("selectedGroups") if isinstance(data.get("selectedGroups"), list) else []
@@ -1067,13 +1198,19 @@ def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dic
                 onboarding_step = 6,
                 university = COALESCE(NULLIF(%s, ''), university),
                 degree = COALESCE(NULLIF(%s, ''), degree),
-                semester = COALESCE(NULLIF(%s, ''), semester)
+                semester = COALESCE(NULLIF(%s, ''), semester),
+                whatsapp_connected = %s,
+                gmail_connected = %s,
+                classroom_connected = %s
             WHERE id = %s;
             """,
             (
                 str(profile.get("university") or ""),
                 str(profile.get("degree") or ""),
                 str(profile.get("semester") or ""),
+                bool(connections.get("whatsapp", False)),
+                bool(connections.get("gmail", connections.get("google", False))),
+                bool(connections.get("classroom", False)),
                 user_id,
             ),
         )
@@ -1126,7 +1263,7 @@ def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dic
             group_name = str(group).strip()
             group_id = group_name
         if group_id:
-            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=False)
+            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=False, selected=True)
 
     for group in society_groups[:50]:
         if isinstance(group, dict):
@@ -1136,7 +1273,7 @@ def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dic
             group_name = str(group).strip()
             group_id = group_name
         if group_id:
-            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=True)
+            record_whatsapp_group(group_id, group_name=group_name, user_id=user_id, is_general=True, selected=True)
 
     for mapping in mappings[:100]:
         source_type = str(mapping.get("source_type") or mapping.get("sourceType") or "whatsapp").strip().lower()
@@ -1165,6 +1302,7 @@ def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dic
                     group_name=str(mapping.get("group_name") or mapping.get("group") or source_reference_id),
                     user_id=user_id,
                     is_general=bool(mapping.get("is_general")),
+                    selected=True,
                 )
             elif source_type == "classroom":
                 record_classroom_course(
@@ -1264,6 +1402,14 @@ def resolve_mapping_user_id(user_id: Optional[str] = None) -> str:
         except (ValueError, TypeError):
             logger.info("Replacing non-UUID user_id with default student: %s", user_id)
     return resolve_default_student_user_id()
+
+def resolve_whatsapp_user_id(user_id: Optional[Any] = None) -> str:
+    """Resolve WhatsApp bridge placeholder IDs to the account waiting on QR scan."""
+    raw_user_id = str(user_id or "").strip()
+    pending_user_id = str(whatsapp_status_state.get("pending_user_id") or "").strip()
+    if pending_user_id and (not raw_user_id or raw_user_id in {"test-user", "acadpulse-demo-onboarding"}):
+        return resolve_mapping_user_id(pending_user_id)
+    return resolve_mapping_user_id(raw_user_id)
 
 def ensure_timezone_aware(value):
     if value is None:
@@ -2709,6 +2855,7 @@ def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_us
 def login_with_google(
     user_id: Optional[str] = Query(default=None),
     next_path: Optional[str] = Query(default=None),
+    integration: Optional[str] = Query(default=None),
 ):
     """Initiate Google OAuth — redirects browser to Google's consent screen."""
     if not is_google_configured():
@@ -2727,6 +2874,8 @@ def login_with_google(
         state_parts = [user_id or "new"]
         if next_path:
             state_parts.append(next_path)
+        if integration:
+            state_parts.append(integration)
         state = "|".join(state_parts)
         auth_url, _ = flow.authorization_url(
             access_type="offline",
@@ -2758,10 +2907,11 @@ def google_oauth_callback(
         redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Missing OAuth code')}"
         return RedirectResponse(redirect_url)
 
-    # Decode state: format is "user_id|next_path" or just "user_id"
-    state_parts = (state or "new").split("|", 1)
+    # Decode state: format is "user_id|next_path|integration" or just "user_id"
+    state_parts = (state or "new").split("|")
     user_id_from_state = state_parts[0] if state_parts else "new"
     next_path = state_parts[1] if len(state_parts) > 1 else None
+    integration = state_parts[2] if len(state_parts) > 2 else None
 
     try:
         redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/google/callback")
@@ -2802,6 +2952,12 @@ def google_oauth_callback(
 
         # Persist Google credentials for this user (used by gmail/classroom fetch)
         save_google_credentials(str(user["id"]), credentials)
+        if integration == "gmail":
+            set_user_connected_flags(str(user["id"]), gmail=True)
+        elif integration == "classroom":
+            set_user_connected_flags(str(user["id"]), classroom=True)
+        else:
+            set_user_connected_flags(str(user["id"]), gmail=True, classroom=True)
 
         token = create_access_token(user)
         base_redirect = f"{FRONTEND_URL}/login"
@@ -2811,6 +2967,8 @@ def google_oauth_callback(
             f"&oauth_email={quote_plus(user['email'])}"
             f"&google_connected=1"
         )
+        if integration:
+            params += f"&google_integration={quote_plus(integration)}"
         if next_path:
             params += f"&return_to={quote_plus(next_path)}"
         return RedirectResponse(base_redirect + params)
@@ -2828,6 +2986,10 @@ def get_google_status(current_user: Dict[str, Any] = Depends(get_current_user)):
     connected = google_connected_for_user(user_id) if configured else False
     email = None
     if connected:
+        try:
+            set_user_connected_flags(user_id, gmail=True, classroom=True)
+        except Exception:
+            logger.exception("Failed to reconcile Google connected flags")
         try:
             creds = load_google_credentials(user_id)
             if creds and hasattr(creds, "client_id"):
@@ -3070,7 +3232,14 @@ def update_course_aliases(course_id: str, request: CourseAliasesRequest):
 
 @app.get("/whatsapp/groups")
 def get_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
-    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    if not user_id:
+        return {
+            "status": "success",
+            "user_id": None,
+            "count": 0,
+            "groups": [],
+        }
+    resolved_user_id = resolve_mapping_user_id(user_id)
     try:
         rows = list_whatsapp_groups(user_id=resolved_user_id)
     except Exception as exc:
@@ -3084,18 +3253,56 @@ def get_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
         "groups": [serialize_whatsapp_group_row(row) for row in rows],
     }
 
+@app.get("/whatsapp/groups/detected")
+def get_detected_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
+    if not user_id:
+        return {
+            "status": "success",
+            "user_id": None,
+            "count": 0,
+            "groups": [],
+        }
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    try:
+        rows = list_detected_whatsapp_groups(resolved_user_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch detected WhatsApp groups")
+        raise HTTPException(status_code=500, detail="Unable to fetch detected WhatsApp groups") from exc
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "count": len(rows),
+        "groups": [serialize_whatsapp_group_row(row) for row in rows],
+    }
+
+@app.post("/whatsapp/groups/selection")
+def save_whatsapp_group_selection(request: WhatsAppGroupSelectionRequest):
+    resolved_user_id = resolve_whatsapp_user_id(request.user_id)
+    try:
+        rows = save_user_whatsapp_group_selection(resolved_user_id, request.group_ids)
+    except Exception as exc:
+        logger.exception("Failed to save WhatsApp group selection")
+        raise HTTPException(status_code=500, detail="Unable to save WhatsApp group selection") from exc
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "count": len(rows),
+        "groups": [serialize_whatsapp_group_row(row) for row in rows],
+    }
+
 @app.post("/whatsapp/groups")
 def save_whatsapp_group(request: WhatsAppGroupRequest):
     group_id = (request.group_id or "").strip()
     if not group_id:
         raise HTTPException(status_code=422, detail="group_id is required")
 
-    user_id = resolve_mapping_user_id(request.user_id)
+    user_id = resolve_whatsapp_user_id(request.user_id)
     saved_id = record_whatsapp_group(
         group_id=group_id,
         group_name=(request.group_name or group_id).strip(),
         user_id=user_id,
         is_general=request.is_general,
+        selected=request.selected,
     )
     if not saved_id:
         raise HTTPException(status_code=500, detail="Unable to save WhatsApp group")
@@ -3318,10 +3525,15 @@ def refresh_urgency_endpoint(user_id: str = Query(...)):
 @app.post("/whatsapp/status")
 def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     now_iso = datetime.now(PAKISTAN_TZ).isoformat()
+    incoming_user_id = str(status_update.user_id or "").strip()
+    pending_user_id = str(whatsapp_status_state.get("pending_user_id") or "").strip()
+    effective_user_id = incoming_user_id
+    if pending_user_id and (not incoming_user_id or incoming_user_id in {"test-user", "acadpulse-demo-onboarding"}):
+        effective_user_id = pending_user_id
     whatsapp_status_state.update({
         "status": status_update.status,
         "reason": status_update.reason,
-        "user_id": status_update.user_id,
+        "user_id": effective_user_id or status_update.user_id,
         "updated_at": now_iso,
     })
     if status_update.qr:
@@ -3330,15 +3542,74 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     elif status_update.status in {"connected", "logged_out"}:
         whatsapp_status_state["qr"] = None
         whatsapp_status_state["qr_updated_at"] = None
+        if status_update.status == "connected":
+            whatsapp_status_state["pending_user_id"] = None
+    try:
+        normalized_user_id = str(effective_user_id or "").strip()
+        if normalized_user_id:
+            if status_update.status in {"connected", "open"}:
+                set_user_connected_flags(normalized_user_id, whatsapp=True)
+            elif status_update.status == "logged_out":
+                set_user_connected_flags(normalized_user_id, whatsapp=False)
+    except Exception:
+        logger.exception("Failed to update WhatsApp connected flag")
     persist_whatsapp_status_state()
     return {"status": "success", "whatsapp": whatsapp_status_state}
 
 @app.get("/whatsapp/status")
-def get_whatsapp_status():
+def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
+    if not user_id:
+        return {
+            "status": "success",
+            "whatsapp": {
+                "status": "unknown",
+                "reason": "missing_user_id",
+                "user_id": None,
+                "qr": None,
+                "qr_updated_at": None,
+                "updated_at": whatsapp_status_state.get("updated_at"),
+            },
+        }
+    requested_user_id = resolve_mapping_user_id(user_id)
+    state_user_id = str(whatsapp_status_state.get("user_id") or "")
+    if requested_user_id and state_user_id and state_user_id != requested_user_id:
+        return {
+            "status": "success",
+            "whatsapp": {
+                "status": "unknown",
+                "reason": "not_connected_for_this_user",
+                "user_id": requested_user_id,
+                "qr": None,
+                "qr_updated_at": None,
+                "updated_at": whatsapp_status_state.get("updated_at"),
+            },
+        }
+    if requested_user_id and whatsapp_status_state.get("status") in {"connected", "open"}:
+        try:
+            set_user_connected_flags(requested_user_id, whatsapp=True)
+        except Exception:
+            logger.exception("Failed to reconcile WhatsApp connected flag")
     return {"status": "success", "whatsapp": whatsapp_status_state}
 
 @app.get("/whatsapp/qr")
-def get_whatsapp_qr():
+def get_whatsapp_qr(user_id: Optional[str] = Query(default=None)):
+    if not user_id:
+        return {
+            "status": "pending",
+            "qr": None,
+            "message": "WhatsApp QR requires the current user account.",
+        }
+    requested_user_id = resolve_mapping_user_id(user_id)
+    state_user_id = str(whatsapp_status_state.get("user_id") or "")
+    whatsapp_status_state["pending_user_id"] = requested_user_id
+    persist_whatsapp_status_state()
+    if requested_user_id and state_user_id and state_user_id != requested_user_id:
+        return {
+            "status": "connected_elsewhere",
+            "qr": None,
+            "connected_user_id": state_user_id,
+            "message": "WhatsApp bridge is currently connected to another user. Restart the WhatsApp bridge with a fresh session to generate a QR for this account.",
+        }
     qr_value = whatsapp_status_state.get("qr")
     if qr_value:
         return {
@@ -3582,6 +3853,20 @@ def save_onboarding_progress(request: OnboardingProgressRequest):
     except Exception as exc:
         logger.exception("Failed to save onboarding progress")
         raise HTTPException(status_code=500, detail="Unable to save onboarding progress") from exc
+
+@app.post("/onboarding/integrations")
+def save_onboarding_integrations(request: OnboardingIntegrationsRequest):
+    resolved_user_id = resolve_mapping_user_id(request.user_id)
+    try:
+        save_user_integration_settings(resolved_user_id, request.platforms)
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "platforms": request.platforms,
+        }
+    except Exception as exc:
+        logger.exception("Failed to save onboarding integrations")
+        raise HTTPException(status_code=500, detail="Unable to save onboarding integrations") from exc
 
 @app.post("/onboarding/complete")
 def complete_onboarding(request: OnboardingCompleteRequest):
@@ -4011,7 +4296,7 @@ async def process_incoming_message(payload: Dict[str, Any]):
         await process_incoming_message({"message_id": "abc", "text": "Assignment due tomorrow"})
     """
     try:
-        user_id = resolve_mapping_user_id(
+        user_id = resolve_whatsapp_user_id(
             payload.get("user_id") or payload.get("userId") or payload.get("user")
         )
         payload["user_id"] = user_id
@@ -4031,13 +4316,21 @@ async def process_incoming_message(payload: Dict[str, Any]):
             or payload.get("chatName")
             or group_id
         )
-        if group_id and str(group_id).endswith("@g.us"):
+        if group_id:
             record_whatsapp_group(
                 group_id=str(group_id),
                 group_name=str(group_name or group_id),
                 user_id=user_id,
                 is_general=bool(payload.get("is_general") or payload.get("isGeneral")),
             )
+            if not is_user_whatsapp_group_selected(user_id, str(group_id)):
+                return {
+                    "success": True,
+                    "ignored": True,
+                    "reason": "whatsapp_group_not_selected",
+                    "notifications_created": [],
+                    "count": 0,
+                }
 
         notification_ids = await process_whatsapp_message(payload)
         return {
