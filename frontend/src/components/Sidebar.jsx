@@ -105,12 +105,6 @@ export default function Sidebar({ onOpenAccount, onOpenChatbot, onOpenSemesterRe
             <IntegrationStatusPill status={googleStatus} />
           </div>
         </NavLink>
-
-        <div className="sidebar-divider"></div>
-        <div className="nav-section nav-section-accent">History</div>
-        <NavLink to="/archives" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Archives">
-          <i className="fa-solid fa-box-archive"></i> <span className="nav-label">Archives</span>
-        </NavLink>
       </nav>
       <div className="sidebar-footer">
         <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset}>

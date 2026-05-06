@@ -1,1292 +1,1184 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
+  AlertTriangle,
   Bell,
   BookOpen,
   Building2,
+  Calendar,
   Check,
-  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
   Clock,
+  ExternalLink,
+  Flame,
   GraduationCap,
+  Hash,
+  Loader2,
   Lock,
   Mail,
+  MapPin,
   MessageCircle,
-  Moon,
+  Plus,
+  RefreshCw,
   School,
-  ShieldCheck,
-  Smartphone,
   Sparkles,
   Trash2,
   Users,
-  X,
   Zap,
-} from 'lucide-react';
-import { useAppContext } from '../context/AppContext';
-import logoSrc from '../assets/acadpulse-logo.png';
-import '../onboarding.css';
+} from 'lucide-react'
+import { useAppContext } from '../context/AppContext'
+import '../onboarding.css'
 
-const TOTAL_STEPS = 7;
-const STEP_LABELS = ['Welcome', 'Profile', 'Platforms', 'Setup', 'Mapping', 'Alerts', 'Done'];
-const SEMESTERS = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
+const TOTAL_STEPS = 9
+const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
+const DAYS = [
+  [1, 'Monday'],
+  [2, 'Tuesday'],
+  [3, 'Wednesday'],
+  [4, 'Thursday'],
+  [5, 'Friday'],
+  [6, 'Saturday'],
+  [7, 'Sunday'],
+]
+const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
 
-function SecurityBadge({ level = 'private', tooltip }) {
-  const [showTip, setShowTip] = useState(false);
-  const isSensitive = level === 'sensitive';
-  return (
-    <span
-      className={`ob-security-badge ${isSensitive ? 'sensitive' : 'private'}`}
-      onMouseEnter={() => setShowTip(true)}
-      onMouseLeave={() => setShowTip(false)}
-      onFocus={() => setShowTip(true)}
-      onBlur={() => setShowTip(false)}
-      tabIndex={0}
-      aria-label={`${isSensitive ? 'Sensitive' : 'Private'} data — ${tooltip}`}
-    >
-      {isSensitive ? <Lock size={10} /> : <ShieldCheck size={10} />}
-      {isSensitive ? 'Sensitive' : 'Private'}
-      {showTip && (
-        <span className="ob-security-tooltip" role="tooltip">{tooltip}</span>
-      )}
-    </span>
-  );
+const DEFAULT_DATA = {
+  profile: {
+    university: localStorage.getItem('acadpulse_university') || '',
+    degree: localStorage.getItem('acadpulse_degree') || '',
+    semester: localStorage.getItem('acadpulse_semester') || '',
+    section: localStorage.getItem('acadpulse_section') || '',
+  },
+  platforms: { whatsapp: true, gmail: true, classroom: true },
+  preferences: {
+    desktopPopups: true,
+    morningDigest: true,
+    digestTime: '08:00',
+    criticalAlerts: true,
+    whatsappReminders: false,
+  },
+  mappings: {
+    whatsapp: [],
+    gmail: [
+      { id: 'gmail-1', source: '', course: '' },
+      { id: 'gmail-2', source: '', course: '' },
+    ],
+  },
+  courses: [
+    { id: 'course-1', course_code: '', course_name: '', short_name: '' },
+    { id: 'course-2', course_code: '', course_name: '', short_name: '' },
+  ],
+  timetable: [],
 }
 
-function Toast({ message, type = 'success', onDismiss }) {
+function readDraft() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+    return {
+      ...DEFAULT_DATA,
+      ...parsed,
+      profile: { ...DEFAULT_DATA.profile, ...(parsed.profile || {}) },
+      platforms: { ...DEFAULT_DATA.platforms, ...(parsed.platforms || {}) },
+      preferences: { ...DEFAULT_DATA.preferences, ...(parsed.preferences || {}) },
+      mappings: { ...DEFAULT_DATA.mappings, ...(parsed.mappings || {}) },
+      courses: Array.isArray(parsed.courses) && parsed.courses.length ? parsed.courses : DEFAULT_DATA.courses,
+      timetable: Array.isArray(parsed.timetable) ? parsed.timetable : DEFAULT_DATA.timetable,
+    }
+  } catch {
+    return DEFAULT_DATA
+  }
+}
+
+function Toast({ toast, onDismiss }) {
   useEffect(() => {
-    if (!message) return;
-    const t = setTimeout(onDismiss, 3000);
-    return () => clearTimeout(t);
-  }, [message, onDismiss]);
+    if (!toast.message) return undefined
+    const timer = setTimeout(onDismiss, 3000)
+    return () => clearTimeout(timer)
+  }, [toast.message, onDismiss])
 
-  if (!message) return null;
+  if (!toast.message) return null
   return (
-    <div className={`ob-toast ob-toast-${type}`} role="alert" aria-live="polite">
-      {type === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
-      {message}
+    <div className={`onb-toast ${toast.type}`} role="status" aria-live="polite">
+      {toast.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
+      <span>{toast.message}</span>
     </div>
-  );
+  )
 }
 
-function StatusDot({ connected }) {
-  return <span className={`ob-status-dot ${connected ? 'connected' : ''}`} />;
-}
-
-function ToggleSwitch({ checked, onChange, label }) {
+function Toggle({ checked, onChange, disabled, label }) {
   return (
     <button
-      className={`ob-switch ${checked ? 'on' : ''}`}
       type="button"
-      onClick={() => onChange(!checked)}
+      className={`onb-toggle ${checked ? 'is-on' : ''}`}
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
       aria-label={label}
       aria-pressed={checked}
     >
       <span />
     </button>
-  );
+  )
 }
 
-function Confetti() {
-  const colors = [
-    '#cfa04a', '#d9aa50', '#f97316', '#22c55e',
-    '#fbbf24', '#ef4444', '#84cc16', '#a78bfa',
-  ];
+function StepBadge({ children }) {
+  return <div className="onb-badge">{children}</div>
+}
+
+function Field({ label, optional, icon, error, children }) {
   return (
-    <div className="ob-confetti" aria-hidden="true">
-      {Array.from({ length: 30 }).map((_, i) => (
-        <span
-          key={i}
-          style={{
-            '--i': i,
-            '--color': colors[i % colors.length],
-            '--rot': `${(i * 47) % 360}deg`,
-            '--size': `${6 + (i % 5) * 2}px`,
-            '--left': `${(i * 3.2 + 2) % 96}%`,
-            '--delay': `${(i * 0.13) % 2.4}s`,
-            '--dur': `${2.2 + (i % 5) * 0.18}s`,
-          }}
-        />
+    <label className={`onb-field ${error ? 'has-error' : ''}`}>
+      <span className="onb-label">
+        {label}
+        {optional && <em>(Optional)</em>}
+      </span>
+      <div className="onb-input-wrap">
+        {icon}
+        {children}
+      </div>
+      {error && (
+        <small className="onb-error">
+          <AlertCircle size={13} />
+          {error}
+        </small>
+      )}
+    </label>
+  )
+}
+
+function SemesterDropdown({ value, onChange, error }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const close = (event) => {
+      if (ref.current && !ref.current.contains(event.target)) setOpen(false)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [])
+
+  return (
+    <div className="onb-dropdown" ref={ref}>
+      <button
+        type="button"
+        className={`onb-select ${!value ? 'is-placeholder' : ''} ${error ? 'has-error' : ''}`}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Hash size={17} />
+        <span>{value || 'Select your semester'}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="onb-options" role="listbox">
+          {SEMESTERS.map((semester) => (
+            <button
+              key={semester}
+              type="button"
+              className={value === semester ? 'selected' : ''}
+              onClick={() => {
+                onChange(semester)
+                setOpen(false)
+              }}
+            >
+              {semester}
+              {value === semester && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WelcomeStep({ name }) {
+  return (
+    <section className="onb-step onb-welcome">
+      <div className="onb-ambient onb-ambient-purple" />
+      <div className="onb-ambient onb-ambient-cyan" />
+      <div className="onb-logo-mark">
+        <GraduationCap size={36} />
+      </div>
+      <div className="onb-wordmark">AcadPulse</div>
+      <h1>
+        Welcome, <span>{name}</span>!
+      </h1>
+      <p>Let's set up your academic command center.</p>
+      <div className="onb-feature-list">
+        {[
+          ['signal', 'Connects WhatsApp, Gmail & Classroom'],
+          ['brain', 'Understands Roman Urdu automatically'],
+          ['bolt', 'Never miss a deadline again'],
+        ].map(([kind, text], index) => (
+          <div className="onb-feature" style={{ '--delay': `${index * 120}ms` }} key={text}>
+            <div className={`onb-feature-icon ${kind}`}>{kind === 'signal' ? <Sparkles size={18} /> : kind === 'brain' ? <School size={18} /> : <Zap size={18} />}</div>
+            <span>{text}</span>
+          </div>
+        ))}
+      </div>
+      <div className="onb-time-pill">Takes about 2 minutes</div>
+    </section>
+  )
+}
+
+function ProfileStep({ data, setData, errors, clearError }) {
+  const profile = data.profile
+  const update = (key, value) => {
+    setData((current) => ({ ...current, profile: { ...current.profile, [key]: value } }))
+    clearError(key)
+  }
+
+  return (
+    <section className="onb-step">
+      <StepBadge>Your Profile</StepBadge>
+      <div className="onb-heading">
+        <h1>Tell us about your studies</h1>
+        <p>We use this to personalize your experience.</p>
+      </div>
+      <div className="onb-form">
+        <Field label="University Name" icon={<Building2 size={17} />} error={errors.university}>
+          <input value={profile.university} onChange={(e) => update('university', e.target.value)} placeholder="e.g. FAST, LUMS, COMSATS, NUST" />
+        </Field>
+        <Field label="Degree Program" icon={<GraduationCap size={17} />} error={errors.degree}>
+          <input value={profile.degree} onChange={(e) => update('degree', e.target.value)} placeholder="e.g. BS Computer Science" />
+        </Field>
+        <label className={`onb-field ${errors.semester ? 'has-error' : ''}`}>
+          <span className="onb-label">Current Semester</span>
+          <SemesterDropdown value={profile.semester} onChange={(value) => update('semester', value)} error={errors.semester} />
+          {errors.semester && (
+            <small className="onb-error">
+              <AlertCircle size={13} />
+              {errors.semester}
+            </small>
+          )}
+        </label>
+        <Field label="Section / Class Group" optional icon={<Users size={17} />}>
+          <input value={profile.section} onChange={(e) => update('section', e.target.value)} placeholder="e.g. BCS-6A, BSCS-F22" />
+        </Field>
+      </div>
+    </section>
+  )
+}
+
+function PlatformCard({ platform, checked, connection, onToggle, onOAuth }) {
+  const details = {
+    whatsapp: {
+      icon: <MessageCircle size={26} />,
+      name: 'WhatsApp Groups',
+      description: 'Monitor your class WhatsApp groups for assignments, quizzes and announcements',
+      status: connection.whatsapp ? 'Connected' : "Not connected yet - you'll scan QR in the next step",
+    },
+    gmail: {
+      icon: <Mail size={26} />,
+      name: 'Gmail',
+      description: 'Fetch academic emails from your university Gmail inbox',
+      status: connection.gmailEmail ? `Connected as: ${connection.gmailEmail}` : 'Connect Gmail',
+    },
+    classroom: {
+      icon: <School size={26} />,
+      name: 'Google Classroom',
+      description: 'Sync assignments, coursework and announcements from your courses',
+      status: connection.google ? `${connection.classroomCourses.length} courses found` : 'Connect Classroom',
+    },
+  }[platform]
+
+  return (
+    <div className={`onb-platform-card ${platform} ${checked ? 'selected' : ''}`}>
+      {checked && <div className="onb-check-badge"><Check size={13} /></div>}
+      <div className={`onb-platform-icon ${platform}`}>{details.icon}</div>
+      <div className="onb-platform-copy">
+        <strong>{details.name}</strong>
+        <p>{details.description}</p>
+      </div>
+      <Toggle checked={checked} onChange={onToggle} label={`Toggle ${details.name}`} />
+      <div className="onb-platform-status">
+        <span className={connection[platform] || (platform !== 'whatsapp' && connection.google) ? 'live' : ''} />
+        {platform === 'gmail' && checked && !connection.gmailEmail ? (
+          <button type="button" onClick={onOAuth}>Connect Gmail</button>
+        ) : platform === 'classroom' && checked && !connection.google ? (
+          <button type="button" onClick={onOAuth}>Connect Classroom</button>
+        ) : (
+          <span>{details.status}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PlatformsStep({ data, setData, connection, onOAuth, platformError }) {
+  const update = (platform, value) => {
+    setData((current) => ({ ...current, platforms: { ...current.platforms, [platform]: value } }))
+  }
+
+  return (
+    <section className="onb-step">
+      <StepBadge>Integrations</StepBadge>
+      <div className="onb-heading">
+        <h1>Connect your platforms</h1>
+        <p>Select the tools you want AcadPulse to monitor. You can change these later.</p>
+      </div>
+      {platformError && <div className="onb-banner danger">{platformError}</div>}
+      <div className={`onb-platforms ${platformError ? 'shake' : ''}`}>
+        {['whatsapp', 'gmail', 'classroom'].map((platform) => (
+          <PlatformCard
+            key={platform}
+            platform={platform}
+            checked={data.platforms[platform]}
+            connection={connection}
+            onToggle={(value) => update(platform, value)}
+            onOAuth={onOAuth}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SetupStep({ data, connection, qr, qrLoading, setupUnlocked, refreshQr, onOAuth }) {
+  const selected = data.platforms
+  const needsNothing = (!selected.whatsapp || connection.whatsapp)
+    && (!selected.gmail || connection.google)
+    && (!selected.classroom || connection.google)
+
+  return (
+    <section className="onb-step">
+      <StepBadge>Setup</StepBadge>
+      <div className="onb-heading">
+        <h1>Let's connect everything</h1>
+        <p>Complete setup for your selected platforms.</p>
+      </div>
+      {needsNothing && <div className="onb-banner success">Everything is already connected! Moving on...</div>}
+      <div className="onb-setup-stack">
+        {selected.whatsapp && (
+          <div className="onb-setup-section">
+            <h3><MessageCircle size={18} /> Scan WhatsApp QR Code</h3>
+            {connection.whatsapp ? (
+              <div className="onb-connected-pill">WhatsApp already connected</div>
+            ) : (
+              <>
+                <p>Open WhatsApp on your phone, tap Linked Devices, then scan this code.</p>
+                <div className="onb-qr-box">
+                  {qrLoading && <div className="onb-shimmer" />}
+                  {!qrLoading && qr && <img src={qr} alt="WhatsApp QR code" />}
+                  {!qrLoading && !qr && <span>QR not available yet</span>}
+                </div>
+                <div className="onb-waiting"><Loader2 size={15} /> Waiting for scan...</div>
+                <button className="onb-ghost-btn" type="button" onClick={refreshQr}><RefreshCw size={14} /> Refresh QR</button>
+              </>
+            )}
+          </div>
+        )}
+        {selected.gmail && (
+          <div className="onb-setup-section">
+            <h3><Mail size={18} /> Connect Gmail</h3>
+            {connection.google ? (
+              <div className="onb-connected-pill">Connected as: {connection.gmailEmail || 'Google account'}</div>
+            ) : (
+              <button className="onb-google-btn" type="button" onClick={onOAuth}>
+                <span>G</span>
+                Sign in with Google
+                <ExternalLink size={14} />
+              </button>
+            )}
+          </div>
+        )}
+        {selected.classroom && (
+          <div className="onb-setup-section">
+            <h3><School size={18} /> Google Classroom</h3>
+            {connection.google ? (
+              <>
+                <div className="onb-connected-pill">Google Classroom authorized</div>
+                <div className="onb-course-pills">
+                  {connection.classroomCourses.length ? connection.classroomCourses.slice(0, 8).map((course) => (
+                    <span key={course.id || course.classroom_id || course.name}>{course.name || course.classroom_name || course.id}</span>
+                  )) : <em>No active courses found - you can add them manually later.</em>}
+                </div>
+              </>
+            ) : (
+              <p>Classroom uses the same Google authorization as Gmail.</p>
+            )}
+          </div>
+        )}
+      </div>
+      {setupUnlocked && <div className="onb-banner">You can continue now and finish connections later.</div>}
+    </section>
+  )
+}
+
+function MappingRows({ rows, onChange, leftPlaceholder, coursePlaceholder }) {
+  return (
+    <div className="onb-map-list">
+      {rows.map((row) => (
+        <div className="onb-map-row" key={row.id}>
+          <input value={row.source} onChange={(e) => onChange(row.id, 'source', e.target.value)} placeholder={leftPlaceholder} />
+          <span>→</span>
+          <input value={row.course} onChange={(e) => onChange(row.id, 'course', e.target.value)} placeholder={coursePlaceholder} />
+          <button type="button" onClick={() => onChange(row.id, 'remove')} aria-label="Remove mapping"><Trash2 size={14} /></button>
+        </div>
       ))}
     </div>
-  );
+  )
 }
 
-function StepWelcome({ studentName }) {
-  const features = [
-    { icon: <Bell size={18} />, text: 'Smart deadline extraction from messages' },
-    { icon: <Zap size={18} />, text: 'AI-powered urgency scoring' },
-    { icon: <Sparkles size={18} />, text: 'Unified inbox from all your platforms' },
-  ];
+function CoursesStep({ data, setData }) {
+  const rows = data.courses || []
+  const updateCourse = (id, key, value) => {
+    setData((current) => ({
+      ...current,
+      courses: (current.courses || []).map((course) => (
+        course.id === id ? { ...course, [key]: value } : course
+      )),
+    }))
+  }
+  const removeCourse = (id) => {
+    setData((current) => ({
+      ...current,
+      courses: (current.courses || []).filter((course) => course.id !== id),
+      timetable: (current.timetable || []).filter((slot) => slot.course_id !== id),
+    }))
+  }
+  const addCourse = () => {
+    setData((current) => ({
+      ...current,
+      courses: [
+        ...(current.courses || []),
+        { id: `course-${Date.now()}`, course_code: '', course_name: '', short_name: '' },
+      ],
+    }))
+  }
 
   return (
-    <div className="ob-welcome">
-      <div className="ob-welcome-orb ob-welcome-orb-1" aria-hidden="true" />
-      <div className="ob-welcome-orb ob-welcome-orb-2" aria-hidden="true" />
-
-      <div className="ob-logo-bounce">
-        <div className="ob-logo-mark">
-          <img src={logoSrc} alt="AcadPulse" className="ob-logo-img" />
-        </div>
+    <section className="onb-step">
+      <StepBadge>Courses</StepBadge>
+      <div className="onb-heading">
+        <h1>Add your current courses</h1>
+        <p>These become the subjects WhatsApp, Gmail and Classroom can map into later.</p>
       </div>
-
-      <div className="ob-welcome-copy">
-        <div className="ob-est-pill">
-          <Clock size={13} />
-          About 3 minutes to complete
-        </div>
-        <h1 className="ob-welcome-title">
-          Welcome, <span className="ob-gradient-text">{studentName}</span>!
-        </h1>
-        <p className="ob-welcome-subtitle">
-          Let's set up your personalised academic dashboard. We'll connect your platforms and get you notified about what matters.
-        </p>
-      </div>
-
-      <div className="ob-feature-list">
-        {features.map((feature, i) => (
-          <div
-            key={i}
-            className="ob-feature-item"
-            style={{ '--delay': `${0.3 + i * 0.12}s` }}
-          >
-            <span className="ob-feature-icon">{feature.icon}</span>
-            <span>{feature.text}</span>
+      <div className="onb-explain">Add the courses you are taking this semester. You can skip now and add more from the dashboard.</div>
+      <div className="onb-course-editor">
+        {rows.map((course) => (
+          <div className="onb-course-row" key={course.id}>
+            <div className="onb-mini-field code">
+              <span>Code</span>
+              <input value={course.course_code || ''} onChange={(e) => updateCourse(course.id, 'course_code', e.target.value)} placeholder="CS301" />
+            </div>
+            <div className="onb-mini-field">
+              <span>Course name</span>
+              <input value={course.course_name || ''} onChange={(e) => updateCourse(course.id, 'course_name', e.target.value)} placeholder="Data Structures" />
+            </div>
+            <div className="onb-mini-field short">
+              <span>Short name</span>
+              <input value={course.short_name || ''} onChange={(e) => updateCourse(course.id, 'short_name', e.target.value)} placeholder="DSA" />
+            </div>
+            <button type="button" onClick={() => removeCourse(course.id)} aria-label="Remove course"><Trash2 size={15} /></button>
           </div>
         ))}
       </div>
-    </div>
-  );
+      <button type="button" className="onb-ghost-btn" onClick={addCourse}><Plus size={14} /> Add Course</button>
+    </section>
+  )
 }
 
-function StepProfile({ profile, setProfile, errors, setErrors }) {
-  const [semOpen, setSemOpen] = useState(false);
-  const semRef = useRef(null);
-
-  useEffect(() => {
-    function handleClick(e) {
-      if (semRef.current && !semRef.current.contains(e.target)) setSemOpen(false);
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
-  const fields = [
-    {
-      key: 'university',
-      label: 'University',
-      icon: <Building2 size={17} />,
-      placeholder: 'FAST, LUMS, COMSATS…',
-      required: true,
-      badge: <SecurityBadge level="private" tooltip="Used to personalise your dashboard. Stored securely on our servers." />,
-    },
-    {
-      key: 'degree',
-      label: 'Degree Program',
-      icon: <BookOpen size={17} />,
-      placeholder: 'BS Computer Science',
-      required: true,
-      badge: <SecurityBadge level="private" tooltip="Helps classify your coursework. Never shared externally." />,
-    },
-    {
-      key: 'section',
-      label: 'Section / Group',
-      icon: <Users size={17} />,
-      placeholder: 'Section A (optional)',
-      badge: <SecurityBadge level="private" tooltip="Optional field to help match your class groups automatically." />,
-    },
-  ];
+function TimetableStep({ data, setData }) {
+  const savedCourses = (data.courses || []).filter((course) => course.id && course.course_code && course.course_name)
+  const rows = data.timetable || []
+  const updateSlot = (id, key, value) => {
+    setData((current) => ({
+      ...current,
+      timetable: (current.timetable || []).map((slot) => (
+        slot.id === id ? { ...slot, [key]: value } : slot
+      )),
+    }))
+  }
+  const removeSlot = (id) => {
+    setData((current) => ({
+      ...current,
+      timetable: (current.timetable || []).filter((slot) => slot.id !== id),
+    }))
+  }
+  const addSlot = () => {
+    setData((current) => ({
+      ...current,
+      timetable: [
+        ...(current.timetable || []),
+        {
+          id: `slot-${Date.now()}`,
+          course_id: savedCourses[0]?.id || '',
+          day_of_week: 1,
+          start_time: '09:00',
+          end_time: '10:00',
+          room_number: '',
+        },
+      ],
+    }))
+  }
 
   return (
-    <div className="ob-form-step">
-      <div className="ob-step-heading">
-        <h1>Tell us about your studies</h1>
-        <p>This helps AcadPulse personalise notifications and course mapping.</p>
+    <section className="onb-step">
+      <StepBadge>Timetable</StepBadge>
+      <div className="onb-heading">
+        <h1>Build your class schedule</h1>
+        <p>AcadPulse uses this to understand what matters today.</p>
       </div>
-
-      <div className="ob-form-grid">
-        {fields.map((field, i) => (
-          <label
-            key={field.key}
-            className="ob-field"
-            style={{ '--delay': `${i * 0.08}s` }}
-          >
-            <span className="ob-field-label">
-              {field.label}
-              {!field.required && <em> (optional)</em>}
-              {field.badge}
-            </span>
-            <div className={`ob-input-wrap ${errors[field.key] ? 'has-error' : ''}`}>
-              {field.icon}
-              <input
-                value={profile[field.key] || ''}
-                onChange={(e) => {
-                  setProfile((prev) => ({ ...prev, [field.key]: e.target.value }));
-                  if (errors[field.key]) setErrors((prev) => ({ ...prev, [field.key]: '' }));
-                }}
-                placeholder={field.placeholder}
-              />
-            </div>
-            {errors[field.key] && (
-              <small className="ob-field-error">
-                <AlertCircle size={12} /> {errors[field.key]}
-              </small>
-            )}
-          </label>
-        ))}
-
-        <label className="ob-field" style={{ '--delay': '0.24s' }}>
-          <span className="ob-field-label">
-            Current Semester
-            <SecurityBadge level="private" tooltip="Used to set up your academic calendar. Stays on your account." />
-          </span>
-          <div className="ob-input-wrap ob-semester-wrap" ref={semRef}>
-            <GraduationCap size={17} />
-            <button
-              type="button"
-              className="ob-semester-trigger"
-              onClick={() => setSemOpen((o) => !o)}
-              aria-haspopup="listbox"
-              aria-expanded={semOpen}
-            >
-              {profile.semester || '1st'}
-            </button>
-            {semOpen && (
-              <ul className="ob-semester-dropdown" role="listbox" aria-label="Select semester">
-                {SEMESTERS.map((sem) => (
-                  <li
-                    key={sem}
-                    role="option"
-                    aria-selected={profile.semester === sem}
-                    className={profile.semester === sem ? 'selected' : ''}
-                    onClick={() => {
-                      setProfile((prev) => ({ ...prev, semester: sem }));
-                      setSemOpen(false);
-                    }}
-                  >
-                    {sem} Semester
-                    {profile.semester === sem && <Check size={13} />}
-                  </li>
+      {!savedCourses.length && <div className="onb-banner danger">Add at least one course first, then timetable slots can be attached to it.</div>}
+      <div className="onb-timetable-list">
+        {rows.map((slot) => (
+          <div className="onb-slot-row" key={slot.id}>
+            <label>
+              <BookOpen size={14} />
+              <select value={slot.course_id || ''} onChange={(e) => updateSlot(slot.id, 'course_id', e.target.value)}>
+                <option value="">Select course</option>
+                {savedCourses.map((course) => (
+                  <option key={course.id} value={course.id}>{course.course_code} - {course.course_name}</option>
                 ))}
-              </ul>
-            )}
-          </div>
-        </label>
-      </div>
-    </div>
-  );
-}
-
-function StepPlatforms({ platforms, setPlatforms, connections, onOpenQr, API_BASE_URL, userId }) {
-  const [platformError, setPlatformError] = useState('');
-  const [shaking, setShaking] = useState(false);
-
-  const handleToggle = (key, val) => {
-    const next = { ...platforms, [key]: val };
-    if (!next.whatsapp && !next.gmail && !next.classroom) {
-      setShaking(true);
-      setPlatformError('Please keep at least one platform enabled.');
-      setTimeout(() => setShaking(false), 600);
-      return;
-    }
-    setPlatformError('');
-    setPlatforms(next);
-  };
-
-  const cards = [
-    {
-      key: 'whatsapp',
-      type: 'whatsapp',
-      icon: <MessageCircle size={26} />,
-      title: 'WhatsApp Groups',
-      subtitle: 'Get notified from your class groups in real time',
-      connected: connections.whatsapp,
-      extra: connections.whatsapp ? (
-        <span className="ob-platform-connected">Connected</span>
-      ) : (
-        <button className="ob-platform-action whatsapp" type="button" onClick={onOpenQr}>
-          Scan QR to connect
-        </button>
-      ),
-    },
-    {
-      key: 'gmail',
-      type: 'gmail',
-      icon: <Mail size={26} />,
-      title: 'Gmail',
-      subtitle: 'Monitor university emails and extract deadlines',
-      connected: Boolean(connections.gmailEmail),
-      extra: connections.gmailEmail ? (
-        <span className="ob-platform-connected">Connected as {connections.gmailEmail}</span>
-      ) : (
-        <button
-          className="ob-platform-action gmail"
-          type="button"
-          onClick={() => window.location.assign(`${API_BASE_URL}/auth/google${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`)}
-        >
-          Connect Gmail
-        </button>
-      ),
-    },
-    {
-      key: 'classroom',
-      type: 'classroom',
-      icon: <School size={26} />,
-      title: 'Google Classroom',
-      subtitle: 'Sync coursework, materials, and announcements',
-      connected: connections.classroomCourses > 0,
-      extra: connections.classroomCourses > 0 ? (
-        <span className="ob-platform-connected">Syncing {connections.classroomCourses} courses</span>
-      ) : (
-        <button
-          className="ob-platform-action classroom"
-          type="button"
-          onClick={() => window.location.assign(`${API_BASE_URL}/auth/google${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`)}
-        >
-          Connect Classroom
-        </button>
-      ),
-    },
-  ];
-
-  return (
-    <div className="ob-platform-step">
-      <div className="ob-step-heading">
-        <h1>Connect your platforms</h1>
-        <p>Select which platforms you'd like AcadPulse to monitor for you.</p>
-      </div>
-
-      {platformError && (
-        <div className={`ob-platform-error ${shaking ? 'shake' : ''}`}>
-          <AlertCircle size={15} /> {platformError}
-        </div>
-      )}
-
-      <div className="ob-platform-stack">
-        {cards.map((card, i) => (
-          <div
-            key={card.key}
-            className={`ob-platform-card ${card.type} ${platforms[card.key] ? 'enabled' : ''}`}
-            style={{ '--delay': `${i * 0.08}s` }}
-          >
-            <div className="ob-platform-main">
-              <div className={`ob-platform-icon ${card.type}`}>{card.icon}</div>
-              <div className="ob-platform-copy">
-                <div className="ob-platform-title-row">
-                  <h3>{card.title}</h3>
-                  <StatusDot connected={card.connected} />
-                </div>
-                <p>{card.subtitle}</p>
-              </div>
-              <ToggleSwitch
-                checked={platforms[card.key]}
-                onChange={(val) => handleToggle(card.key, val)}
-                label={`Toggle ${card.title}`}
-              />
-            </div>
-            <div className={`ob-platform-extra ${platforms[card.key] ? 'open' : ''}`}>
-              {card.extra}
-            </div>
+              </select>
+            </label>
+            <label>
+              <Calendar size={14} />
+              <select value={slot.day_of_week || 1} onChange={(e) => updateSlot(slot.id, 'day_of_week', Number(e.target.value))}>
+                {DAYS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label>
+              <Clock size={14} />
+              <input type="time" value={slot.start_time || '09:00'} onChange={(e) => updateSlot(slot.id, 'start_time', e.target.value)} />
+            </label>
+            <label>
+              <Clock size={14} />
+              <input type="time" value={slot.end_time || '10:00'} onChange={(e) => updateSlot(slot.id, 'end_time', e.target.value)} />
+            </label>
+            <label>
+              <MapPin size={14} />
+              <input value={slot.room_number || ''} onChange={(e) => updateSlot(slot.id, 'room_number', e.target.value)} placeholder="Room" />
+            </label>
+            <button type="button" onClick={() => removeSlot(slot.id)} aria-label="Remove timetable slot"><Trash2 size={15} /></button>
           </div>
         ))}
       </div>
-    </div>
-  );
+      <button type="button" className="onb-ghost-btn" onClick={addSlot} disabled={!savedCourses.length}><Plus size={14} /> Add Timetable Slot</button>
+    </section>
+  )
 }
 
-function StepSetup({ platforms, connections, onOpenQr, API_BASE_URL, userId, onAutoAdvance }) {
-  useEffect(() => {
-    const allConnected = (
-      (!platforms.whatsapp || connections.whatsapp)
-      && (!platforms.gmail || Boolean(connections.gmailEmail))
-      && (!platforms.classroom || connections.classroomCourses > 0)
-    );
-    if (allConnected) {
-      const t = setTimeout(onAutoAdvance, 1500);
-      return () => clearTimeout(t);
-    }
-  }, [platforms, connections, onAutoAdvance]);
-
-  const sections = [];
-
-  if (platforms.whatsapp && !connections.whatsapp) {
-    sections.push(
-      <div key="whatsapp" className="ob-setup-section">
-        <div className="ob-setup-icon whatsapp"><MessageCircle size={22} /></div>
-        <div className="ob-setup-body">
-          <h3>WhatsApp Setup</h3>
-          <p>Scan the QR code with your WhatsApp to start receiving group notifications.</p>
-          <button className="ob-setup-btn whatsapp" type="button" onClick={onOpenQr}>
-            Open QR Scanner
-          </button>
-        </div>
-      </div>
-    );
-  } else if (platforms.whatsapp && connections.whatsapp) {
-    sections.push(
-      <div key="whatsapp-done" className="ob-setup-section connected">
-        <div className="ob-setup-icon success"><CheckCircle2 size={22} /></div>
-        <div className="ob-setup-body">
-          <h3>WhatsApp Connected</h3>
-          <p>Your WhatsApp groups are now being monitored.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (platforms.gmail && !connections.gmailEmail) {
-    sections.push(
-      <div key="gmail" className="ob-setup-section">
-        <div className="ob-setup-icon gmail"><Mail size={22} /></div>
-        <div className="ob-setup-body">
-          <h3>Gmail Setup</h3>
-          <p>Authorise AcadPulse to read and classify your university emails.</p>
-          <button
-            className="ob-setup-btn gmail"
-            type="button"
-            onClick={() => window.location.assign(`${API_BASE_URL}/auth/google${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`)}
-          >
-            Connect Gmail
-          </button>
-        </div>
-      </div>
-    );
-  } else if (platforms.gmail && connections.gmailEmail) {
-    sections.push(
-      <div key="gmail-done" className="ob-setup-section connected">
-        <div className="ob-setup-icon success"><CheckCircle2 size={22} /></div>
-        <div className="ob-setup-body">
-          <h3>Gmail Connected</h3>
-          <p>Connected as {connections.gmailEmail}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (platforms.classroom) {
-    if (connections.classroomCourses > 0) {
-      sections.push(
-        <div key="classroom-done" className="ob-setup-section connected">
-          <div className="ob-setup-icon success"><CheckCircle2 size={22} /></div>
-          <div className="ob-setup-body">
-            <h3>Classroom Connected</h3>
-            <p>Syncing {connections.classroomCourses} courses from Google Classroom.</p>
-          </div>
-        </div>
-      );
-    } else if (connections.gmailEmail) {
-      sections.push(
-        <div key="classroom" className="ob-setup-section connected">
-          <div className="ob-setup-icon success"><CheckCircle2 size={22} /></div>
-          <div className="ob-setup-body">
-            <h3>Classroom Ready</h3>
-            <p>Classroom will sync automatically once Gmail is fully authorised.</p>
-          </div>
-        </div>
-      );
-    }
-  }
-
-  if (sections.length === 0) {
-    sections.push(
-      <div key="all-done" className="ob-setup-section connected">
-        <div className="ob-setup-icon success"><CheckCircle2 size={22} /></div>
-        <div className="ob-setup-body">
-          <h3>All platforms ready</h3>
-          <p>Advancing automatically…</p>
-        </div>
-      </div>
-    );
+function MappingStep({ data, setData, connection, groups, addMapping }) {
+  const updateRows = (type, id, key, value) => {
+    setData((current) => {
+      const currentRows = current.mappings[type] || []
+      const rows = key === 'remove'
+        ? currentRows.filter((row) => row.id !== id)
+        : currentRows.map((row) => (row.id === id ? { ...row, [key]: value } : row))
+      return { ...current, mappings: { ...current.mappings, [type]: rows } }
+    })
   }
 
   return (
-    <div className="ob-setup-step">
-      <div className="ob-step-heading">
-        <h1>Connect your accounts</h1>
-        <p>Authorise the platforms you selected. You can do this later from Settings.</p>
+    <section className="onb-step">
+      <StepBadge>Course Mapping</StepBadge>
+      <div className="onb-heading">
+        <h1>Map your groups to courses</h1>
+        <p>Tell AcadPulse which group or inbox belongs to which subject.</p>
       </div>
-      <div className="ob-setup-sections">{sections}</div>
-    </div>
-  );
-}
-
-function CourseAutocomplete({ value, onChange, onSelect, suggestions, placeholder }) {
-  return (
-    <div className="ob-autocomplete-wrap">
-      <div className="ob-input-wrap">
-        <BookOpen size={16} />
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder || 'e.g. Natural Language Processing'}
-        />
-      </div>
-      {suggestions.length > 0 && (
-        <ul className="ob-suggestions">
-          {suggestions.map((s) => (
-            <li key={s.id || s.name} onClick={() => onSelect(s.name || s.id)}>
-              {s.name || s.id}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function StepMapping({
-  platforms,
-  detectedGroups,
-  classroomCourses,
-  connections,
-  mappings,
-  setMappings,
-  showToast,
-}) {
-  const [waGroupInput, setWaGroupInput] = useState('');
-  const [waCourseInput, setWaCourseInput] = useState('');
-  const [waSuggestions, setWaSuggestions] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(detectedGroups[0] || '');
-  const [gmailSender, setGmailSender] = useState('');
-  const [gmailCourse, setGmailCourse] = useState('');
-  const [gmailSuggestions, setGmailSuggestions] = useState([]);
-  const waDebounceRef = useRef(null);
-  const gmailDebounceRef = useRef(null);
-
-  const getSuggestions = useCallback((query) => {
-    if (!query.trim() || !classroomCourses.length) return [];
-    const q = query.trim().toLowerCase();
-    return classroomCourses
-      .filter((c) => (c.name || c.id || '').toLowerCase().includes(q))
-      .slice(0, 5);
-  }, [classroomCourses]);
-
-  const handleWaCourseChange = (val) => {
-    setWaCourseInput(val);
-    clearTimeout(waDebounceRef.current);
-    waDebounceRef.current = setTimeout(() => setWaSuggestions(getSuggestions(val)), 300);
-  };
-
-  const handleGmailCourseChange = (val) => {
-    setGmailCourse(val);
-    clearTimeout(gmailDebounceRef.current);
-    gmailDebounceRef.current = setTimeout(() => setGmailSuggestions(getSuggestions(val)), 300);
-  };
-
-  const addWaMapping = () => {
-    const group = (detectedGroups.length ? selectedGroup : waGroupInput).trim();
-    const course = waCourseInput.trim();
-    if (!group || !course) return;
-    if (mappings.some((m) => m.group === group && m.source_type === 'whatsapp')) {
-      showToast('This group is already mapped', 'error');
-      return;
-    }
-    setMappings((prev) => [...prev, {
-      id: `wa-${group}-${prev.length}`,
-      source_type: 'whatsapp',
-      group,
-      course,
-    }]);
-    setWaCourseInput('');
-    setWaSuggestions([]);
-    if (!detectedGroups.length) setWaGroupInput('');
-  };
-
-  const addGmailMapping = () => {
-    const sender = gmailSender.trim();
-    const course = gmailCourse.trim();
-    if (!sender || !course) return;
-    if (mappings.some((m) => m.group === sender && m.source_type === 'gmail')) {
-      showToast('This sender is already mapped', 'error');
-      return;
-    }
-    setMappings((prev) => [...prev, {
-      id: `gmail-${sender}-${prev.length}`,
-      source_type: 'gmail',
-      group: sender,
-      course,
-    }]);
-    setGmailSender('');
-    setGmailCourse('');
-    setGmailSuggestions([]);
-  };
-
-  const classroomAutoMapped = classroomCourses.slice(0, 4).map((c) => ({
-    id: `cls-${c.id || c.name}`,
-    source_type: 'classroom',
-    group: c.name || c.id,
-    course: c.name || c.id,
-    readOnly: true,
-  }));
-
-  const allMappings = [...mappings, ...classroomAutoMapped];
-  const hasAny = mappings.length > 0;
-
-  return (
-    <div className="ob-mapping-step">
-      <div className="ob-step-heading">
-        <h1>Map groups to courses</h1>
-        <p>Link each WhatsApp group or Gmail sender to the course it belongs to.</p>
-      </div>
-
-      {platforms.whatsapp && (
-        <div className="ob-mapping-form">
-          <div className="ob-mapping-form-label">
-            <MessageCircle size={14} /> WhatsApp group → course
-          </div>
-          <label className="ob-field">
-            <span className="ob-field-label">WhatsApp group</span>
-            <div className="ob-input-wrap">
-              <MessageCircle size={16} />
-              {detectedGroups.length > 0 ? (
-                <select value={selectedGroup} onChange={(e) => setSelectedGroup(e.target.value)}>
-                  {detectedGroups.map((g) => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  value={waGroupInput}
-                  onChange={(e) => setWaGroupInput(e.target.value)}
-                  placeholder="Group name (e.g. FAST NLP Group)"
-                />
-              )}
-            </div>
-          </label>
-
-          <label className="ob-field">
-            <span className="ob-field-label">Course name</span>
-            <CourseAutocomplete
-              value={waCourseInput}
-              onChange={handleWaCourseChange}
-              onSelect={(name) => { setWaCourseInput(name); setWaSuggestions([]); }}
-              suggestions={waSuggestions}
-              placeholder="e.g. Natural Language Processing"
+      <div className="onb-explain">This helps AcadPulse understand which messages belong to which course. You can always update this from the dashboard.</div>
+      {connection.whatsapp && (
+        <div className="onb-map-section">
+          <h3><MessageCircle size={16} /> WhatsApp Groups</h3>
+          {groups.length ? (
+            <MappingRows
+              rows={(data.mappings.whatsapp.length ? data.mappings.whatsapp : groups.map((group, index) => ({ id: `wa-${index}`, source: group, course: '' })))}
+              onChange={(id, key, value) => updateRows('whatsapp', id, key, value)}
+              leftPlaceholder="WhatsApp group"
+              coursePlaceholder="Course name e.g. NLP"
             />
-          </label>
-
-          <button
-            className="ob-primary-btn ob-mapping-add-btn"
-            type="button"
-            onClick={addWaMapping}
-            disabled={!(detectedGroups.length ? selectedGroup : waGroupInput).trim() || !waCourseInput.trim()}
-          >
-            Add
-          </button>
+          ) : <p className="onb-muted">No WhatsApp groups detected yet - you can map them from the dashboard once messages arrive.</p>}
+          <button type="button" className="onb-ghost-btn" onClick={() => addMapping('whatsapp')}>+ Add Another</button>
         </div>
       )}
-
-      {platforms.gmail && (
-        <div className="ob-mapping-form">
-          <div className="ob-mapping-form-label">
-            <Mail size={14} /> Gmail sender → course
-          </div>
-          <label className="ob-field">
-            <span className="ob-field-label">Sender email or keyword</span>
-            <div className="ob-input-wrap">
-              <Mail size={16} />
-              <input
-                value={gmailSender}
-                onChange={(e) => setGmailSender(e.target.value)}
-                placeholder="e.g. lms@fast.edu.pk"
-                type="text"
-              />
-            </div>
-          </label>
-
-          <label className="ob-field">
-            <span className="ob-field-label">Course name</span>
-            <CourseAutocomplete
-              value={gmailCourse}
-              onChange={handleGmailCourseChange}
-              onSelect={(name) => { setGmailCourse(name); setGmailSuggestions([]); }}
-              suggestions={gmailSuggestions}
-              placeholder="e.g. Operating Systems"
-            />
-          </label>
-
-          <button
-            className="ob-primary-btn ob-mapping-add-btn"
-            type="button"
-            onClick={addGmailMapping}
-            disabled={!gmailSender.trim() || !gmailCourse.trim()}
-          >
-            Add
-          </button>
+      {connection.google && data.platforms.gmail && (
+        <div className="onb-map-section">
+          <h3><Mail size={16} /> Gmail Senders</h3>
+          <p className="onb-muted">Map specific email senders or subjects to a course.</p>
+          <MappingRows rows={data.mappings.gmail} onChange={(id, key, value) => updateRows('gmail', id, key, value)} leftPlaceholder="Sender email or subject keyword" coursePlaceholder="Course name" />
+          <button type="button" className="onb-ghost-btn" onClick={() => addMapping('gmail')}>+ Add Another</button>
         </div>
       )}
-
-      {allMappings.length > 0 && (
-        <div className="ob-mapping-list">
-          {allMappings.map((m) => (
-            <div key={m.id} className={`ob-mapping-row ${m.readOnly ? 'read-only' : ''}`}>
-              <span className="ob-mapping-source-badge">
-                {m.source_type === 'whatsapp' ? <MessageCircle size={11} /> : m.source_type === 'gmail' ? <Mail size={11} /> : <School size={11} />}
-                {m.source_type}
-              </span>
-              <span className="ob-mapping-group">{m.group}</span>
-              <span className="ob-mapping-arrow">→</span>
-              <strong className="ob-mapping-course">{m.course}</strong>
-              {m.readOnly ? (
-                <span className="ob-mapping-auto-badge">
-                  <CheckCircle2 size={12} /> Auto
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  aria-label="Remove mapping"
-                  className="ob-mapping-del"
-                  onClick={() => setMappings((prev) => prev.filter((x) => x.id !== m.id))}
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
-          ))}
+      {connection.google && data.platforms.classroom && (
+        <div className="onb-map-section">
+          <h3><School size={16} /> Classroom Courses</h3>
+          {connection.classroomCourses.length ? connection.classroomCourses.map((course) => {
+            const name = course.name || course.classroom_name || course.id
+            return <div className="onb-readonly-map" key={course.id || name}><span>{name}</span><span>→</span><strong>{name}</strong><Check size={14} /></div>
+          }) : <p className="onb-muted">Google Classroom courses are automatically mapped once they sync.</p>}
         </div>
       )}
-
-      {!hasAny && (
-        <p className="ob-mapping-helper">
-          You can add course mappings later from the Courses page.
-        </p>
-      )}
-    </div>
-  );
+    </section>
+  )
 }
 
-function StepNotifications({ prefs, setPrefs, platforms, showToast }) {
+function PreferencesStep({ data, setData, whatsappConnected, showToast }) {
+  const prefs = data.preferences
+  const update = async (key, value) => {
+    if (key === 'desktopPopups' && value && 'Notification' in window) {
+      const permission = await window.Notification.requestPermission()
+      if (permission === 'denied') showToast('Browser blocked notifications - enable them in browser settings', 'error')
+    }
+    setData((current) => ({ ...current, preferences: { ...current.preferences, [key]: value } }))
+  }
+
   const rows = [
-    {
-      key: 'desktopPopups',
-      icon: <Smartphone size={20} />,
-      title: 'Desktop Popups',
-      description: 'Show browser notifications for urgent items',
-      locked: false,
-      onEnable: async () => {
-        if (!('Notification' in window)) return false;
-        const result = await window.Notification.requestPermission();
-        return result === 'granted';
-      },
-      warning: 'Browser permission was denied. Enable notifications in your browser settings to use this feature.',
-    },
-    {
-      key: 'morningDigest',
-      icon: <Moon size={20} />,
-      title: 'Morning Digest',
-      description: 'Daily summary at your preferred time',
-      locked: false,
-      extra: prefs.morningDigest && (
-        <div className="ob-time-picker">
-          <Clock size={14} />
-          <input
-            type="time"
-            value={prefs.digestTime || '08:00'}
-            onChange={(e) => setPrefs((prev) => ({ ...prev, digestTime: e.target.value }))}
-          />
-        </div>
-      ),
-    },
-    {
-      key: 'criticalAlerts',
-      icon: <AlertCircle size={20} />,
-      title: 'Critical Alerts',
-      description: 'High-urgency deadlines — always on',
-      locked: true,
-      badge: (
-        <SecurityBadge
-          level="sensitive"
-          tooltip="System-controlled — cannot be disabled. Ensures you never miss critical deadlines."
-        />
-      ),
-    },
-    ...(platforms.whatsapp
-      ? [{
-          key: 'whatsappReminders',
-          icon: <MessageCircle size={20} />,
-          title: 'WhatsApp Reminders',
-          description: 'Deadline reminders sent to your WhatsApp',
-          locked: false,
-        }]
-      : []),
-  ];
-
-  const handleToggle = async (row, val) => {
-    if (row.locked) return;
-    if (val && row.onEnable) {
-      const allowed = await row.onEnable();
-      if (!allowed) {
-        if (row.warning) showToast(row.warning, 'error');
-        return;
-      }
-    }
-    setPrefs((prev) => ({ ...prev, [row.key]: val }));
-  };
+    ['desktopPopups', <Bell size={20} />, 'Desktop Popups', 'Get alerts even when the browser tab is in background'],
+    ['morningDigest', <Calendar size={20} />, 'Morning Digest', 'Get a summary of your day every morning'],
+    ['criticalAlerts', <Flame size={20} />, 'Critical Deadline Alerts', 'Extra notifications when a deadline is under 2 hours away', true],
+    ...(whatsappConnected ? [['whatsappReminders', <MessageCircle size={20} />, 'WhatsApp Reminders', "Send yourself a WhatsApp message for critical deadlines"]] : []),
+  ]
 
   return (
-    <div className="ob-notif-step">
-      <div className="ob-step-heading">
-        <h1>Notification preferences</h1>
-        <p>Choose how AcadPulse keeps you in the loop.</p>
+    <section className="onb-step">
+      <StepBadge>Preferences</StepBadge>
+      <div className="onb-heading">
+        <h1>How should we alert you?</h1>
+        <p>Customize how AcadPulse notifies you.</p>
       </div>
-
-      <div className="ob-notif-rows">
-        {rows.map((row) => (
-          <div key={row.key} className={`ob-notif-row ${row.locked ? 'locked' : ''}`}>
-            <div className="ob-notif-icon-wrap">{row.icon}</div>
-            <div className="ob-notif-body">
-              <div className="ob-notif-title-row">
-                <strong>{row.title}</strong>
-                {row.locked && <Lock size={12} className="ob-lock-icon" />}
-                {row.badge}
-              </div>
-              <p>{row.description}</p>
-              {row.extra}
+      <div className="onb-pref-list">
+        {rows.map(([key, icon, title, description, locked]) => (
+          <div className="onb-pref-row" key={key}>
+            <div className="onb-pref-icon">{icon}</div>
+            <div>
+              <strong>{title} {locked && <Lock size={12} title="Critical alerts keep you from missing deadlines" />}</strong>
+              <p>{description}</p>
+              {key === 'morningDigest' && prefs.morningDigest && (
+                <label className="onb-time-input">Send digest at:<input type="time" value={prefs.digestTime} onChange={(e) => update('digestTime', e.target.value)} /></label>
+              )}
+              {key === 'whatsappReminders' && prefs.whatsappReminders && <small>We'll send reminders to your own number.</small>}
             </div>
-            <ToggleSwitch
-              checked={row.locked ? true : Boolean(prefs[row.key])}
-              onChange={(val) => handleToggle(row, val)}
-              label={`Toggle ${row.title}`}
-            />
+            <Toggle checked={locked ? true : Boolean(prefs[key])} disabled={locked} onChange={(value) => update(key, value)} label={`Toggle ${title}`} />
           </div>
         ))}
       </div>
-    </div>
-  );
+    </section>
+  )
 }
 
-function StepDone({ studentName, connectedSummary, onFinish }) {
+function DoneStep({ name, data, connection, mappedCount, finishing, onFinish }) {
+  const courseCount = (data.courses || []).filter((course) => course.course_code && course.course_name).length
+  const timetableCount = (data.timetable || []).filter((slot) => slot.course_id && slot.start_time && slot.end_time).length
+  const summary = [
+    `Profile saved - ${data.profile.university || 'University'}, ${data.profile.degree || 'Degree'}, ${data.profile.semester || 'Semester'}`,
+    `${courseCount} courses saved`,
+    `${timetableCount} timetable slots saved`,
+    connection.whatsapp ? 'WhatsApp connected' : 'WhatsApp skipped',
+    connection.google ? `Gmail connected${connection.gmailEmail ? ` as ${connection.gmailEmail}` : ''}` : 'Gmail skipped',
+    `${mappedCount} courses mapped`,
+    'Notifications configured',
+  ]
+
   return (
-    <div className="ob-done-step">
-      <Confetti />
-
-      <svg className="ob-done-checkmark" viewBox="0 0 90 90" aria-hidden="true">
-        <defs>
-          <linearGradient id="checkGrad" x1="0" x2="1" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--primary)" />
-            <stop offset="100%" stopColor="var(--warning)" />
-          </linearGradient>
-        </defs>
-        <circle cx="45" cy="45" r="38" className="ob-check-circle" />
-        <path d="M26 47 L40 62 L67 30" className="ob-check-path" />
-      </svg>
-
-      <div className="ob-done-copy">
-        <h1>
-          You're all set, <span className="ob-gradient-text">{studentName}</span>!
-        </h1>
-        <p>AcadPulse is ready to keep you on top of your academic life.</p>
+    <section className="onb-step onb-done">
+      <div className="onb-confetti" aria-hidden="true">
+        {Array.from({ length: 30 }, (_, index) => <span key={index} style={{ '--i': index }} />)}
       </div>
-
-      <div className="ob-done-summary">
-        {connectedSummary.map((line, i) => (
-          <div key={line} className="ob-done-summary-row" style={{ '--delay': `${i * 0.1}s` }}>
-            <Check size={14} className="ob-done-check-icon" />
-            <span>{line}</span>
+      <svg className="onb-done-check" viewBox="0 0 90 90" aria-hidden="true">
+        <defs><linearGradient id="onbCheckGrad" x1="0" x2="1"><stop stopColor="#7c3aed" /><stop offset="1" stopColor="#06b6d4" /></linearGradient></defs>
+        <circle cx="45" cy="45" r="36" />
+        <path d="M27 47l12 13 25-30" />
+      </svg>
+      <div className="onb-heading">
+        <h1>You're all set, <span>{name}</span>!</h1>
+        <p>AcadPulse is ready to manage your academic life.</p>
+      </div>
+      <div className="onb-summary">
+        {summary.map((item, index) => (
+          <div key={item} style={{ '--delay': `${index * 150}ms` }}>
+            {item.includes('skipped') ? <span className="onb-circle">○</span> : <Check size={15} />}
+            <span>{item}</span>
           </div>
         ))}
       </div>
-
-      <button className="ob-primary-btn ob-done-cta" type="button" onClick={onFinish}>
-        Open Dashboard →
+      <button className="onb-primary large" type="button" onClick={onFinish} disabled={finishing}>
+        {finishing ? <Loader2 size={18} className="spin" /> : 'Open Dashboard →'}
       </button>
-    </div>
-  );
+      <small>You can update any of these settings anytime from the dashboard.</small>
+    </section>
+  )
 }
 
 export default function Onboarding() {
-  const navigate = useNavigate();
-  const { API_BASE_URL, apiFetch, user, authUser } = useAppContext();
-
-  const [step, setStep] = useState(1);
-  const [direction, setDirection] = useState('forward');
-  const [errors, setErrors] = useState({});
-  const [toast, setToast] = useState({ message: '', type: 'success' });
-  const [resumeBanner, setResumeBanner] = useState(false);
-  const [detectedGroups, setDetectedGroups] = useState([]);
-  const [classroomCourses, setClassroomCourses] = useState([]);
-  const [mappings, setMappings] = useState([]);
-  const [qrModalOpen, setQrModalOpen] = useState(false);
-  const [qrState, setQrState] = useState({ loading: false, value: '', error: '' });
-  const [profile, setProfile] = useState({
-    university: localStorage.getItem('acadpulse_university') || '',
-    degree: localStorage.getItem('acadpulse_degree') || '',
-    semester: localStorage.getItem('acadpulse_semester') || '1st',
-    section: localStorage.getItem('acadpulse_section') || '',
-  });
-  const [platforms, setPlatforms] = useState({ whatsapp: true, gmail: true, classroom: true });
-  const [connections, setConnections] = useState({
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { API_BASE_URL, apiFetch, user, authUser } = useAppContext()
+  const [step, setStep] = useState(1)
+  const [direction, setDirection] = useState('forward')
+  const [data, setData] = useState(readDraft)
+  const [errors, setErrors] = useState({})
+  const [toast, setToast] = useState({ message: '', type: 'success' })
+  const [resume, setResume] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [finishing, setFinishing] = useState(false)
+  const [platformError, setPlatformError] = useState('')
+  const [setupUnlocked, setSetupUnlocked] = useState(false)
+  const [groups, setGroups] = useState([])
+  const [qr, setQr] = useState('')
+  const [qrLoading, setQrLoading] = useState(false)
+  const [connection, setConnection] = useState({
     whatsapp: false,
+    google: false,
     gmailEmail: '',
-    classroomCourses: 0,
-  });
-  const [prefs, setPrefs] = useState({
-    desktopPopups: false,
-    morningDigest: false,
-    digestTime: '08:00',
-    criticalAlerts: true,
-    whatsappReminders: false,
-  });
+    classroomCourses: [],
+  })
 
-  const studentName = user.fullName || localStorage.getItem('acadpulse_user') || 'Scholar';
-  const userId = authUser?.id || user.id || localStorage.getItem('acadpulse_user_id') || '';
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || ''
+  const displayName = (localStorage.getItem('acadpulse_user') || user?.fullName || 'Scholar').split(' ')[0]
+  const selectedCount = Object.values(data.platforms).filter(Boolean).length
+  const progress = Math.round((step / TOTAL_STEPS) * 100)
+  const mappedCount = [
+    ...(data.mappings.whatsapp || []),
+    ...(data.mappings.gmail || []),
+  ].filter((row) => row.source?.trim() && row.course?.trim()).length + (connection.classroomCourses?.length || 0)
 
-  const progress = Math.round(((step - 1) / (TOTAL_STEPS - 1)) * 100);
+  const showToast = useCallback((message, type = 'success') => setToast({ message, type }), [])
+  const clearError = useCallback((key) => setErrors((current) => ({ ...current, [key]: '' })), [])
 
-  const connectedSummary = useMemo(() => {
-    const lines = [];
-    if (platforms.whatsapp) lines.push(`WhatsApp ${connections.whatsapp ? 'connected' : 'selected'}`);
-    if (platforms.gmail) lines.push(`Gmail ${connections.gmailEmail ? 'connected' : 'selected'}`);
-    if (platforms.classroom) lines.push(`Classroom ${connections.classroomCourses > 0 ? `(${connections.classroomCourses} courses)` : 'selected'}`);
-    lines.push(`${mappings.length} course mapping${mappings.length !== 1 ? 's' : ''} added`);
-    return lines;
-  }, [connections, mappings.length, platforms]);
+  const oauthUrl = useMemo(() => {
+    const params = new URLSearchParams({ next_path: 'onboarding' })
+    if (userId) params.set('user_id', userId)
+    return `${API_BASE_URL}/auth/google?${params.toString()}`
+  }, [API_BASE_URL, userId])
 
   const onboardingData = useMemo(() => ({
-    profile,
-    platforms,
-    mappings,
-    preferences: prefs,
-  }), [profile, platforms, mappings, prefs]);
+    ...data,
+    connections: connection,
+    selectedGroups: groups,
+  }), [connection, data, groups])
 
   useEffect(() => {
-    let mounted = true;
-    const load = async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+  }, [data])
+
+  useEffect(() => {
+    if (!resume) return undefined
+    const timer = setTimeout(() => setResume(false), 4000)
+    return () => clearTimeout(timer)
+  }, [resume])
+
+  const fetchQr = useCallback(async (silent = false) => {
+    const quiet = silent === true
+    if (!quiet) setQrLoading(true)
+    try {
+      const payload = await apiFetch('/whatsapp/qr', {}, false)
+      const raw = payload?.qr || payload?.qr_code || ''
+      if (payload?.qr_image || payload?.qr_url) {
+        setQr(payload.qr_image || payload.qr_url)
+      } else if (raw) {
+        setQr(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(raw)}`)
+      }
+    } catch {
+      if (!quiet) showToast('WhatsApp QR is not available yet', 'error')
+    } finally {
+      if (!quiet) setQrLoading(false)
+    }
+  }, [apiFetch, showToast])
+
+  const fetchConnectionState = useCallback(async () => {
+    try {
+      const [google, whatsapp, classroom] = await Promise.allSettled([
+        apiFetch('/google/status'),
+        apiFetch('/whatsapp/status', {}, false),
+        apiFetch(`/classroom/courses${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
+      ])
+      setConnection((current) => ({
+        ...current,
+        google: google.status === 'fulfilled' ? Boolean(google.value?.connected) : current.google,
+        gmailEmail: google.status === 'fulfilled' ? (google.value?.email || current.gmailEmail) : current.gmailEmail,
+        whatsapp: whatsapp.status === 'fulfilled' ? whatsapp.value?.whatsapp?.status === 'connected' : current.whatsapp,
+        classroomCourses: classroom.status === 'fulfilled' && Array.isArray(classroom.value?.courses) ? classroom.value.courses : current.classroomCourses,
+      }))
+    } catch {
+      showToast('Could not refresh connection status', 'error')
+    }
+  }, [apiFetch, showToast, userId])
+
+  useEffect(() => {
+    let mounted = true
+    async function load() {
       try {
-        const [groups, status, classroom, onboarding] = await Promise.allSettled([
-          apiFetch('/whatsapp/groups', {}, false),
-          apiFetch('/whatsapp/status', {}, false),
-          apiFetch('/classroom/courses', {}, false),
+        const [status, groupsPayload, coursesPayload, timetablePayload] = await Promise.allSettled([
           apiFetch(`/onboarding/status${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
-        ]);
-
-        if (!mounted) return;
-
-        if (groups.status === 'fulfilled') {
-          const raw = Array.isArray(groups.value?.groups) ? groups.value.groups : [];
-          setDetectedGroups(raw.map((g) => g.group_name || g.name || g.group_id).filter(Boolean));
+          apiFetch(`/whatsapp/groups${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
+          apiFetch(`/courses${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`, {}, false),
+          apiFetch('/timetable'),
+        ])
+        if (!mounted) return
+        if (groupsPayload.status === 'fulfilled') {
+          const nextGroups = (groupsPayload.value?.groups || []).map((group) => group.group_name || group.name || group.group_id).filter(Boolean)
+          setGroups(nextGroups)
+          setData((current) => {
+            if (current.mappings.whatsapp?.length || !nextGroups.length) return current
+            return {
+              ...current,
+              mappings: {
+                ...current.mappings,
+                whatsapp: nextGroups.map((group, index) => ({ id: `wa-${index}`, source: group, course: '' })),
+              },
+            }
+          })
         }
-        if (classroom.status === 'fulfilled') {
-          setClassroomCourses(Array.isArray(classroom.value?.courses) ? classroom.value.courses : []);
+        if (coursesPayload.status === 'fulfilled' && Array.isArray(coursesPayload.value?.courses) && coursesPayload.value.courses.length) {
+          setData((current) => ({
+            ...current,
+            courses: coursesPayload.value.courses.map((course) => ({
+              id: String(course.id || course.course_id || course.course_code),
+              course_code: course.course_code || '',
+              course_name: course.course_name || '',
+              short_name: course.short_name || '',
+            })),
+          }))
         }
-        setConnections((prev) => ({
-          ...prev,
-          whatsapp: status.status === 'fulfilled' && status.value?.whatsapp?.status === 'connected',
-          classroomCourses: classroom.status === 'fulfilled' && Array.isArray(classroom.value?.courses)
-            ? classroom.value.courses.length : 0,
-        }));
-
-        if (onboarding.status === 'rejected') {
-          showToast('Could not load your onboarding progress — starting fresh', 'error');
+        if (timetablePayload.status === 'fulfilled' && Array.isArray(timetablePayload.value?.slots)) {
+          setData((current) => ({
+            ...current,
+            timetable: timetablePayload.value.slots.map((slot) => ({
+              id: String(slot.id || `slot-${Date.now()}`),
+              course_id: String(slot.course_id || ''),
+              day_of_week: Number(slot.day_of_week || 1),
+              start_time: slot.start_time || '09:00',
+              end_time: slot.end_time || '10:00',
+              room_number: slot.room_number || '',
+            })),
+          }))
         }
-
-        if (
-          onboarding.status === 'fulfilled'
-          && !onboarding.value?.completed
-          && Number(onboarding.value?.current_step) > 1
-        ) {
-          setResumeBanner(true);
-          setStep(Math.min(Number(onboarding.value.current_step), TOTAL_STEPS));
-          const saved = onboarding.value?.data;
-          if (saved) {
-            if (saved.profile) setProfile((prev) => ({ ...prev, ...saved.profile }));
-            if (saved.platforms) setPlatforms((prev) => ({ ...prev, ...saved.platforms }));
-            if (Array.isArray(saved.mappings) && saved.mappings.length > 0) setMappings(saved.mappings);
-            if (saved.preferences) setPrefs((prev) => ({ ...prev, ...saved.preferences }));
+        if (status.status === 'fulfilled' && !status.value?.completed) {
+          const nextStep = Math.min(Math.max(Number(status.value?.current_step || 1), 1), TOTAL_STEPS)
+          if (nextStep > 1) {
+            setStep(nextStep)
+            setResume(true)
+          }
+          if (status.value?.data) {
+            setData((current) => ({
+              ...current,
+              ...status.value.data,
+              profile: { ...current.profile, ...(status.value.data.profile || {}) },
+              platforms: { ...current.platforms, ...(status.value.data.platforms || {}) },
+              preferences: { ...current.preferences, ...(status.value.data.preferences || {}) },
+              mappings: { ...current.mappings, ...(status.value.data.mappings || {}) },
+              courses: Array.isArray(status.value.data.courses) && status.value.data.courses.length ? status.value.data.courses : current.courses,
+              timetable: Array.isArray(status.value.data.timetable) ? status.value.data.timetable : current.timetable,
+            }))
           }
         }
       } catch {
-        if (mounted) setDetectedGroups([]);
+        showToast('Starting onboarding fresh', 'error')
       }
-    };
-    load();
-    return () => { mounted = false; };
-  }, [apiFetch, userId]);
+    }
+    load()
+    fetchConnectionState()
+    return () => { mounted = false }
+  }, [apiFetch, fetchConnectionState, showToast, userId])
 
-  const showToast = useCallback((message, type = 'success') => {
-    setToast({ message, type });
-  }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('google_connected') !== '1') return undefined
 
-  const clearToast = useCallback(() => setToast({ message: '', type: 'success' }), []);
+    const storedEmail = localStorage.getItem('acadpulse_user_email') || user?.email || authUser?.email || ''
+    setConnection((current) => ({
+      ...current,
+      google: true,
+      gmailEmail: current.gmailEmail || storedEmail,
+    }))
+    showToast('Google connected successfully', 'success')
+    fetchConnectionState()
+    const retryOne = setTimeout(fetchConnectionState, 1000)
+    const retryTwo = setTimeout(fetchConnectionState, 3000)
+    window.history.replaceState({}, '', '/onboarding')
 
-  const saveProgress = useCallback(async (completedStep = step, data = onboardingData) => {
+    return () => {
+      clearTimeout(retryOne)
+      clearTimeout(retryTwo)
+    }
+  }, [authUser?.email, fetchConnectionState, location.search, showToast, user?.email])
+
+  useEffect(() => {
+    if (step !== 4 || !data.platforms.whatsapp || connection.whatsapp) return undefined
+    fetchQr(false)
+    fetchConnectionState()
+    const statusPoll = setInterval(fetchConnectionState, 3000)
+    const qrPoll = setInterval(() => fetchQr(true), 5000)
+    return () => {
+      clearInterval(statusPoll)
+      clearInterval(qrPoll)
+    }
+  }, [connection.whatsapp, data.platforms.whatsapp, fetchConnectionState, fetchQr, step])
+
+  useEffect(() => {
+    if (step !== 4) return undefined
+    setSetupUnlocked(false)
+    const timer = setTimeout(() => setSetupUnlocked(true), 30000)
+    return () => clearTimeout(timer)
+  }, [step])
+
+  useEffect(() => {
+    if (step !== 4) return undefined
+    const allDone = (!data.platforms.whatsapp || connection.whatsapp)
+      && (!data.platforms.gmail || connection.google)
+      && (!data.platforms.classroom || connection.google)
+    if (!allDone) return undefined
+    const timer = setTimeout(() => goNext(), 1500)
+    return () => clearTimeout(timer)
+    // goNext is intentionally omitted to avoid re-arming auto-advance on save state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection.google, connection.whatsapp, data.platforms.classroom, data.platforms.gmail, data.platforms.whatsapp, step])
+
+  const saveProgress = useCallback(async (targetStep = step) => {
     try {
       await apiFetch('/onboarding/progress', {
         method: 'POST',
-        body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), step: completedStep, data }),
-      }, false);
+        body: JSON.stringify({
+          ...(userId ? { user_id: userId } : {}),
+          step: Math.min(targetStep, TOTAL_STEPS),
+          data: onboardingData,
+        }),
+      }, false)
     } catch {
-      showToast('Progress save failed — will retry', 'error');
+      showToast('Progress save failed - continuing locally', 'error')
     }
-  }, [apiFetch, onboardingData, showToast, step, userId]);
+  }, [apiFetch, onboardingData, showToast, step, userId])
 
-  const validateStep = useCallback(() => {
+  const validate = () => {
     if (step === 2) {
-      const next = {};
-      if (!profile.university.trim()) next.university = 'University name is required';
-      if (!profile.degree.trim()) next.degree = 'Degree program is required';
-      setErrors(next);
-      return Object.keys(next).length === 0;
+      const next = {}
+      if (!data.profile.university.trim()) next.university = 'University name is required'
+      if (!data.profile.degree.trim()) next.degree = 'Degree program is required'
+      if (!data.profile.semester.trim()) next.semester = 'Semester is required'
+      setErrors(next)
+      return Object.keys(next).length === 0
     }
-    return true;
-  }, [profile, step]);
+    if (step === 3 && selectedCount === 0) {
+      setPlatformError('Please select at least one platform to continue')
+      setTimeout(() => setPlatformError(''), 2200)
+      return false
+    }
+    if (step === 5) {
+      const partial = (data.courses || []).find((course) => {
+        const code = course.course_code?.trim()
+        const name = course.course_name?.trim()
+        return (code && !name) || (!code && name)
+      })
+      if (partial) {
+        showToast('Course code and course name are both required', 'error')
+        return false
+      }
+    }
+    if (step === 6) {
+      const invalid = (data.timetable || []).find((slot) => (
+        !slot.course_id || !slot.day_of_week || !slot.start_time || !slot.end_time
+      ))
+      if (invalid) {
+        showToast('Complete each timetable row or remove it', 'error')
+        return false
+      }
+    }
+    return true
+  }
+
+  const persistProfileLocally = () => {
+    localStorage.setItem('acadpulse_university', data.profile.university)
+    localStorage.setItem('acadpulse_degree', data.profile.degree)
+    localStorage.setItem('acadpulse_semester', data.profile.semester)
+    localStorage.setItem('acadpulse_section', data.profile.section)
+  }
+
+  const saveMappings = async () => {
+    const rows = [
+      ...(data.mappings.whatsapp || []).map((row) => ({ ...row, type: 'whatsapp' })),
+      ...(data.mappings.gmail || []).map((row) => ({ ...row, type: 'gmail' })),
+    ].filter((row) => row.source?.trim() && row.course?.trim())
+    if (!rows.length) return
+    const failures = []
+    try {
+      const payload = await apiFetch('/courses/map', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...(userId ? { user_id: userId } : {}),
+          mappings: rows.map((row) => ({
+            source_type: row.type,
+            source_reference_id: row.source,
+            course_id: row.course,
+          })),
+        }),
+      }, false)
+      if (payload?.skipped_count) showToast(`${payload.skipped_count} mapping could not be saved`, 'error')
+    } catch {
+      failures.push(...rows)
+      showToast(`${failures.length} mapping could not be saved`, 'error')
+    }
+  }
+
+  const saveCourses = async () => {
+    const rows = (data.courses || []).filter((course) => course.course_code?.trim() && course.course_name?.trim())
+    if (!rows.length) return
+    const saved = []
+    for (const course of rows) {
+      try {
+        const payload = await apiFetch('/courses', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...(userId ? { user_id: userId } : {}),
+            course_code: course.course_code.trim(),
+            course_name: course.course_name.trim(),
+            short_name: course.short_name?.trim() || undefined,
+          }),
+        }, false)
+        const next = payload?.course
+        saved.push({
+          ...course,
+          id: String(next?.id || next?.course_id || course.id),
+          course_code: next?.course_code || course.course_code.trim(),
+          course_name: next?.course_name || course.course_name.trim(),
+          short_name: next?.short_name || course.short_name || '',
+        })
+      } catch {
+        showToast(`Could not save ${course.course_code}`, 'error')
+        saved.push(course)
+      }
+    }
+    setData((current) => ({
+      ...current,
+      courses: saved,
+      timetable: (current.timetable || []).map((slot) => {
+        const match = rows.find((course) => course.id === slot.course_id)
+        const next = match ? saved.find((course) => course.course_code === match.course_code) : null
+        return next ? { ...slot, course_id: next.id } : slot
+      }),
+    }))
+  }
+
+  const saveTimetable = async () => {
+    const rows = (data.timetable || []).filter((slot) => slot.course_id && slot.start_time && slot.end_time)
+    if (!rows.length) return
+    for (const slot of rows) {
+      if (!String(slot.id || '').startsWith('slot-')) continue
+      try {
+        await apiFetch('/timetable', {
+          method: 'POST',
+          body: JSON.stringify({
+            course_id: slot.course_id,
+            day_of_week: Number(slot.day_of_week),
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+            room_number: slot.room_number?.trim() || undefined,
+          }),
+        })
+      } catch {
+        showToast('One timetable slot could not be saved', 'error')
+      }
+    }
+  }
 
   const goNext = useCallback(async () => {
-    if (!validateStep()) return;
-    if (step === 2) {
-      localStorage.setItem('acadpulse_university', profile.university);
-      localStorage.setItem('acadpulse_degree', profile.degree);
-      localStorage.setItem('acadpulse_semester', profile.semester);
-      localStorage.setItem('acadpulse_section', profile.section);
-    }
-    if (step === 5 && mappings.length > 0) {
-      const userMappings = mappings.filter((m) => !m.readOnly);
-      let failCount = 0;
-      for (const m of userMappings) {
-        try {
-          await apiFetch('/course-source-mappings', {
-            method: 'POST',
-            body: JSON.stringify({
-              course_id: m.course,
-              source_type: m.source_type,
-              source_reference_id: m.group,
-              ...(userId ? { user_id: userId } : {}),
-            }),
-          }, false);
-        } catch {
-          failCount += 1;
-        }
-      }
-      if (failCount > 0) {
-        showToast(
-          `${failCount} mapping${failCount > 1 ? 's' : ''} could not be saved — check your connection`,
-          'error',
-        );
-      }
-    }
-    const nextStep = Math.min(step + 1, TOTAL_STEPS);
-    await saveProgress(nextStep);
-    setDirection('forward');
-    setStep(nextStep);
-  }, [validateStep, step, profile, mappings, apiFetch, userId, showToast, saveProgress]);
-
-  const goBack = useCallback(() => {
-    setDirection('back');
-    setStep((s) => Math.max(1, s - 1));
-  }, []);
-
-  const skip = useCallback(async () => {
-    const nextStep = Math.min(step + 1, TOTAL_STEPS);
-    await saveProgress(nextStep);
-    setDirection('forward');
-    setStep(nextStep);
-  }, [saveProgress, step]);
-
-  const openWhatsappQr = useCallback(async () => {
-    setQrModalOpen(true);
-    setQrState({ loading: true, value: '', error: '' });
+    if (saving || !validate()) return
+    setSaving(true)
     try {
-      const payload = await apiFetch('/whatsapp/qr', {}, false);
-      const raw = payload?.qr || payload?.qr_code || '';
-      const img = payload?.image || payload?.qr_image
-        || (raw ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(raw)}` : '');
-      setQrState({ loading: false, value: img, error: img ? '' : 'QR code not available yet.' });
-    } catch {
-      setQrState({ loading: false, value: '', error: 'Make sure the WhatsApp bridge is running.' });
+      if (step === 2) persistProfileLocally()
+      if (step === 5) await saveCourses()
+      if (step === 6) await saveTimetable()
+      if (step === 7) await saveMappings()
+      const next = Math.min(step + 1, TOTAL_STEPS)
+      await saveProgress(next)
+      setDirection('forward')
+      setStep(next)
+    } finally {
+      setSaving(false)
     }
-  }, [apiFetch]);
+  }, [saveProgress, saving, step])
 
-  useEffect(() => {
-    if (!qrModalOpen || connections.whatsapp) return;
-    const interval = setInterval(async () => {
-      try {
-        const payload = await apiFetch('/whatsapp/status', {}, false);
-        if (payload?.whatsapp?.status === 'connected') {
-          clearInterval(interval);
-          setConnections((prev) => ({ ...prev, whatsapp: true }));
-          setQrModalOpen(false);
-          showToast('WhatsApp connected!', 'success');
-        }
-      } catch {
-        /* network blip — keep polling */
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [qrModalOpen, connections.whatsapp, apiFetch, showToast]);
+  const goBack = () => {
+    setDirection('back')
+    setStep((current) => Math.max(1, current - 1))
+  }
 
-  const finishOnboarding = useCallback(async () => {
-    localStorage.setItem('acadpulse_onboarding_complete', 'true');
+  const skip = async () => {
+    const next = Math.min(step + 1, TOTAL_STEPS)
+    await saveProgress(next)
+    setDirection('forward')
+    setStep(next)
+  }
+
+  const addMapping = (type) => {
+    setData((current) => ({
+      ...current,
+      mappings: {
+        ...current.mappings,
+        [type]: [...(current.mappings[type] || []), { id: `${type}-${Date.now()}`, source: '', course: '' }],
+      },
+    }))
+  }
+
+  const finish = async () => {
+    setFinishing(true)
+    localStorage.setItem('acadpulse_onboarding_complete', 'true')
     try {
       await apiFetch('/onboarding/complete', {
         method: 'POST',
         body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), data: onboardingData }),
-      }, false);
+      }, false)
+      localStorage.removeItem(STORAGE_KEY)
     } catch {
-      apiFetch('/onboarding/complete', {
-        method: 'POST',
-        body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), data: onboardingData }),
-      }, false).catch(() => {});
+      showToast('Could not save final state, opening dashboard anyway', 'error')
+    } finally {
+      navigate('/dashboard', { replace: true })
     }
-    navigate('/dashboard', { replace: true });
-  }, [apiFetch, navigate, onboardingData, userId]);
+  }
 
-  const showSkip = step >= 3 && step <= 6;
-  const showBack = step > 1;
-  const isLastStep = step === TOTAL_STEPS;
+  const continueLabel = {
+    1: "Let's Get Started ->",
+    2: 'Continue ->',
+    3: 'Continue ->',
+    4: 'All Done ->',
+    5: (data.courses || []).some((course) => course.course_code?.trim() && course.course_name?.trim()) ? 'Save Courses ->' : 'Skip for Now ->',
+    6: (data.timetable || []).length ? 'Save Timetable ->' : 'Skip Timetable ->',
+    7: mappedCount ? 'Save & Continue ->' : 'Skip for Now ->',
+    8: 'Almost There ->',
+  }[step]
+
+  const disableContinue = saving
+    || (step === 2 && (!data.profile.university || !data.profile.degree || !data.profile.semester))
+    || (step === 4 && !setupUnlocked && (
+      (data.platforms.whatsapp && !connection.whatsapp)
+      || ((data.platforms.gmail || data.platforms.classroom) && !connection.google)
+    ))
 
   return (
-    <main className="ob-screen">
-      <div className="ob-progress-bar" aria-hidden="true">
-        <span style={{ width: `${progress}%` }} />
-      </div>
-
-      <div className="ob-topbar">
-        <button
-          className={`ob-back-btn ${showBack ? '' : 'invisible'}`}
-          type="button"
-          onClick={goBack}
-          aria-label="Go back"
-        >
-          ← Back
-        </button>
-
-        <div className="ob-step-dots" aria-label="Onboarding progress">
-          {STEP_LABELS.map((label, i) => {
-            const n = i + 1;
-            const done = n < step;
-            const active = n === step;
-            return (
-              <span
-                key={label}
-                className={`ob-step-dot ${active ? 'active' : ''} ${done ? 'done' : ''}`}
-                aria-label={`Step ${n}: ${label} ${done ? '(complete)' : active ? '(current)' : ''}`}
-                title={label}
-              >
-                {done ? <Check size={10} /> : n}
-              </span>
-            );
+    <main className="onb-screen">
+      <div className="onb-progress"><span style={{ width: `${progress}%` }} /></div>
+      <div className="onb-top">
+        {step > 1 ? (
+          <button type="button" className="onb-back" onClick={goBack}><ChevronLeft size={16} /> Back</button>
+        ) : <span />}
+        <div className="onb-dots">
+          {Array.from({ length: TOTAL_STEPS }, (_, index) => {
+            const dotStep = index + 1
+            return <span key={dotStep} className={`${dotStep < step ? 'done' : ''} ${dotStep === step ? 'active' : ''}`} />
           })}
         </div>
-
-        {showSkip ? (
-          <button className="ob-skip-btn" type="button" onClick={skip}>
-            Skip →
+        {[3, 5, 6, 7, 8].includes(step) ? <button type="button" className="onb-skip" onClick={skip}>{'Skip this step ->'}</button> : <span />}
+      </div>
+      {resume && <div className="onb-resume">Welcome back {displayName} - picking up where you left off.</div>}
+      <div className={`onb-content ${direction}`} key={step}>
+        {step === 1 && <WelcomeStep name={displayName} />}
+        {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} />}
+        {step === 3 && <PlatformsStep data={data} setData={setData} connection={connection} onOAuth={() => window.location.assign(oauthUrl)} platformError={platformError} />}
+        {step === 4 && <SetupStep data={data} connection={connection} qr={qr} qrLoading={qrLoading} setupUnlocked={setupUnlocked} refreshQr={() => fetchQr(false)} onOAuth={() => window.location.assign(oauthUrl)} />}
+        {step === 5 && <CoursesStep data={data} setData={setData} />}
+        {step === 6 && <TimetableStep data={data} setData={setData} />}
+        {step === 7 && <MappingStep data={data} setData={setData} connection={connection} groups={groups} addMapping={addMapping} />}
+        {step === 8 && <PreferencesStep data={data} setData={setData} whatsappConnected={connection.whatsapp} showToast={showToast} />}
+        {step === 9 && <DoneStep name={displayName} data={data} connection={connection} mappedCount={mappedCount} finishing={finishing} onFinish={finish} />}
+        {step < TOTAL_STEPS && (
+          <button className="onb-primary" type="button" onClick={goNext} disabled={disableContinue}>
+            {saving ? <Loader2 size={18} className="spin" /> : continueLabel}
           </button>
-        ) : (
-          <span className="ob-topbar-placeholder" />
         )}
       </div>
-
-      {resumeBanner && (
-        <div className="ob-resume-banner">
-          <Sparkles size={14} />
-          Picking up where you left off
-          <button type="button" className="ob-resume-close" onClick={() => setResumeBanner(false)} aria-label="Dismiss">
-            <X size={13} />
-          </button>
-        </div>
-      )}
-
-      <div
-        className={`ob-card ${direction === 'forward' ? 'slide-forward' : 'slide-back'}`}
-        key={step}
-      >
-        {step === 1 && <StepWelcome studentName={studentName} />}
-        {step === 2 && (
-          <StepProfile
-            profile={profile}
-            setProfile={setProfile}
-            errors={errors}
-            setErrors={setErrors}
-          />
-        )}
-        {step === 3 && (
-          <StepPlatforms
-            platforms={platforms}
-            setPlatforms={setPlatforms}
-            connections={connections}
-            onOpenQr={openWhatsappQr}
-            API_BASE_URL={API_BASE_URL}
-            userId={userId}
-          />
-        )}
-        {step === 4 && (
-          <StepSetup
-            platforms={platforms}
-            connections={connections}
-            onOpenQr={openWhatsappQr}
-            API_BASE_URL={API_BASE_URL}
-            userId={userId}
-            onAutoAdvance={goNext}
-          />
-        )}
-        {step === 5 && (
-          <StepMapping
-            platforms={platforms}
-            detectedGroups={detectedGroups}
-            classroomCourses={classroomCourses}
-            connections={connections}
-            mappings={mappings}
-            setMappings={setMappings}
-            showToast={showToast}
-          />
-        )}
-        {step === 6 && (
-          <StepNotifications
-            prefs={prefs}
-            setPrefs={setPrefs}
-            platforms={platforms}
-            showToast={showToast}
-          />
-        )}
-        {step === 7 && (
-          <StepDone
-            studentName={studentName}
-            connectedSummary={connectedSummary}
-            onFinish={finishOnboarding}
-          />
-        )}
-
-        {!isLastStep && (
-          <div className="ob-card-footer">
-            <button className="ob-primary-btn ob-continue-btn" type="button" onClick={goNext}>
-              {step === TOTAL_STEPS - 1
-                ? 'Finish setup'
-                : (step === 5 && mappings.length === 0)
-                  ? 'Skip for Now →'
-                  : 'Continue →'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {qrModalOpen && (
-        <div className="ob-modal-backdrop" role="dialog" aria-modal="true" aria-label="WhatsApp QR code">
-          <div className="ob-qr-modal">
-            <button
-              className="ob-qr-close"
-              type="button"
-              onClick={() => setQrModalOpen(false)}
-              aria-label="Close QR modal"
-            >
-              <X size={18} />
-            </button>
-            <div className="ob-qr-icon"><MessageCircle size={28} /></div>
-            <h2>Scan to connect WhatsApp</h2>
-            <p>Open WhatsApp on your phone → Linked Devices → Link a Device</p>
-            {qrState.loading && <div className="ob-qr-skeleton" aria-label="Loading QR code" />}
-            {!qrState.loading && qrState.value && (
-              <img className="ob-qr-image" src={qrState.value} alt="WhatsApp QR code" />
-            )}
-            {!qrState.loading && qrState.error && (
-              <div className="ob-qr-error">
-                <AlertCircle size={16} /> {qrState.error}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      <Toast message={toast.message} type={toast.type} onDismiss={clearToast} />
+      <Toast toast={toast} onDismiss={() => setToast({ message: '', type: 'success' })} />
     </main>
-  );
+  )
 }

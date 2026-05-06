@@ -8,6 +8,8 @@ env/
 backend/.tmp/
 backend/credentials.json
 backend/token.json
+backend/google_tokens/
+backend/whatsapp_status_state.json
 .env
 *.egg-info/
 

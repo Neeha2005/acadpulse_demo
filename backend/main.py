@@ -94,6 +94,7 @@ from whatsapp_pipeline import process_whatsapp_message, start_whatsapp_buffer_fl
 import uuid
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 logger = logging.getLogger(__name__)
 PAKISTAN_TZ = pytz.timezone("Asia/Karachi")
 URGENCY_REFRESH_INTERVAL_SECONDS = 3 * 60 * 60
@@ -112,13 +113,37 @@ groq_status = {
     "last_error": None,
     "token_day": datetime.now(PAKISTAN_TZ).date().isoformat(),
 }
-whatsapp_status_state = {
+WHATSAPP_STATUS_STATE_FILE = Path(__file__).resolve().parent / "whatsapp_status_state.json"
+DEFAULT_WHATSAPP_STATUS_STATE = {
     "status": "unknown",
     "reason": None,
     "qr": None,
     "qr_updated_at": None,
     "updated_at": None,
 }
+
+def load_whatsapp_status_state() -> Dict[str, Any]:
+    try:
+        if not WHATSAPP_STATUS_STATE_FILE.exists():
+            return DEFAULT_WHATSAPP_STATUS_STATE.copy()
+        with WHATSAPP_STATUS_STATE_FILE.open("r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        if not isinstance(saved, dict):
+            return DEFAULT_WHATSAPP_STATUS_STATE.copy()
+        return {**DEFAULT_WHATSAPP_STATUS_STATE, **saved}
+    except Exception as exc:
+        logger.warning("Could not load WhatsApp status state: %s", exc)
+        return DEFAULT_WHATSAPP_STATUS_STATE.copy()
+
+def persist_whatsapp_status_state() -> None:
+    try:
+        with WHATSAPP_STATUS_STATE_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(whatsapp_status_state, handle)
+    except Exception as exc:
+        logger.warning("Could not persist WhatsApp status state: %s", exc)
+
+whatsapp_status_state = load_whatsapp_status_state()
+google_oauth_code_verifiers: Dict[str, str] = {}
 
 app = FastAPI(
     title="AcadPulse API",
@@ -308,6 +333,14 @@ class OnboardingProgressRequest(BaseModel):
 class OnboardingCompleteRequest(BaseModel):
     user_id: Optional[Any] = None
     data: Dict[str, Any] = Field(default_factory=dict)
+
+class CoursesMapRequest(BaseModel):
+    user_id: Optional[Any] = None
+    mappings: List[Dict[str, Any]] = Field(default_factory=list)
+    classroom_course_id: Optional[str] = None
+    classroom_course_name: Optional[str] = None
+    acadpulse_course: Optional[str] = None
+    acadpulse_course_id: Optional[str] = None
 
 class NotificationCompletionRequest(BaseModel):
     completed: bool = True
@@ -864,11 +897,12 @@ def serialize_notification_row(row):
         "external_message_id": row.get("external_message_id"),
         "sender_name": row.get("sender_name"),
         "message_text": row.get("message_text"),
+        "expanded_text": row.get("expanded_text") or row.get("message_text"),
         "category": row.get("category"),
         "deadline": row["deadline"].isoformat() if row.get("deadline") else None,
-        "urgency_score": row.get("urgency_score"),
-        "urgency_label": row.get("urgency_label"),
-        "urgency_level": row.get("urgency_level"),
+        "urgency_score": row.get("urgency_score") or 0,
+        "urgency_label": row.get("urgency_label") or row.get("urgency_level") or "none",
+        "urgency_level": row.get("urgency_level") or row.get("urgency_label") or "none",
         "is_completed": row.get("is_completed"),
         "received_at": row["received_at"].isoformat() if row.get("received_at") else None,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
@@ -952,9 +986,14 @@ def get_onboarding_status_for_user(user_id: str) -> Dict[str, Any]:
     try:
         cur.execute(
             """
-            SELECT onboarding_completed, onboarding_step
-            FROM users
-            WHERE id = %s
+            SELECT
+                u.onboarding_completed,
+                u.onboarding_step,
+                op.step AS saved_step,
+                op.data AS saved_data
+            FROM users u
+            LEFT JOIN onboarding_progress op ON op.user_id = u.id
+            WHERE u.id = %s
             LIMIT 1;
             """,
             (user_id,),
@@ -962,7 +1001,8 @@ def get_onboarding_status_for_user(user_id: str) -> Dict[str, Any]:
         row = cur.fetchone() or {}
         return {
             "completed": bool(row.get("onboarding_completed")),
-            "current_step": int(row.get("onboarding_step") or 0),
+            "current_step": int(row.get("saved_step") or row.get("onboarding_step") or 0),
+            "data": row.get("saved_data") or {},
         }
     finally:
         cur.close()
@@ -1194,66 +1234,19 @@ def save_onboarding_complete_for_user(user_id: str, data: Dict[str, Any]) -> Dic
     invalidate_chat_context(user_id)
     return {"saved_mappings": saved_mappings, "saved_timetable_entries": saved_timetable_entries}
 
-def archive_and_reset_semester(user_id: str, semester_label: Optional[str] = None) -> Dict[str, Any]:
-    label = semester_label or f"Semester archived {datetime.now(PAKISTAN_TZ).strftime('%Y-%m-%d')}"
+def reset_semester_data(user_id: str) -> Dict[str, Any]:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
-            INSERT INTO archived_notifications (
-                id, user_id, course_id, source_type, source_reference_id, external_message_id,
-                sender_name, message_text, category, deadline, urgency_score, urgency_label,
-                urgency_level, is_completed, received_at, created_at, expanded_text,
-                archived_at, semester_label
-            )
-            SELECT
-                id, user_id, course_id, source_type, source_reference_id, external_message_id,
-                sender_name, message_text, category, deadline, urgency_score, urgency_label,
-                urgency_level, is_completed, received_at, created_at, expanded_text,
-                NOW(), %s
-            FROM notifications
-            WHERE user_id = %s
-            ON CONFLICT (id) DO NOTHING;
-            """,
-            (label, user_id),
-        )
-        archived_count = cur.rowcount
-        cur.execute("DELETE FROM notifications WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM notifications WHERE user_id = %s RETURNING id;", (user_id,))
+        deleted_count = cur.rowcount
         cur.execute("DELETE FROM timetable_entries WHERE user_id = %s;", (user_id,))
         cur.execute("DELETE FROM course_source_mappings WHERE user_id = %s;", (user_id,))
         conn.commit()
-        return {"archived_count": archived_count, "semester_label": label}
+        return {"deleted_count": deleted_count}
     except Exception:
         conn.rollback()
         raise
-    finally:
-        cur.close()
-        conn.close()
-
-def list_archived_notifications(user_id: str, category: Optional[str] = None, search: Optional[str] = None) -> List[Dict[str, Any]]:
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        clauses = ["user_id = %s"]
-        params = [user_id]
-        if category and category.lower() != "all":
-            clauses.append("LOWER(category) = LOWER(%s)")
-            params.append(category)
-        if search:
-            clauses.append("message_text ILIKE %s")
-            params.append(f"%{search}%")
-
-        cur.execute(
-            f"""
-            SELECT *
-            FROM archived_notifications
-            WHERE {" AND ".join(clauses)}
-            ORDER BY archived_at DESC, received_at DESC;
-            """,
-            params,
-        )
-        return cur.fetchall()
     finally:
         cur.close()
         conn.close()
@@ -1431,22 +1424,6 @@ def run_pipeline(
     # Auto-detect unknown abbreviations for future learning
     if user_id:
         detect_unknown_abbreviations(original_text, user_id)
-    
-    # Store expanded_text in database
-    if notification_id and expanded_text != original_text:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                "UPDATE notifications SET expanded_text = %s WHERE id = %s",
-                (expanded_text, notification_id)
-            )
-            conn.commit()
-        except:
-            pass
-        finally:
-            cur.close()
-            conn.close()
     
     # STEP 2: Classify using EXPANDED text, unless a source-specific classifier
     # has already produced a reliable category for this notification.
@@ -2744,7 +2721,7 @@ def login_with_google(
         return RedirectResponse(redirect_url)
 
     try:
-        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/google/callback")
         flow = create_oauth_flow(redirect_uri)
         # Encode user_id|next_path in state so callback can redirect back correctly
         state_parts = [user_id or "new"]
@@ -2757,6 +2734,8 @@ def login_with_google(
             state=state,
             prompt="consent",
         )
+        if flow.code_verifier:
+            google_oauth_code_verifiers[state] = flow.code_verifier
         return RedirectResponse(auth_url)
     except Exception as exc:
         logger.exception("Failed to initiate Google OAuth")
@@ -2785,8 +2764,9 @@ def google_oauth_callback(
     next_path = state_parts[1] if len(state_parts) > 1 else None
 
     try:
-        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", f"{FRONTEND_URL}/auth/google/callback")
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/google/callback")
         flow = create_oauth_flow(redirect_uri)
+        flow.code_verifier = google_oauth_code_verifiers.pop(state or "new", None)
         flow.fetch_token(code=code)
         credentials = flow.credentials
 
@@ -2912,14 +2892,17 @@ def get_notifications(
     user_id: Optional[str] = Query(default=None),
     include_completed: bool = Query(default=False),
     source_type: Optional[str] = Query(default=None),
+    source: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ):
     try:
         rows = list_notifications(
             user_id=user_id,
             include_completed=include_completed,
-            source_type=source_type,
+            source_type=source_type or source,
             limit=limit,
+            offset=offset,
         )
     except Exception as exc:
         logger.exception("Failed to fetch notifications")
@@ -3128,9 +3111,22 @@ def save_whatsapp_group(request: WhatsAppGroupRequest):
     }
 
 @app.get("/classroom/courses")
-def get_classroom_courses(user_id: Optional[str] = Query(default=None)):
+def get_classroom_courses(
+    user_id: Optional[str] = Query(default=None),
+    sync: bool = Query(default=False),
+):
     resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
     try:
+        if sync and resolved_user_id:
+            creds = get_google_credentials_safe(user_id=resolved_user_id)
+            service = build("classroom", "v1", credentials=creds)
+            courses_result = execute_google_api_call(service.courses().list(courseStates=["ACTIVE"]))
+            for course in courses_result.get("courses", []):
+                record_classroom_course(
+                    classroom_id=course.get("id"),
+                    classroom_name=course.get("name") or course.get("id"),
+                    user_id=resolved_user_id,
+                )
         rows = list_classroom_courses(user_id=resolved_user_id)
     except Exception as exc:
         logger.exception("Failed to fetch Classroom courses")
@@ -3222,6 +3218,91 @@ def save_course_source_mapping(request: CourseSourceMappingRequest):
         "mappings": [serialize_course_source_mapping_row(row) for row in rows],
     }
 
+@app.post("/courses/map")
+def save_course_mappings(request: CoursesMapRequest):
+    user_id = resolve_mapping_user_id(request.user_id)
+    saved = []
+    skipped = []
+    items = list(request.mappings)
+
+    if request.classroom_course_id and (request.acadpulse_course_id or request.acadpulse_course):
+        course_id = (request.acadpulse_course_id or "").strip()
+        course_name = (request.acadpulse_course or "").strip()
+        if not course_id and course_name:
+            course_id = str(upsert_course(
+                course_code=course_name[:20],
+                course_name=course_name,
+                user_id=user_id,
+                short_name=course_name[:20],
+            ))
+        items.append({
+            "source_type": "classroom",
+            "source_reference_id": request.classroom_course_id,
+            "source": request.classroom_course_id,
+            "course_id": course_id,
+            "course": course_id,
+        })
+
+    for item in items:
+        source_type = str(item.get("source_type") or item.get("type") or "whatsapp").strip().lower()
+        source_reference_id = str(item.get("source_reference_id") or item.get("source") or "").strip()
+        course_id = str(item.get("course_id") or item.get("course") or "").strip()
+
+        if source_type not in {"whatsapp", "gmail", "classroom"} or not source_reference_id or not course_id:
+            skipped.append(item)
+            continue
+
+        try:
+            upsert_course_source_mapping(
+                user_id=user_id,
+                course_id=course_id,
+                source_type=source_type,
+                source_reference_id=source_reference_id,
+            )
+            saved.append({
+                "source_type": source_type,
+                "source_reference_id": source_reference_id,
+                "course_id": course_id,
+            })
+        except Exception as exc:
+            logger.exception("Failed to save onboarding course mapping")
+            skipped.append({**item, "error": str(exc)})
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "saved": saved,
+        "skipped": skipped,
+        "saved_count": len(saved),
+        "skipped_count": len(skipped),
+    }
+
+@app.delete("/courses/map/{mapping_id}")
+def delete_course_mapping(mapping_id: str, user_id: Optional[str] = Query(default=None)):
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM course_source_mappings
+            WHERE id = %s AND user_id = %s
+            RETURNING id;
+            """,
+            (mapping_id, resolved_user_id),
+        )
+        deleted = cur.fetchone() is not None
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as exc:
+        logger.exception("Failed to delete course mapping")
+        raise HTTPException(status_code=500, detail="Unable to delete course mapping") from exc
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Course mapping not found")
+    return {"status": "success", "deleted": mapping_id}
+
 @app.get("/urgency/refresh")
 def refresh_urgency_endpoint(user_id: str = Query(...)):
     """Recalculate urgency for one user immediately."""
@@ -3249,6 +3330,7 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     elif status_update.status in {"connected", "logged_out"}:
         whatsapp_status_state["qr"] = None
         whatsapp_status_state["qr_updated_at"] = None
+    persist_whatsapp_status_state()
     return {"status": "success", "whatsapp": whatsapp_status_state}
 
 @app.get("/whatsapp/status")
@@ -3295,6 +3377,7 @@ def get_classifier_status():
 @app.get("/gmail/fetch")
 async def fetch_gmail_emails(
     max_results: int = 10,
+    priority_only: bool = Query(default=True),
     user_id: Optional[str] = Query(default=None),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
@@ -3522,7 +3605,7 @@ def reset_semester(
 ):
     resolved_user_id = resolve_mapping_user_id(user_id)
     try:
-        result = archive_and_reset_semester(resolved_user_id, semester_label)
+        result = reset_semester_data(resolved_user_id)
         invalidate_chat_context(resolved_user_id)
         return {
             "status": "success",
@@ -3532,26 +3615,6 @@ def reset_semester(
     except Exception as exc:
         logger.exception("Failed to reset semester")
         raise HTTPException(status_code=500, detail="Unable to reset semester") from exc
-
-@app.get("/archives")
-def get_archives(
-    user_id: Optional[str] = Query(default=None),
-    category: Optional[str] = Query(default=None),
-    search: Optional[str] = Query(default=None),
-):
-    resolved_user_id = resolve_mapping_user_id(user_id)
-    try:
-        rows = list_archived_notifications(resolved_user_id, category=category, search=search)
-        return {
-            "status": "success",
-            "archives": [serialize_notification_row(row) | {
-                "archived_at": row.get("archived_at").isoformat() if row.get("archived_at") else None,
-                "semester_label": row.get("semester_label") or "Archived Semester",
-            } for row in rows],
-        }
-    except Exception as exc:
-        logger.exception("Failed to load archives")
-        raise HTTPException(status_code=500, detail="Unable to load archives") from exc
 
 # --- Groq Chatbot & Deadline Extraction Endpoints ---
 

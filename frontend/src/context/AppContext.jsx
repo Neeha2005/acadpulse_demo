@@ -402,12 +402,17 @@ export function AppProvider({ children }) {
   // Fetch integration connection statuses when authenticated
   useEffect(() => {
     if (!authToken || !authReady) return
-    apiFetch('/google/status').then(payload => {
+    const refreshIntegrationStatuses = () => {
+      apiFetch('/google/status').then(payload => {
       setGoogleConnected(Boolean(payload?.connected))
     }).catch(() => {})
-    apiFetch('/whatsapp/status', {}, false).then(payload => {
+      apiFetch('/whatsapp/status', {}, false).then(payload => {
       setWhatsappStatus(payload?.whatsapp?.status || 'unknown')
     }).catch(() => {})
+    }
+    refreshIntegrationStatuses()
+    window.addEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
+    return () => window.removeEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
   }, [authToken, authReady, apiFetch])
 
   useEffect(() => {

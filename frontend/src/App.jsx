@@ -10,7 +10,6 @@ import Materials from './pages/Materials'
 import Timetable from './pages/Timetable'
 import Courses from './pages/Courses'
 import Onboarding from './pages/Onboarding'
-import Archives from './pages/Archives'
 import Integrations from './pages/Integrations'
 import WhatsAppIntegration from './pages/WhatsAppIntegration'
 import ClassroomIntegration from './pages/ClassroomIntegration'
@@ -103,7 +102,6 @@ function App() {
         <Route path="/timetable" element={<RequireAuth><Timetable /></RequireAuth>} />
         <Route path="/courses" element={<RequireAuth><Courses /></RequireAuth>} />
         <Route path="/chatbot" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/archives" element={<RequireAuth><Archives /></RequireAuth>} />
         <Route path="/integrations" element={<RequireAuth><Integrations /></RequireAuth>} />
         <Route path="/integrations/whatsapp" element={<RequireAuth><WhatsAppIntegration /></RequireAuth>} />
         <Route path="/integrations/classroom" element={<RequireAuth><ClassroomIntegration /></RequireAuth>} />

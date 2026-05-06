@@ -154,7 +154,7 @@ export default function WhatsAppIntegration() {
   const isConnected = waStatus.status === 'connected' || waStatus.status === 'open';
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll integration-page">
       <section className="hero-stats glass-banner">
         <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
           <div style={{ width: 64, height: 64, borderRadius: 16, background: 'var(--whatsapp-subtle)', color: 'var(--whatsapp)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32 }}>

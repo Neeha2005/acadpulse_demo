@@ -41,8 +41,8 @@ def insert_notification(
             INSERT INTO notifications (
                 user_id, source_type, external_message_id, sender_name, 
                 message_text, category, received_at, course_id, source_reference_id, 
-                deadline, urgency_level, expanded_text
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                deadline, urgency_level
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
             RETURNING id;
             """,
@@ -58,7 +58,6 @@ def insert_notification(
                 source_ref,
                 deadline,
                 urgency_level,
-                expanded_text or text,
             )
         )
         result = cur.fetchone()
@@ -136,7 +135,7 @@ def get_pending_deadline_notifications(user_id):
     try:
         cur.execute(
             """
-            SELECT id, deadline, urgency_label
+            SELECT id, deadline, urgency_level AS urgency_label
             FROM notifications
             WHERE user_id = %s
               AND is_completed = FALSE
@@ -179,13 +178,11 @@ def update_notification_urgency(notification_id, score, label):
         cur.execute(
             """
             UPDATE notifications
-            SET urgency_score = %s,
-                urgency_label = %s,
-                urgency_level = NULLIF(%s, 'none')
+            SET urgency_level = NULLIF(%s, 'none')
             WHERE id = %s
             RETURNING id;
             """,
-            (score, label, label, notification_id),
+            (label, notification_id),
         )
         updated = cur.fetchone() is not None
         conn.commit()
@@ -219,8 +216,7 @@ def update_notification_completion(notification_id, completed=True):
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
+                urgency_level,
                 is_completed,
                 received_at,
                 created_at;
@@ -286,8 +282,6 @@ def update_notification_fields(
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
                 urgency_level,
                 is_completed,
                 received_at,
@@ -370,7 +364,7 @@ def get_course_by_name(course_name, user_id):
         cur.close()
         conn.close()
 
-def list_notifications(user_id=None, include_completed=False, source_type=None, limit=100):
+def list_notifications(user_id=None, include_completed=False, source_type=None, limit=100, offset=0):
     """Fetch notifications with optional filters for dashboard sync."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -393,7 +387,7 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         if clauses:
             where_sql = "WHERE " + " AND ".join(clauses)
 
-        params.append(limit)
+        params.extend([limit, offset])
 
         cur.execute(
             f"""
@@ -411,8 +405,6 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
                 n.message_text,
                 n.category,
                 n.deadline,
-                n.urgency_score,
-                n.urgency_label,
                 n.urgency_level,
                 n.is_completed,
                 n.received_at,
@@ -421,11 +413,9 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
             LEFT JOIN courses c ON c.id = n.course_id
             {where_sql}
             ORDER BY
-                CASE WHEN n.deadline IS NULL THEN 1 ELSE 0 END,
-                n.deadline ASC NULLS LAST,
                 n.received_at DESC NULLS LAST,
                 n.created_at DESC
-            LIMIT %s;
+            LIMIT %s OFFSET %s;
             """,
             params,
         )
@@ -1029,9 +1019,9 @@ def get_chatbot_context_data(user_id):
             """
             SELECT 
                 COUNT(*) FILTER (WHERE is_completed = false) as total_pending,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'critical') as critical_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'high') as high_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'overdue') as overdue_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'critical') as critical_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'high') as high_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'overdue') as overdue_count,
                 COUNT(*) FILTER (WHERE is_completed = false AND deadline::date = CURRENT_DATE) as due_today
             FROM notifications
             WHERE user_id = %s
@@ -1044,12 +1034,12 @@ def get_chatbot_context_data(user_id):
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.urgency_score, n.source_type as source
+                   n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label IN ('critical', 'high')
-            ORDER BY n.urgency_score DESC
+              AND n.urgency_level IN ('critical', 'high')
+            ORDER BY n.deadline ASC NULLS LAST
             LIMIT 10
             """,
             (user_id,)
@@ -1060,11 +1050,11 @@ def get_chatbot_context_data(user_id):
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.source_type as source
+                   n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label NOT IN ('critical', 'high', 'overdue')
+              AND COALESCE(n.urgency_level, 'none') NOT IN ('critical', 'high', 'overdue')
             ORDER BY n.deadline ASC NULLS LAST
             LIMIT 15
             """,
