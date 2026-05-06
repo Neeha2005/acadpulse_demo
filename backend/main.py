@@ -107,6 +107,7 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-acadpulse-dev-secret")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "7"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5173")
+WHATSAPP_CONTROL_URL = os.getenv("WHATSAPP_CONTROL_URL", "http://127.0.0.1:3010")
 GROQ_DAILY_WARNING_REQUEST_LIMIT = int(os.getenv("GROQ_DAILY_WARNING_REQUEST_LIMIT", "14400"))
 groq_status = {
     "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
@@ -125,6 +126,7 @@ DEFAULT_WHATSAPP_STATUS_STATE = {
     "qr": None,
     "qr_updated_at": None,
     "updated_at": None,
+    "sessions": {},
 }
 
 def load_whatsapp_status_state() -> Dict[str, Any]:
@@ -149,6 +151,40 @@ def persist_whatsapp_status_state() -> None:
 
 whatsapp_status_state = load_whatsapp_status_state()
 google_oauth_code_verifiers: Dict[str, str] = {}
+
+def default_whatsapp_session_state(user_id: Optional[str] = None) -> Dict[str, Any]:
+    state = DEFAULT_WHATSAPP_STATUS_STATE.copy()
+    state.pop("sessions", None)
+    state["user_id"] = user_id
+    return state
+
+def get_whatsapp_session_state(user_id: Optional[str]) -> Dict[str, Any]:
+    normalized_user_id = str(user_id or "").strip()
+    sessions = whatsapp_status_state.setdefault("sessions", {})
+    if normalized_user_id:
+        if normalized_user_id not in sessions:
+            sessions[normalized_user_id] = default_whatsapp_session_state(normalized_user_id)
+        return sessions[normalized_user_id]
+    return default_whatsapp_session_state(None)
+
+def set_whatsapp_session_state(user_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    session = get_whatsapp_session_state(user_id)
+    session.update(updates)
+    session["user_id"] = user_id
+    whatsapp_status_state.update({k: v for k, v in session.items() if k != "sessions"})
+    return session
+
+def ensure_whatsapp_bridge_session(user_id: str) -> None:
+    if not user_id:
+        return
+    try:
+        url = f"{WHATSAPP_CONTROL_URL.rstrip('/')}/sessions/{quote_plus(str(user_id))}/start"
+        with httpx.Client(timeout=2.5) as client:
+            response = client.post(url)
+            if response.status_code >= 400:
+                logger.warning("WhatsApp bridge session start failed: %s %s", response.status_code, response.text)
+    except Exception as exc:
+        logger.warning("WhatsApp bridge control unavailable for user_id=%s: %s", user_id, exc)
 
 app = FastAPI(
     title="AcadPulse API",
@@ -3533,22 +3569,27 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     effective_user_id = incoming_user_id
     if pending_user_id and (not incoming_user_id or incoming_user_id in {"test-user", "acadpulse-demo-onboarding"}):
         effective_user_id = pending_user_id
-    whatsapp_status_state.update({
+    normalized_user_id = str(effective_user_id or "").strip()
+    updates = {
         "status": status_update.status,
         "reason": status_update.reason,
-        "user_id": effective_user_id or status_update.user_id,
+        "user_id": normalized_user_id or status_update.user_id,
         "updated_at": now_iso,
-    })
+    }
     if status_update.qr:
-        whatsapp_status_state["qr"] = status_update.qr
-        whatsapp_status_state["qr_updated_at"] = now_iso
+        updates["qr"] = status_update.qr
+        updates["qr_updated_at"] = now_iso
     elif status_update.status in {"connected", "logged_out"}:
-        whatsapp_status_state["qr"] = None
-        whatsapp_status_state["qr_updated_at"] = None
-        if status_update.status == "connected":
-            whatsapp_status_state["pending_user_id"] = None
+        updates["qr"] = None
+        updates["qr_updated_at"] = None
+    if normalized_user_id:
+        session_state = set_whatsapp_session_state(normalized_user_id, updates)
+    else:
+        whatsapp_status_state.update(updates)
+        session_state = whatsapp_status_state
+    if status_update.status == "connected" and pending_user_id == normalized_user_id:
+        whatsapp_status_state["pending_user_id"] = None
     try:
-        normalized_user_id = str(effective_user_id or "").strip()
         if normalized_user_id:
             if status_update.status in {"connected", "open"}:
                 set_user_connected_flags(normalized_user_id, whatsapp=True)
@@ -3557,7 +3598,7 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
     except Exception:
         logger.exception("Failed to update WhatsApp connected flag")
     persist_whatsapp_status_state()
-    return {"status": "success", "whatsapp": whatsapp_status_state}
+    return {"status": "success", "whatsapp": session_state}
 
 @app.get("/whatsapp/status")
 def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
@@ -3574,17 +3615,20 @@ def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
             },
         }
     requested_user_id = resolve_mapping_user_id(user_id)
-    state_user_id = str(whatsapp_status_state.get("user_id") or "")
-    state_status = str(whatsapp_status_state.get("status") or "")
+    session_state = get_whatsapp_session_state(requested_user_id)
+    state_user_id = str(session_state.get("user_id") or "")
+    state_status = str(session_state.get("status") or "")
     if (
         requested_user_id
         and state_status in {"connected", "open"}
         and state_user_id in {"", "test-user", "acadpulse-demo-onboarding"}
     ):
-        whatsapp_status_state["user_id"] = requested_user_id
-        whatsapp_status_state["pending_user_id"] = None
-        whatsapp_status_state["qr"] = None
-        whatsapp_status_state["qr_updated_at"] = None
+        session_state = set_whatsapp_session_state(requested_user_id, {
+            "user_id": requested_user_id,
+            "pending_user_id": None,
+            "qr": None,
+            "qr_updated_at": None,
+        })
         state_user_id = requested_user_id
         persist_whatsapp_status_state()
     if requested_user_id and state_user_id and state_user_id != requested_user_id:
@@ -3596,15 +3640,15 @@ def get_whatsapp_status(user_id: Optional[str] = Query(default=None)):
                 "user_id": requested_user_id,
                 "qr": None,
                 "qr_updated_at": None,
-                "updated_at": whatsapp_status_state.get("updated_at"),
+                "updated_at": session_state.get("updated_at"),
             },
         }
-    if requested_user_id and whatsapp_status_state.get("status") in {"connected", "open"}:
+    if requested_user_id and session_state.get("status") in {"connected", "open"}:
         try:
             set_user_connected_flags(requested_user_id, whatsapp=True)
         except Exception:
             logger.exception("Failed to reconcile WhatsApp connected flag")
-    return {"status": "success", "whatsapp": whatsapp_status_state}
+    return {"status": "success", "whatsapp": session_state}
 
 @app.get("/whatsapp/qr")
 def get_whatsapp_qr(user_id: Optional[str] = Query(default=None)):
@@ -3615,23 +3659,25 @@ def get_whatsapp_qr(user_id: Optional[str] = Query(default=None)):
             "message": "WhatsApp QR requires the current user account.",
         }
     requested_user_id = resolve_mapping_user_id(user_id)
-    state_user_id = str(whatsapp_status_state.get("user_id") or "")
+    ensure_whatsapp_bridge_session(requested_user_id)
+    session_state = get_whatsapp_session_state(requested_user_id)
+    state_user_id = str(session_state.get("user_id") or "")
     whatsapp_status_state["pending_user_id"] = requested_user_id
+    session_state["pending_user_id"] = requested_user_id
     persist_whatsapp_status_state()
-    if requested_user_id and state_user_id and state_user_id != requested_user_id:
-        return {
-            "status": "connected_elsewhere",
-            "qr": None,
-            "connected_user_id": state_user_id,
-            "message": "WhatsApp bridge is currently connected to another user. Restart the WhatsApp bridge with a fresh session to generate a QR for this account.",
-        }
-    qr_value = whatsapp_status_state.get("qr")
+    qr_value = session_state.get("qr")
     if qr_value:
         return {
             "status": "success",
             "qr": qr_value,
-            "qr_updated_at": whatsapp_status_state.get("qr_updated_at"),
+            "qr_updated_at": session_state.get("qr_updated_at"),
             "message": "Scan this QR code with WhatsApp to connect AcadPulse.",
+        }
+    if session_state.get("status") in {"connected", "open"}:
+        return {
+            "status": "connected",
+            "qr": None,
+            "message": "WhatsApp is already connected for this account.",
         }
 
     return {

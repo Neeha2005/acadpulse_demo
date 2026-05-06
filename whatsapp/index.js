@@ -9,6 +9,7 @@ import {
   wrapSocket,
 } from "baileys-antiban";
 import "dotenv/config";
+import http from "node:http";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
@@ -16,8 +17,11 @@ import path from "node:path";
 import { sendToFastAPI } from "./sender.js";
 
 const SESSION_ROOT = process.env.WHATSAPP_SESSION_PATH || "./sessions";
-const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "test-user";
+const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "";
 const FASTAPI_URL = process.env.FASTAPI_URL || process.env.FASTAPI_BASE_URL || "http://localhost:8000";
+const CONTROL_HOST = process.env.WHATSAPP_CONTROL_HOST || "127.0.0.1";
+const CONTROL_PORT = Number(process.env.WHATSAPP_CONTROL_PORT || 3010);
+const AUTO_START_DEFAULT = Boolean(DEFAULT_USER_ID) && process.env.WHATSAPP_AUTOSTART_DEFAULT !== "0";
 const HEALTH_CHECK_INTERVAL_MS = 60 * 1000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const MIN_PROCESSING_DELAY_MS = 700;
@@ -25,6 +29,7 @@ const MAX_PROCESSING_DELAY_MS = 3_500;
 
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 const activeSessions = new Map();
+const startingSessions = new Set();
 const connectionTimes = new Map();
 const presenceControllers = new Map();
 const reconnectAttempts = new Map();
@@ -250,7 +255,7 @@ function scheduleReconnect(userId, reason) {
 }
 
 async function simulateReconnectForTest() {
-  const userId = DEFAULT_USER_ID;
+  const userId = DEFAULT_USER_ID || "test-user";
   const reason = process.env.WHATSAPP_SIMULATE_REASON || "simulated_timeout";
   reconnectAttempts.set(userId, 0);
   logger.info({ userId, attempt: 0, maxAttempts: MAX_RECONNECT_ATTEMPTS }, "WhatsApp connecting");
@@ -270,7 +275,25 @@ async function simulateReconnectForTest() {
 }
 
 async function startSessionWithMonitor(userId) {
-  activeSessions.set(userId, await startSession(userId));
+  const normalizedUserId = cleanUserId(userId);
+  if (!normalizedUserId) {
+    throw new Error("userId is required");
+  }
+  if (startingSessions.has(normalizedUserId)) {
+    return activeSessions.get(normalizedUserId) || null;
+  }
+  const existing = activeSessions.get(normalizedUserId);
+  if (existing && existing.ws?.readyState === 1) {
+    return existing;
+  }
+  startingSessions.add(normalizedUserId);
+  try {
+    const sock = await startSession(normalizedUserId);
+    activeSessions.set(normalizedUserId, sock);
+    return sock;
+  } finally {
+    startingSessions.delete(normalizedUserId);
+  }
 }
 
 async function handleIncomingMessage(sock, userId, message) {
@@ -359,6 +382,53 @@ function cleanJid(jid) {
   return jid.split("@")[0].split(":")[0];
 }
 
+function cleanUserId(userId) {
+  return String(userId || "").trim().replace(/[^\w.-]/g, "_");
+}
+
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(payload));
+}
+
+function startControlServer() {
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", `http://${CONTROL_HOST}:${CONTROL_PORT}`);
+
+    if (request.method === "GET" && url.pathname === "/health") {
+      sendJson(response, 200, {
+        status: "ok",
+        active_sessions: Array.from(activeSessions.keys()),
+        starting_sessions: Array.from(startingSessions),
+      });
+      return;
+    }
+
+    const startMatch = url.pathname.match(/^\/sessions\/([^/]+)\/start$/);
+    if (request.method === "POST" && startMatch) {
+      const userId = cleanUserId(decodeURIComponent(startMatch[1]));
+      startSessionWithMonitor(userId)
+        .then(() => {
+          sendJson(response, 202, { status: "starting", user_id: userId });
+        })
+        .catch((error) => {
+          logger.error({ userId, error }, "Could not start WhatsApp user session");
+          sendJson(response, 500, { status: "error", user_id: userId, detail: error.message });
+        });
+      return;
+    }
+
+    sendJson(response, 404, { status: "not_found" });
+  });
+
+  server.listen(CONTROL_PORT, CONTROL_HOST, () => {
+    logger.info(
+      { host: CONTROL_HOST, port: CONTROL_PORT },
+      "WhatsApp control server listening",
+    );
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -408,8 +478,11 @@ if (process.env.WHATSAPP_SIMULATE_DISCONNECT === "1") {
       process.exitCode = 1;
     });
 } else {
-  startSessionWithMonitor(DEFAULT_USER_ID).catch((error) => {
-    logger.error({ error }, "WhatsApp service failed to start");
-    process.exitCode = 1;
-  });
+  startControlServer();
+  if (AUTO_START_DEFAULT) {
+    startSessionWithMonitor(DEFAULT_USER_ID).catch((error) => {
+      logger.error({ error }, "WhatsApp service failed to start");
+      process.exitCode = 1;
+    });
+  }
 }
