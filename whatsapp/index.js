@@ -2,6 +2,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
+  downloadMediaMessage,
 } from "@whiskeysockets/baileys";
 import {
   getStealthSocketConfig,
@@ -290,7 +291,10 @@ async function handleIncomingMessage(sock, userId, message) {
   }
 
   const text = extractText(message.message);
-  if (!text) {
+  const mediaInfo = extractMediaInfo(message.message);
+
+  // Drop messages with no text AND no media
+  if (!text && !mediaInfo) {
     return;
   }
 
@@ -299,16 +303,8 @@ async function handleIncomingMessage(sock, userId, message) {
   const groupName = await resolveGroupName(sock, remoteJid);
   const sender = message.key.participant || remoteJid;
 
-  logger.info(
-    {
-      userId,
-      group: groupName,
-      preview: text.slice(0, 80),
-    },
-    "Forwarding WhatsApp group message to FastAPI",
-  );
-
-  await sendToFastAPI({
+  // Build the payload — start with the same fields as before
+  const payload = {
     message_id: message.key?.id,
     user_id: userId,
     group_id: cleanJid(remoteJid),
@@ -316,9 +312,42 @@ async function handleIncomingMessage(sock, userId, message) {
     group_type: "general",
     sender: cleanJid(sender),
     sender_name: message.pushName || cleanJid(sender),
-    text,
+    text: text || "",
     timestamp: Number(message.messageTimestamp || Math.floor(Date.now() / 1000)),
-  });
+  };
+
+  // If message has media, download bytes and attach to payload
+  if (mediaInfo) {
+    try {
+      const buffer = await downloadMediaMessage(
+        message,
+        "buffer",
+        {},
+        { logger, reuploadRequest: sock.updateMediaMessage }
+      );
+      payload.media_type = mediaInfo.type;
+      payload.mime_type = mediaInfo.mimeType;
+      payload.file_name = mediaInfo.fileName;
+      payload.media_data = buffer.toString("base64");
+      logger.info(
+        { userId, group: groupName, mediaType: mediaInfo.type, fileName: mediaInfo.fileName },
+        "Downloaded WhatsApp media"
+      );
+    } catch (err) {
+      logger.warn({ userId, error: err.message }, "Failed to download WhatsApp media, sending metadata only");
+      payload.media_type = mediaInfo.type;
+      payload.mime_type = mediaInfo.mimeType;
+      payload.file_name = mediaInfo.fileName;
+      // No media_data — Python side will handle gracefully
+    }
+  }
+
+  logger.info(
+    { userId, group: groupName, preview: (text || "[media]").slice(0, 80) },
+    "Forwarding WhatsApp message to FastAPI"
+  );
+
+  await sendToFastAPI(payload);
 }
 
 function extractText(message) {
@@ -334,6 +363,40 @@ function extractText(message) {
     content.listResponseMessage?.title ||
     ""
   ).trim();
+}
+
+function extractMediaInfo(message) {
+  const content = unwrapMessage(message);
+
+  if (content.imageMessage) {
+    return {
+      type: "image",
+      mimeType: content.imageMessage.mimetype || "image/jpeg",
+      fileName: content.imageMessage.fileName || "image.jpg",
+    };
+  }
+  if (content.videoMessage) {
+    return {
+      type: "video",
+      mimeType: content.videoMessage.mimetype || "video/mp4",
+      fileName: content.videoMessage.fileName || "video.mp4",
+    };
+  }
+  if (content.documentMessage) {
+    return {
+      type: "document",
+      mimeType: content.documentMessage.mimetype || "application/octet-stream",
+      fileName: content.documentMessage.fileName || "document",
+    };
+  }
+  if (content.audioMessage) {
+    return {
+      type: "audio",
+      mimeType: content.audioMessage.mimetype || "audio/ogg",
+      fileName: "audio.ogg",
+    };
+  }
+  return null;
 }
 
 function unwrapMessage(message) {

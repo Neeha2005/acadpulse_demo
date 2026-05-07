@@ -32,7 +32,12 @@ def insert_notification(
     urgency_level=None,
     expanded_text=None,
 ):
-    """Insert a notification into the database, ignoring duplicates."""
+    """Insert a notification into the database, ignoring duplicates.
+
+    The current schema does not store `expanded_text` or `urgency_score`, so
+    those pipeline-only values are accepted for backward compatibility and
+    ignored at write time.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -41,8 +46,8 @@ def insert_notification(
             INSERT INTO notifications (
                 user_id, source_type, external_message_id, sender_name, 
                 message_text, category, received_at, course_id, source_reference_id, 
-                deadline, urgency_level, expanded_text
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                deadline, urgency_level
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
             RETURNING id;
             """,
@@ -58,7 +63,6 @@ def insert_notification(
                 source_ref,
                 deadline,
                 urgency_level,
-                expanded_text or text,
             )
         )
         result = cur.fetchone()
@@ -136,7 +140,7 @@ def get_pending_deadline_notifications(user_id):
     try:
         cur.execute(
             """
-            SELECT id, deadline, urgency_label
+            SELECT id, deadline, urgency_level
             FROM notifications
             WHERE user_id = %s
               AND is_completed = FALSE
@@ -168,7 +172,7 @@ def get_users_with_pending_deadlines():
         cur.close()
         conn.close()
 
-def update_notification_urgency(notification_id, score, label):
+def update_notification_urgency(notification_id, urgency_level):
     """Update urgency metadata. Returns True if the notification existed."""
     if not notification_id:
         return False
@@ -179,13 +183,11 @@ def update_notification_urgency(notification_id, score, label):
         cur.execute(
             """
             UPDATE notifications
-            SET urgency_score = %s,
-                urgency_label = %s,
-                urgency_level = NULLIF(%s, 'none')
+            SET urgency_level = NULLIF(%s, 'none')
             WHERE id = %s
             RETURNING id;
             """,
-            (score, label, label, notification_id),
+            (urgency_level, notification_id),
         )
         updated = cur.fetchone() is not None
         conn.commit()
@@ -219,8 +221,6 @@ def update_notification_completion(notification_id, completed=True):
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
                 is_completed,
                 received_at,
                 created_at;
@@ -286,8 +286,6 @@ def update_notification_fields(
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
                 urgency_level,
                 is_completed,
                 received_at,
@@ -411,8 +409,6 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
                 n.message_text,
                 n.category,
                 n.deadline,
-                n.urgency_score,
-                n.urgency_label,
                 n.urgency_level,
                 n.is_completed,
                 n.received_at,
@@ -594,7 +590,10 @@ def upsert_course(course_code, course_name, aliases=None, user_id=None, short_na
                 """,
                 (code, name, short),
             )
-            course_id = cur.fetchone()[0]
+            result = cur.fetchone()
+            if not result:
+                raise Exception("Failed to insert course")
+            course_id = result[0]
 
         if user_id:
             cur.execute(
@@ -636,7 +635,10 @@ def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=Fa
             """,
             (group_id, group_name or group_id, is_general),
         )
-        whatsapp_group_pk = cur.fetchone()[0]
+        result = cur.fetchone()
+        if not result:
+            raise Exception("Failed to insert WhatsApp group")
+        whatsapp_group_pk = result[0]
 
         if user_id:
             cur.execute(
@@ -732,7 +734,10 @@ def record_classroom_course(classroom_id, classroom_name=None, user_id=None):
             """,
             (classroom_id, classroom_name or classroom_id),
         )
-        classroom_course_pk = cur.fetchone()[0]
+        result = cur.fetchone()
+        if not result:
+            raise Exception("Failed to insert Classroom course")
+        classroom_course_pk = result[0]
 
         if user_id:
             cur.execute(
@@ -901,13 +906,8 @@ def get_or_create_user(full_name, email):
         new_user = cur.fetchone()
         conn.commit()
         
-        # Seed default abbreviations for new user
-        try:
-            from notification_abbr import seed_default_abbreviations
-            seed_default_abbreviations(new_user[0])
-        except Exception as e:
-            print(f"Error seeding abbreviations: {e}")
-            
+        if not new_user:
+            raise Exception("Failed to create user")
         return new_user[0]
     finally:
         cur.close()
@@ -1029,9 +1029,9 @@ def get_chatbot_context_data(user_id):
             """
             SELECT 
                 COUNT(*) FILTER (WHERE is_completed = false) as total_pending,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'critical') as critical_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'high') as high_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'overdue') as overdue_count,
+                    COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'critical') as critical_count,
+                    COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'high') as high_count,
+                    COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'overdue') as overdue_count,
                 COUNT(*) FILTER (WHERE is_completed = false AND deadline::date = CURRENT_DATE) as due_today
             FROM notifications
             WHERE user_id = %s
@@ -1044,12 +1044,12 @@ def get_chatbot_context_data(user_id):
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.urgency_score, n.source_type as source
+                                     n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label IN ('critical', 'high')
-            ORDER BY n.urgency_score DESC
+                            AND n.urgency_level IN ('critical', 'high')
+                        ORDER BY n.deadline ASC NULLS LAST
             LIMIT 10
             """,
             (user_id,)
@@ -1059,12 +1059,12 @@ def get_chatbot_context_data(user_id):
         # 5. Get pending items (low/medium, max 15)
         cur.execute(
             """
-            SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.source_type as source
+                 SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
+                     n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label NOT IN ('critical', 'high', 'overdue')
+                            AND n.urgency_level NOT IN ('critical', 'high', 'overdue')
             ORDER BY n.deadline ASC NULLS LAST
             LIMIT 15
             """,
@@ -1131,14 +1131,12 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
             """,
             (full_name, email, phone, university, password_hash),
         )
-        user_id = cur.fetchone()[0]
+        result = cur.fetchone()
         conn.commit()
         
-        # Seed default abbreviations for new user
-        from notification_abbr import seed_default_abbreviations
-        seed_default_abbreviations(user_id)
-        
-        return user_id
+        if not result:
+            raise Exception("Failed to create user")
+        return result[0]
     except Exception:
         conn.rollback()
         raise
@@ -1280,6 +1278,58 @@ def get_notification_id_by_source(external_id, source_type):
         )
         row = cur.fetchone()
         return row[0] if row else None
+    finally:
+        cur.close()
+        conn.close()
+
+def insert_attachment(notification_id, file_name, file_path, file_type):
+    """Insert one attachment row linked to a notification."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO attachments (notification_id, file_name, file_path, file_type)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id;
+            """,
+            (str(notification_id), file_name or "attachment", file_path or "", file_type or ""),
+        )
+        result = cur.fetchone()
+        conn.commit()
+        return str(result[0]) if result else None
+    except Exception as exc:
+        conn.rollback()
+        print(f"Error inserting attachment for notification {notification_id}: {exc}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_attachments_for_notification(notification_id):
+    """Fetch all attachment rows for a notification.
+    Returns list of dicts with id, file_name, file_path, file_type.
+    file_path is the raw stored value — signed URL generation happens in attachments_pipeline.
+    """
+    if not notification_id:
+        return []
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, file_name, file_path, file_type
+            FROM attachments
+            WHERE notification_id = %s
+            ORDER BY id;
+            """,
+            (str(notification_id),),
+        )
+        return cur.fetchall()
+    except Exception as exc:
+        print(f"Error fetching attachments for {notification_id}: {exc}")
+        return []
     finally:
         cur.close()
         conn.close()

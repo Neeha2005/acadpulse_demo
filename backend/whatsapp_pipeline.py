@@ -8,12 +8,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from db import get_db_connection, insert_notification, notification_exists
-from notification_abbr import expand_abbreviations, detect_unknown_abbreviations
+from main import normalize_received_at
 
 
 logger = logging.getLogger(__name__)
 
-WHATSAPP_BUFFER_SECONDS = int(os.getenv("WHATSAPP_BUFFER_SECONDS", "30"))
+WHATSAPP_BUFFER_SECONDS = int(os.getenv("WHATSAPP_BUFFER_SECONDS", "25"))
 WHATSAPP_FLUSH_INTERVAL_SECONDS = int(os.getenv("WHATSAPP_FLUSH_INTERVAL_SECONDS", "5"))
 
 _BUFFER_LOCK = asyncio.Lock()
@@ -29,22 +29,22 @@ def _main_helpers():
     """
     from main import (
         calculate_urgency,
+        classify_keyword,
+        classify_with_fallback,
         classify_course_for_message,
         extract_deadlines_hybrid,
-        normalize_received_at,
-        normalize_text,
+        first_deadline_date,
         parse_strict_deadline_datetime,
-        run_pipeline,
     )
 
     return {
         "calculate_urgency": calculate_urgency,
+        "classify_keyword": classify_keyword,
+        "classify_with_fallback": classify_with_fallback,
         "classify_course_for_message": classify_course_for_message,
         "extract_deadlines_hybrid": extract_deadlines_hybrid,
-        "normalize_received_at": normalize_received_at,
-        "normalize_text": normalize_text,
+        "first_deadline_date": first_deadline_date,
         "parse_strict_deadline_datetime": parse_strict_deadline_datetime,
-        "run_pipeline": run_pipeline,
     }
 
 
@@ -116,7 +116,7 @@ def _detect_media_type(message_content: Dict[str, Any]) -> str:
         message_content: Unwrapped message content.
 
     Returns:
-        One of: text, document, image, video, audio, sticker, protocol, unknown.
+            # media_context_text removed as it is now unused
     """
     if not isinstance(message_content, dict):
         return "unknown"
@@ -429,6 +429,7 @@ def _safe_list_media(payload: Dict[str, Any], message_content: Optional[Dict[str
         or payload.get("mediaId")
         or payload.get("attachment_id")
         or payload.get("attachmentId")
+        or payload.get("media_data")  # base64 bytes present
         or _detect_media_type(message_content) in {"document", "image", "video", "audio", "sticker"}
     )
 
@@ -447,6 +448,7 @@ def _safe_list_media(payload: Dict[str, Any], message_content: Optional[Dict[str
             "media_type": media_type,
             "caption": caption,
             "message_id": _safe_text(payload.get("message_id") or payload.get("messageId") or payload.get("id")),
+            "media_data": payload.get("media_data") or "",  # base64 bytes from index.js
         }
     ]
 
@@ -751,34 +753,6 @@ def _priority(category: str) -> int:
     }.get(category, 0)
 
 
-def _keyword_category(text: str) -> Optional[str]:
-    """Classify academic text using deterministic keywords only.
-
-    Args:
-        text: Search text.
-
-    Returns:
-        Matched category or None.
-    """
-    helpers = _main_helpers()
-    normalize_text = helpers["normalize_text"]
-    normalized = normalize_text(text)
-    if not normalized:
-        return None
-
-    keyword_map = [
-        ("assignment", ["assignment", "submit", "deadline", "hand in", "homework", "project", "lab", "problem set"]),
-        ("quiz", ["quiz", "mcq", "multiple choice", "test", "exam", "short answer"]),
-        ("event", ["event", "workshop", "seminar", "meeting", "webinar", "session", "lecture", "orientation"]),
-        ("announcement", ["announcement", "notice", "reminder", "update", "information", "cancel", "postpone", "venue", "room"]),
-        ("material", ["material", "slides", "slide", "notes", "pdf", "book", "document", "reading", "resource"]),
-    ]
-    for category, keywords in keyword_map:
-        if any(keyword in normalized for keyword in keywords):
-            return category
-    return None
-
-
 def classify_media_message(
     media_items: List[dict],
     combined_text: str,
@@ -804,11 +778,14 @@ def classify_media_message(
     Example:
         category = classify_media_message(media_items, text, is_course_specific=True, is_general_group=False)
     """
+    helpers = _main_helpers()
+    classify_keyword = helpers["classify_keyword"]
+
     if not media_items:
         return "noise"
 
-    combined_category = _keyword_category(combined_text or "")
-    if combined_category:
+    combined_category, _ = classify_keyword(combined_text or "")
+    if combined_category and combined_category != "announcement":
         return combined_category
 
     candidates: List[str] = []
@@ -824,7 +801,7 @@ def classify_media_message(
             part for part in [caption, file_name, _safe_text(item.get("file_type"))] if part
         )
         token_count = _token_count(caption)
-        keyword_category = _keyword_category(context)
+        keyword_category, _ = classify_keyword(context)
 
         if media_type == "sticker":
             continue
@@ -881,10 +858,10 @@ def classify_media_message(
         for item in media_items
     )
 
-    if has_audio:
-        return "announcement" if is_course_specific else "noise"
     if has_document:
         return "material"
+    if has_audio:
+        return "announcement" if is_course_specific else "noise"
     if has_image_or_video:
         return "material" if is_course_specific else "noise"
     return "noise"
@@ -973,11 +950,18 @@ async def process_whatsapp_attachments(media_items: List[dict]) -> List[dict]:
 async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
     """Process one buffered WhatsApp batch into exactly one notification.
 
-    The batch can contain a single message or several messages merged during the
-    30-second buffer window. The function performs course resolution,
-    deterministic media classification, shared text pipeline classification,
-    deadline extraction, urgency calculation, deduplication, and database
-    insertion.
+    Implements the 11-step unified pipeline pattern matching Gmail and Classroom:
+    1. Extract batch metadata
+    2. Deduplication check
+    3. Attachment processing
+    4. Media context text extraction
+    5. Course classification
+    6. Category determination (text or media paths)
+    7. Deadline extraction
+    8. Urgency calculation
+    9. Database insertion
+    10. Attachments stub call
+    11. Logging and return
 
     Args:
         batch: Buffered WhatsApp batch produced by `buffer_whatsapp_message`.
@@ -990,13 +974,15 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
     """
     try:
         helpers = _main_helpers()
-        run_pipeline = helpers["run_pipeline"]
+        calculate_urgency = helpers["calculate_urgency"]
+        classify_keyword = helpers["classify_keyword"]
+        classify_with_fallback = helpers["classify_with_fallback"]
         classify_course_for_message = helpers["classify_course_for_message"]
         extract_deadlines_hybrid = helpers["extract_deadlines_hybrid"]
-        calculate_urgency = helpers["calculate_urgency"]
+        first_deadline_date = helpers["first_deadline_date"]
         parse_strict_deadline_datetime = helpers["parse_strict_deadline_datetime"]
-        normalize_received_at = helpers["normalize_received_at"]
 
+        # Step 1: Extract batch metadata
         normalized_messages = batch.get("normalized_messages") or [batch.get("normalized_payload") or {}]
         if not normalized_messages:
             return None
@@ -1006,16 +992,9 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         chat_id = primary.get("chat_id")
         chat_name = primary.get("chat_name") or chat_id
         sender_name = primary.get("sender_name") or primary.get("sender_phone") or chat_name
-        sender_phone = primary.get("sender_phone") or primary.get("sender") or chat_id
         canonical_message_id = _safe_text(batch.get("canonical_message_id") or primary.get("message_id"))
         first_timestamp = batch.get("first_timestamp") or primary.get("timestamp") or datetime.now(timezone.utc)
         combined_text = _safe_text(batch.get("combined_text"))
-        
-        # STEP 0: Expand abbreviations early
-        expanded_combined_text = expand_abbreviations(combined_text, user_id)
-        # Detect unknown abbreviations for future learning
-        detect_unknown_abbreviations(combined_text, user_id)
-        
         media_items = batch.get("media_items") or []
         mapping = batch.get("mapping") or {}
         mapped_course_id = mapping.get("mapped_course_id")
@@ -1030,9 +1009,10 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
             )
             return None
 
+        # Step 2: Deduplication (must happen before classification or API calls)
         duplicate = await asyncio.to_thread(notification_exists, canonical_message_id, "whatsapp", user_id)
         if duplicate:
-            logger.info(
+            logger.debug(
                 "Duplicate WhatsApp batch skipped",
                 extra={
                     "user_id": user_id,
@@ -1042,42 +1022,34 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
             )
             return None
 
+        # Step 3: Attachment extraction
         attachments = await process_whatsapp_attachments(media_items)
+        if attachments:
+            logger.info("WhatsApp batch %s has %d attachment(s)", canonical_message_id, len(attachments))
+
+        # Step 4: Media context text
         media_context_text = extract_media_context_text(
             attachments,
             chat_name=chat_name,
             course_name=course_name,
             combined_text=combined_text,
         )
-        # Also expand abbreviations in media context if generated
-        expanded_media_context_text = expand_abbreviations(media_context_text, user_id) if media_context_text else ""
 
         has_media = bool(attachments)
         is_general_group = not is_course_specific and bool(chat_id)
 
+        # Step 5: Course classification
         if mapped_course_id:
             course_id = mapped_course_id
-            resolved_course_name = course_name
-            classification_result = {
-                "course_id": str(mapped_course_id),
-                "course_name": resolved_course_name,
-                "confidence": 1.0,
-                "method": "mapped_group",
-                "requires_user_confirmation": False,
-            }
-            logger.info(
-                "WhatsApp course resolved from mapping",
-                extra={"chat_id": chat_id, "course_id": str(mapped_course_id)},
-            )
+            logger.info("WhatsApp course resolved from mapping", extra={"chat_id": chat_id, "course_id": str(mapped_course_id)})
         else:
             classification_result = await asyncio.to_thread(
                 classify_course_for_message,
-                expanded_combined_text or expanded_media_context_text,
+                combined_text or media_context_text,
                 chat_name,
                 user_id,
             )
             course_id = classification_result.get("course_id")
-            resolved_course_name = classification_result.get("course_name") or course_name
             if not course_id:
                 logger.info(
                     "Unmapped WhatsApp group discarded after course classification",
@@ -1085,74 +1057,76 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
                 )
                 return None
 
+        # Step 6: Category determination (two paths: text-only or media)
+        category = None
+
         if has_media:
+            # Path B: media batch
             category = classify_media_message(
                 attachments,
-                expanded_media_context_text,
+                media_context_text,
                 is_course_specific=is_course_specific or bool(mapped_course_id),
                 is_general_group=is_general_group,
             )
-            final_text = combined_text
-            final_expanded_text = expanded_combined_text or expanded_media_context_text
         else:
-            # We use the already expanded text for the unified pipeline
-            pipeline_result = await asyncio.to_thread(
-                run_pipeline,
-                expanded_combined_text,
-                None,
-                "whatsapp",
-                None,
-                user_id,
-            )
-            category = _safe_text(pipeline_result.get("category"))
-            if category == "noise":
-                logger.info(
-                    "Text-only WhatsApp batch classified as noise",
-                    extra={"canonical_message_id": canonical_message_id, "chat_id": chat_id},
-                )
-                return None
-            final_text = combined_text
-            final_expanded_text = expanded_combined_text
+            # Path A: text-only batch - follow step-by-step pattern
+            # 1. Keyword classifier
+            keyword_category, confidence = classify_keyword(combined_text)
+            if keyword_category == "material":
+                category = "material"
+            elif confidence >= 0.85:
+                category = keyword_category
+            else:
+                # 2. HF classifier via classify_with_fallback
+                try:
+                    hf_result = await classify_with_fallback(combined_text)
+                    if hf_result != "noise":
+                        category = hf_result
+                    else:
+                        logger.debug("Text-only WhatsApp batch classified as noise", extra={"canonical_message_id": canonical_message_id, "chat_id": chat_id})
+                        return None
+                except Exception as exc:
+                    logger.debug("HF classifier failed for WhatsApp batch %s: %s, using fallback", canonical_message_id, exc)
+                    category = None
 
-        if category == "noise":
-            logger.info(
-                "WhatsApp batch classified as noise",
-                extra={"canonical_message_id": canonical_message_id, "chat_id": chat_id},
-            )
+            # 3. Final fallback (edge case)
+            if category is None:
+                category = "announcement"
+
+        # Discard if media batch classified as noise
+        if has_media and category == "noise":
+            logger.debug("Media WhatsApp batch classified as noise", extra={"canonical_message_id": canonical_message_id, "chat_id": chat_id})
             return None
 
+        # Step 7: Deadline extraction
         deadline = None
-        if category in {"assignment", "quiz", "announcement", "event"}:
-            deadline_source_text = expanded_media_context_text if has_media else expanded_combined_text
+        if category != "material" and category in {"assignment", "quiz", "announcement", "event"}:
+            deadline_source_text = media_context_text if has_media else combined_text
             deadline_candidates = await asyncio.to_thread(extract_deadlines_hybrid, deadline_source_text)
-            first_deadline = None
-            for deadline_candidate in deadline_candidates or []:
-                if isinstance(deadline_candidate, dict):
-                    first_deadline = deadline_candidate.get("deadline_date")
-                    if first_deadline:
-                        break
+            first_deadline = first_deadline_date(deadline_candidates)
             if first_deadline:
                 deadline = parse_strict_deadline_datetime(first_deadline)
 
+        # Step 8: Urgency calculation
         urgency_level = None
         if category in {"assignment", "quiz"} and deadline is not None:
             urgency = calculate_urgency(deadline)
-            urgency_level = urgency.get("label")
+            urgency_level = urgency["label"]
 
+        # Step 9: Insert notification (single DB write with deadline and urgency_level)
         notification_id = await asyncio.to_thread(
             insert_notification,
             user_id=user_id,
             source_type="whatsapp",
             external_id=canonical_message_id,
             sender=sender_name,
-            text=final_text,
+            text=combined_text if not has_media else media_context_text,
             category=category,
             received_at=normalize_received_at(first_timestamp),
             course_id=course_id,
             source_ref=source_id,
             deadline=deadline,
             urgency_level=urgency_level,
-            expanded_text=final_expanded_text,
         )
 
         if not notification_id:
@@ -1162,6 +1136,16 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
             )
             return None
 
+        # Step 10: Attachments stub
+        try:
+            from attachments_pipeline import process_attachments_stub
+            await process_attachments_stub(attachments, notification_id)
+        except ImportError:
+            logger.warning("attachments_pipeline not available")
+        except Exception as exc:
+            logger.warning("Error processing attachments for notification %s: %s", notification_id, exc)
+
+        # Step 11: Logging and return
         logger.info(
             "WhatsApp notification inserted",
             extra={
@@ -1242,9 +1226,6 @@ async def process_whatsapp_message(payload: dict) -> List[str]:
             notification_id = await process_buffered_batch(batch)
             if notification_id:
                 created_ids.append(str(notification_id))
-
-        flushed_ids = await _flush_expired_buffers_collect()
-        created_ids.extend(flushed_ids)
 
         logger.info(
             "WhatsApp payload processed",
