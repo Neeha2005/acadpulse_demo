@@ -6,6 +6,9 @@ venv/
 .venv/
 env/
 backend/.tmp/
+backend/venv/
+backend/__pycache__/
+backend/*.log
 backend/credentials.json
 backend/token.json
 backend/google_tokens/
@@ -15,6 +18,8 @@ backend/whatsapp_status_state.json
 
 # ── Node.js ───────────────────────────────────────
 node_modules/
+frontend/node_modules/
+whatsapp/node_modules/
 npm-debug.log*
 yarn-error.log*
 *.log
@@ -26,11 +31,15 @@ whatsapp/auth_info/
 whatsapp/queue/
 whatsapp/sessions/
 whatsapp/sessions-current/
+whatsapp/sessions-onboarding/
 whatsapp/sessions-onboarding-fresh/
 whatsapp/baileys_store.json
 whatsapp/selected_groups.json
 whatsapp/*.log
 frontend-vite.*.log
+backend-dev-*.log
+frontend-dev-*.log
+whatsapp-*.log
 
 # ── AI model weights (too large for GitHub) ───────
 ai/classifier/model/

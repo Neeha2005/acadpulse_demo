@@ -52,7 +52,7 @@ If a real key or database password was ever pasted into chat, committed, or push
 Push to GitHub:
 
 ```bash
-git add .github docs/github-actions.md
+git add .github backend/docs/github-actions.md
 git commit -m "Add GitHub Actions CI"
 git push
 ```
