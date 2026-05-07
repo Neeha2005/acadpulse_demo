@@ -1,49 +1,162 @@
 # AcadPulse Commands
 
-Use these commands when setting up AcadPulse on a new machine or checking that each part of the project is working.
+Yeh file new machine par AcadPulse run karne ke liye easy step-by-step guide hai. Is guide ko Windows + PowerShell ke hisaab se likha gaya hai.
 
-## 1. Clone And Enter Project
+Important:
+- Agar sirf app dekhni hai to `backend` aur `frontend` run karna kaafi hai.
+- Agar WhatsApp integration bhi test karni hai to `whatsapp` folder bhi run karna hoga.
+- `backend/.env` aur `backend/credentials.json` private files hain. Inko GitHub par commit nahi karna.
+
+## 1. Machine Par Kya Installed Hona Chahiye
+
+Sab se pehle yeh check karo ke machine par yeh cheezen installed hon:
+
+- `git`
+- `python` (best: Python 3.11 ya 3.12)
+- `node`
+- `npm`
+
+Check karne ke commands:
 
 ```powershell
-git clone <your-repo-url>
+git --version
+python --version
+node --version
+npm --version
+```
+
+Agar in mein se koi command kaam na kare to pehle us software ko install karo, phir next steps follow karo.
+
+## 2. Project Download Karna
+
+PowerShell kholo aur yeh commands run karo:
+
+```powershell
+git clone https://github.com/ayesha-71131/acadpulse.git
 cd acadpulse
 ```
 
-Downloads the project and moves into the project folder.
+Is step ke baad tum project ke main folder ke andar aa jaogi.
 
-## 2. Backend Setup
+Check karne ke liye:
+
+```powershell
+ls
+```
+
+Expected folders:
+
+- `backend`
+- `frontend`
+- `whatsapp`
+- `docs`
+
+## 3. Backend Setup Karna
+
+Backend Python par chalta hai. Isko ek dafa setup karna hota hai.
+
+### Step 3.1: Backend folder mein jao
 
 ```powershell
 cd backend
+```
+
+### Step 3.2: Virtual environment banao
+
+```powershell
 python -m venv venv
+```
+
+Is se `backend/venv` naam ka folder ban jayega.
+
+### Step 3.3: Virtual environment activate karo
+
+```powershell
 .\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
 ```
 
-Creates a Python virtual environment and downloads all backend libraries.
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Creates a local backend environment file for private API keys.
-
-```powershell
-notepad .env
-```
-
-Opens the backend environment file so you can paste your real Groq API key once.
-
-If PowerShell blocks activation, run this once:
+Agar PowerShell block kare to yeh command ek dafa run karo:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-Allows local PowerShell scripts like the Python virtual environment activator to run.
+Phir dobara run karo:
 
-## 3. Backend Run And Check
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+Jab environment activate ho jaye to line ke start par `(venv)` dikhna chahiye.
+
+### Step 3.4: Python packages install karo
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Is step mein thora time lag sakta hai.
+
+## 4. Backend Environment File Banana
+
+Backend ko `.env` file chahiye hoti hai.
+
+### Step 4.1: Example file copy karo
+
+```powershell
+Copy-Item .env.example .env
+```
+
+### Step 4.2: `.env` open karo
+
+```powershell
+notepad .env
+```
+
+Ab is file mein real values daalni hongi.
+
+Important fields:
+
+- `DB_HOST`
+- `DB_NAME`
+- `DB_PORT`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_SSLMODE`
+- `JWT_SECRET_KEY`
+- `GROQ_API_KEY`
+- `FRONTEND_URL`
+
+Recommended values:
+
+- `DB_SSLMODE=require`
+- `FRONTEND_URL=http://localhost:5173`
+
+Notes:
+- Database credentials tum usi Supabase project ki use karogi jo app ke liye bana hua hai.
+- `GROQ_API_KEY` chatbot aur deadline extraction ke liye chahiye hoti hai.
+- Agar `.env` incomplete hui to backend start ho sakta hai, lekin bohat se endpoints error denge.
+
+## 5. Google Integration Ke Liye Extra File
+
+Agar Gmail ya Google Classroom bhi test karna hai to `backend/credentials.json` bhi chahiye.
+
+Yeh file manually add karni hoti hai:
+
+- Google Cloud Console se OAuth client JSON download karo
+- us file ko rename karke `credentials.json` rakho
+- usko `backend` folder ke andar paste karo
+
+File path aise honi chahiye:
+
+```text
+backend/credentials.json
+```
+
+## 6. Backend Run Karna
+
+Backend run karne ke liye:
 
 ```powershell
 cd backend
@@ -51,497 +164,323 @@ cd backend
 python -m uvicorn main:app --reload
 ```
 
-If port 8000 is already in use, run:
+Expected result:
+
+- terminal mein `Uvicorn running on http://127.0.0.1:8000` aayega
+
+Agar port 8000 busy ho to:
 
 ```powershell
 python -m uvicorn main:app --reload --port 8001
 ```
 
-> Important: Start the backend from the activated `backend\venv` environment. If you see `ModuleNotFoundError: No module named 'google'` or `Internal Server Error` for `/gmail/fetch` or `/classroom/*`, it means the backend was started with the wrong Python environment.
+Lekin normal case mein `8000` hi use karo.
 
-Starts the FastAPI backend at `http://127.0.0.1:8000`.
+## 7. Backend Check Karna
+
+Backend chalne ke baad naya PowerShell terminal kholo aur project folder mein aa kar yeh run karo:
 
 ```powershell
 curl http://127.0.0.1:8000/health
 ```
 
-Checks that the backend API is running.
+Phir:
 
 ```powershell
 curl http://127.0.0.1:8000/test
 ```
 
-Checks the simple FastAPI test endpoint.
+Agar response aa jaye to backend sahi chal raha hai.
 
-```powershell
-curl -X POST http://127.0.0.1:8000/receive-message -H "Content-Type: application/json" -d "{\"text\":\"Assignment due tonight\",\"sender\":\"923001234567\",\"group\":\"CS Section B\",\"timestamp\":\"2026-05-01T10:00:00Z\"}"
+FastAPI docs browser mein yahan open hongi:
+
+```text
+http://127.0.0.1:8000/docs
 ```
 
-Tests that the backend can receive a WhatsApp-style message.
+## 8. Frontend Setup Karna
+
+Ab frontend setup karna hai.
+
+Naya terminal kholo aur project root par aa jao:
+
+```powershell
+cd d:\Acadpulse\acadpulse
+cd frontend
+npm install
+```
+
+Is step mein JavaScript packages install hongi.
+
+Optional:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Agar frontend `.env` ki zarurat ho to is file ko use kar sakti ho.
+
+## 9. Frontend Run Karna
+
+Frontend start karne ke liye:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Expected result:
+
+- terminal mein local URL show hogi, usually `http://localhost:5173`
+
+Phir browser mein yeh kholo:
+
+```text
+http://localhost:5173
+```
+
+## 10. App Ko Proper Order Mein Kaise Run Karna Hai
+
+Best practice yeh hai ke 2 ya 3 alag terminals kholi jayein.
+
+### Terminal 1: Backend
+
+```powershell
+cd d:\Acadpulse\acadpulse\backend
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
+```
+
+### Terminal 2: Frontend
+
+```powershell
+cd d:\Acadpulse\acadpulse\frontend
+npm run dev
+```
+
+### Terminal 3: WhatsApp (optional)
+
+Yeh tabhi chalao jab WhatsApp integration bhi test karni ho.
+
+```powershell
+cd d:\Acadpulse\acadpulse\whatsapp
+npm install
+npm start
+```
+
+## 11. WhatsApp Integration Ka Simple Setup
+
+WhatsApp service Node.js par chalti hai.
+
+### Step 11.1: WhatsApp folder mein packages install karo
+
+```powershell
+cd whatsapp
+npm install
+```
+
+### Step 11.2: Service start karo
+
+```powershell
+npm start
+```
+
+Expected result:
+
+- terminal mein QR code aayega
+- phone se WhatsApp linked devices mein ja kar QR scan karo
+- login ke baad service selected groups monitor karegi
+
+Important:
+- Backend pehle se run hona chahiye
+- warna WhatsApp messages API ko send nahi ho payenge
+
+## 12. Gmail Aur Classroom Test Karna
+
+Yeh tabhi kaam karega jab:
+
+- backend run ho
+- `backend/.env` correct ho
+- `backend/credentials.json` موجود ho
+
+Test commands:
+
+### Gmail fetch
+
+```powershell
+curl http://127.0.0.1:8000/gmail/fetch
+```
+
+### Classroom courses
+
+```powershell
+curl http://127.0.0.1:8000/classroom/courses
+```
+
+### Classroom full fetch
+
+```powershell
+curl http://127.0.0.1:8000/classroom/fetch
+```
+
+Pehli dafa Google login khul sakta hai. Browser mein login complete karna hoga.
+
+## 13. Chatbot Test Karna
+
+Backend run ho aur `.env` mein `GROQ_API_KEY` set ho.
 
 ```powershell
 $body = @{ prompt = "Say hello from AcadPulse" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/chat" -ContentType "application/json" -Body $body
 ```
 
-Tests the Groq chatbot endpoint in PowerShell after the backend is running and `backend/.env` contains `GROQ_API_KEY`.
+Agar response aa jaye to chatbot sahi kaam kar raha hai.
 
-### Groq deadline extraction
+## 14. Deadline Extraction Test Karna
+
 ```powershell
 $body = @{ text = "Assignment due next Friday at 6pm" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/deadline" -ContentType "application/json" -Body $body
 ```
 
-This calls the new deadline endpoint and returns extracted deadline details from the text.
+Is se backend message se deadline nikalne ki koshish karega.
 
-### Analyze a message with Llama safely
+## 15. Sab Se Short Version
+
+Agar tumhari friend ko sirf project dekhna hai, to yeh minimum steps follow kare:
+
+### One-time setup
+
 ```powershell
-$body = @{ text = "Please help me find the exam date and summarize this message." } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/message/analyze" -ContentType "application/json" -Body $body
+git clone https://github.com/ayesha-71131/acadpulse.git
+cd acadpulse
+
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-This sends the message text to the Groq Llama model for analysis and safety review.
-
-If a prompt appears malicious, the backend will refuse the request until `confirm_malicious=true` is explicitly set.
-
-### Enable Google Classroom API
-1. Open the Google Cloud Console and select the project used for AcadPulse.
-2. Go to "APIs & Services" > "Library".
-3. Search for "Google Classroom API" and click "Enable".
-4. Also ensure the "Gmail API" is enabled in the same project.
-5. In "APIs & Services" > "Credentials", create an OAuth 2.0 Client ID for a Desktop application.
-6. Download the JSON file and save it as `backend/credentials.json`.
-
-> Note: Because this is a new unverified OAuth app, Google may show a warning page during login. If it appears, click **Advanced** and then **Continue** to proceed with the login.
-> 
-> If you want to avoid the warning, add your Google account as a test user in the OAuth consent screen for this project.
-
-### Fetch Gmail emails
-```powershell
-curl http://127.0.0.1:8000/gmail/fetch
-```
-
-Checks Gmail fetching after `backend/credentials.json` is added and Google login is completed.
-
-> Note: Make sure the backend server was started from the activated `backend\venv` environment using `python -m uvicorn main:app --reload`.
-
-### Fetch Google Classroom courses
-```powershell
-curl http://127.0.0.1:8000/classroom/courses
-```
-
-Returns the current user’s courses from Google Classroom.
-
-### Fetch announcements for a course
-```powershell
-curl http://127.0.0.1:8000/classroom/courses/<course_id>/announcements
-```
-
-Replace `<course_id>` with a course ID from the previous course list.
-
-### Fetch coursework for a course
-```powershell
-curl http://127.0.0.1:8000/classroom/courses/<course_id>/coursework
-```
-
-Returns assignments and coursework items for the chosen course.
-
-### Fetch all Classroom content
-```powershell
-curl http://127.0.0.1:8000/classroom/fetch
-```
-
-Returns courses plus announcements and coursework for each course.
-
-## 4. Frontend Setup
+Phir `.env` mein real credentials add kare.
 
 ```powershell
-cd frontend
+cd ..\frontend
 npm install
 ```
 
-Downloads all frontend React/Vite libraries.
+### Har dafa run karne ke liye
 
-## 5. Frontend Run And Check
+Terminal 1:
 
 ```powershell
-cd frontend
+cd d:\Acadpulse\acadpulse\backend
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload
+```
+
+Terminal 2:
+
+```powershell
+cd d:\Acadpulse\acadpulse\frontend
 npm run dev
 ```
 
-Starts the React app locally, usually at `http://localhost:5173`.
+Phir browser mein:
+
+```text
+http://localhost:5173
+```
+
+## 16. Common Errors Aur Unka Easy Fix
+
+### Error: `Activate.ps1 cannot be loaded`
+
+Run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### Error: `python` command not found
+
+Python install nahi hai ya PATH mein add nahi hua. Python dobara install karo aur installation ke time `Add Python to PATH` select karo.
+
+### Error: `node` ya `npm` not found
+
+Node.js install nahi hai. Node.js LTS version install karo.
+
+### Error: backend start ho raha hai lekin DB endpoints fail ho rahe hain
+
+Check:
+
+- `backend/.env` mein DB values sahi hain
+- `DB_PASSWORD` missing nahi
+- `DB_SSLMODE=require`
+
+### Error: chatbot kaam nahi kar raha
+
+Check:
+
+- `GROQ_API_KEY` set hai
+- backend restart kiya gaya hai after `.env` change
+
+### Error: Google login kaam nahi kar raha
+
+Check:
+
+- `backend/credentials.json` correct jagah par hai
+- Gmail API enabled hai
+- Google Classroom API enabled hai
+- test user allow kiya gaya hai
+
+### Error: frontend open hota hai lekin data nahi aa raha
+
+Check:
+
+- backend chal raha hai
+- frontend se pehle backend start kiya gaya hai
+- browser console/network tab mein API errors dekh lo
+
+## 17. Useful Commands
+
+Project update lene ke liye:
+
+```powershell
+git pull
+```
+
+Changed files dekhne ke liye:
+
+```powershell
+git status --short
+```
+
+Frontend build check:
 
 ```powershell
 cd frontend
 npm run build
 ```
 
-Checks that the frontend can build for production.
+## 18. Private Files Jo Share Nahin Karne
 
-```powershell
-cd frontend
-npm run preview
-```
+In files ko public ya GitHub par upload nahi karna:
 
-Runs the production build locally after `npm run build`.
+- `backend/.env`
+- `backend/credentials.json`
+- `backend/token.json`
+- `whatsapp/auth_info/`
+- `whatsapp/selected_groups.json`
 
-### Check dashboard notification sync
+## 19. Friend Ko Kya Dena Hoga
 
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8001/notifications?include_completed=false&limit=20" | ConvertTo-Json -Depth 6
-```
+Agar tumhari friend ko project full run karna hai to usko yeh cheezen chahiye hongi:
 
-Fetches the live notification list that now powers the dashboard task cards and notification stream.
+- project code
+- backend ke correct `.env` values
+- agar Google features test karni hain to `backend/credentials.json`
+- agar chatbot test karna hai to valid `GROQ_API_KEY`
+- agar DB-based features test karni hain to working database credentials
 
-### Create a manual task
-
-```powershell
-$body = @{
-  title = "Prepare final presentation"
-  course = "CS-401"
-  description = "Finish slides and talking points"
-  due_date = "2026-05-10"
-  due_time = "23:59"
-  type = "assignment"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8001/notifications/manual" -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 8
-```
-
-Creates a real manual notification, stores urgency when a deadline is provided, and returns the created notification row.
-
-### Mark a notification complete
-
-```powershell
-$notificationId = "PUT-NOTIFICATION-ID-HERE"
-$body = @{ completed = $true } | ConvertTo-Json
-
-Invoke-RestMethod -Method Patch -Uri "http://127.0.0.1:8001/notifications/$notificationId/complete" -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
-```
-
-Marks the selected notification as completed so it disappears from the default dashboard sync response.
-
-### Desktop popup check
-
-1. Open `http://127.0.0.1:5173/dashboard`
-2. Allow browser notification permission when prompted
-3. Create a manual task with a near deadline so it becomes `high` or `critical`
-4. Refresh the dashboard if needed
-
-You should receive a browser desktop notification for `high` and `critical` urgency tasks.
-
-## 6. WhatsApp Setup
-
-```powershell
-cd whatsapp
-npm install
-```
-
-Downloads all WhatsApp bot libraries.
-
-## 7. WhatsApp Run And Check
-
-```powershell
-cd whatsapp
-npm start
-```
-
-Starts the WhatsApp bot, shows a QR code for login, and asks which groups to monitor.
-
-```powershell
-cd whatsapp
-npm run dev
-```
-
-Starts the WhatsApp bot in watch mode for development.
-
-## 8. Full Project Run Order
-
-Open three terminals and run these in order.
-
-Terminal 1:
-
-```powershell
-cd backend
-.\venv\Scripts\Activate.ps1
-python -m uvicorn main:app --reload
-```
-
-Runs the backend API first so other services can send data to it.
-
-Terminal 2:
-
-```powershell
-cd frontend
-npm run dev
-```
-
-Runs the user dashboard.
-
-Terminal 3:
-
-```powershell
-cd whatsapp
-npm start
-```
-
-Runs the WhatsApp listener and sends selected group messages to the backend.
-
-## 9. Required Secret Files
-
-```text
-backend/credentials.json
-```
-
-Needed for Gmail and Google Classroom OAuth. This file comes from Google Cloud Console and should not be committed.
-
-```text
-backend/token.json
-```
-
-Created automatically after the first successful Google login and should not be committed.
-
-```text
-backend/.env
-```
-
-Stores private API keys like `GROQ_API_KEY` and should not be committed.
-
-```text
-whatsapp/auth_info/
-whatsapp/selected_groups.json
-```
-
-Created automatically by the WhatsApp bot after QR login and group selection and should not be committed.
-
-## 10. Useful Future Commands
-
-```powershell
-git status --short
-```
-
-Shows which files were changed.
-
-```powershell
-git pull
-```
-
-Downloads the latest code from the remote repository.
-
-```powershell
-git add .
-git commit -m "Describe your change"
-git push
-```
-
-Saves and uploads your code changes.
-
-```powershell
-pip install <package-name>
-pip freeze > requirements.txt
-```
-
-Adds a new backend Python library and updates the backend dependency list.
-
-```powershell
-npm install <package-name>
-```
-
-Adds a new frontend or WhatsApp Node.js library when run inside that package folder.
-
-```powershell
-npm audit
-```
-
-Checks Node.js packages for known security issues.
-
-```powershell
-pip list --outdated
-```
-
-Shows backend Python packages that have newer versions available.
-
-## 11. Verification & Partner Demo Guide
-
-Use these exact commands to prove the system is working. Run them from the project root (`d:\Acadpulse\acadpulse\`).
-
-### Phase 1: Project Foundation
-
-**Task #1: Folder Structure**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse
-    ls
-    ```
-*   **Success:** `backend`, `frontend`, `whatsapp`, `ai`, and `docs` appear in the listing.
-
-**Task #4: React App Shell**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse\frontend
-    npm run dev
-    ```
-*   **Success:** Terminal shows `Local: http://localhost:5173` and `ready in`. Browser at `http://localhost:5173` loads the dashboard.
-*   **Quick Fix:** If port 5173 is busy, run:
-    ```powershell
-    npx kill-port 5173
-    ```
-
-**Task #5: FastAPI Backend**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse\backend
-    .\venv\Scripts\Activate.ps1
-    python -m uvicorn main:app --reload
-    ```
-*   **Success:** Terminal shows `Uvicorn running on http://127.0.0.1:8000`.
-*   **Verification:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/test | ConvertTo-Json
-    ```
-*   **Expected Output:**
-    ```json
-    {"status":"success","data":"FastAPI test endpoint working"}
-    ```
-*   **Quick Fix:** If port 8000 is in use, restart with:
-    ```powershell
-    python -m uvicorn main:app --reload --port 8001
-    ```
-
-**Task #6: Baileys Installation**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse\whatsapp
-    npm list @whiskeysockets/baileys
-    ```
-*   **Success:** Output includes `@whiskeysockets/baileys@` and no `missing` warnings.
-*   **Quick Fix:** Run:
-    ```powershell
-    npm install
-    ```
-
-**Task #2: PostgreSQL Install**
-*   **Command:**
-    ```powershell
-    psql --version
-    ```
-*   **Success:** Output begins with `psql (PostgreSQL)`.
-*   **Quick Fix:** Install PostgreSQL or add its `bin` folder to PATH.
-
-**Task #3: DB Schema Created**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse
-    Test-Path docs/database_schema.sql
-    ```
-*   **Success:** Output is `True`.
-*   **Optional DB check:**
-    ```powershell
-    psql -U <user> -d <database> -c "\dt"
-    ```
-*   **Expected Output:** A list of tables matching the project schema.
-
-### Phase 2: WhatsApp Bridge
-
-**Task #7: QR Code Scanning**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse\whatsapp
-    npm start
-    ```
-*   **Success:** A QR code appears in the terminal and, after scanning, the terminal says `WhatsApp connection established`.
-*   **Quick Fix:** If `npm start` fails, run:
-    ```powershell
-    npm install
-    ```
-
-**Task #8: Receive & Log WhatsApp Messages**
-*   **Prerequisite:** Backend running on `http://127.0.0.1:8000`.
-*   **Command:** Send a WhatsApp message in one of the selected groups.
-*   **Success:** Backend terminal prints `Received WhatsApp message from bot:` and the message payload.
-
-**Task #9: Node.js → FastAPI REST Bridge**
-*   **Command:**
-    ```powershell
-    $body = @{ text = "Test assignment due Monday"; sender = "923001234567"; group = "Test Group"; timestamp = "2026-05-01T12:00:00Z" } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/receive-message" -ContentType "application/json" -Body $body
-    ```
-*   **Success:** Response contains `"status":"received"`.
-*   **Full Bridge Success:** Real WhatsApp messages arriving at the bot also appear in the backend log with the same text.
-
-### Phase 3: Google Integration
-
-**Task #23: Google Cloud Project**
-*   **Command:**
-    ```powershell
-    cd d:\Acadpulse\acadpulse\backend
-    Test-Path credentials.json
-    ```
-*   **Success:** Output is `True`.
-
-**Task #24: OAuth Login Flow**
-*   **Command:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/gmail/fetch
-    ```
-*   **Success:** A browser opens for Google login if needed, then the command returns a JSON array of emails.
-*   **If you see the Google warning page:** click **Advanced** and then **Continue** to proceed to the test app.
-*   **Quick Fix:** Add your account as a test user in the Google Cloud Console OAuth consent screen if the warning is blocking login.
-*   **Quick Fix:** Ensure `backend/credentials.json` exists and `backend/token.json` is writable.
-
-**Task #26: Gmail to Classifier Stub**
-*   **Command:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/gmail/fetch | ConvertTo-Json
-    ```
-*   **Success:** Output is a JSON array of email objects with keys `id`, `source`, `sender`, `subject`, `snippet`, and `received_at`.
-
-**Task #25: Fetch Gmail Emails**
-*   **Command:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/gmail/fetch | ConvertTo-Json
-    ```
-*   **Success:** Same as Task #26: a valid JSON email list is returned.
-
-**Task #27: Enable Classroom API**
-*   **Command:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/classroom/courses | ConvertTo-Json
-    ```
-*   **Success:** Output is a JSON object with a `courses` array.
-*   **Quick Fix:** If you get a Classroom scope or API error, enable the Classroom API in Google Cloud Console and reauthenticate.
-
-**Task #28: Fetch Classroom Content**
-*   **Command:**
-    ```powershell
-    Invoke-RestMethod http://127.0.0.1:8000/classroom/fetch | ConvertTo-Json
-    ```
-*   **Success:** Output is a JSON object with a `classroom` array containing `course`, `announcements`, and `coursework`.
-
-### Phase 4: Groq / Llama
-
-**Task #16: Groq API Setup**
-*   **Command:**
-    ```powershell
-    $body = @{ prompt = "Hello from AcadPulse" } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/chat" -ContentType "application/json" -Body $body
-    ```
-*   **Success:** Response contains `"response":"` and an AI-generated reply.
-*   **Quick Fix:** If you get a `GROQ_API_KEY` error, add `GROQ_API_KEY=...` to `backend/.env` and restart.
-
-**Task #17: Groq Deadline Prompt**
-*   **Command:**
-    ```powershell
-    $body = @{ text = "Submit project report on Friday" } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/deadline" -ContentType "application/json" -Body $body
-    ```
-*   **Success:** Response contains `"deadline_extraction"` with a deadline summary.
-
-**Task #18: Call Llama for Messages**
-*   **Command:**
-    ```powershell
-    $body = @{ text = "Reminder: exam tomorrow" } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/message/analyze" -ContentType "application/json" -Body $body
-    ```
-*   **Success:** Response contains `"analysis"` with an AI summary and safety review.
-*   **Quick Fix:** If the backend reports missing Groq credentials, set `GROQ_API_KEY` in `backend/.env` and restart.
+In cheezon ke bina app partially chalegi, lekin full features kaam nahi karenge.
