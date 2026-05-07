@@ -2,14 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 
 const QUICK_PROMPTS = [
-  'Kya hai aaj due? 📅',
-  'Pending assignments 📚',
-  'Aaj ka schedule 🗓️',
-  'Koi urgent cheez? ⚡',
+  { label: 'Kya hai aaj due?', icon: 'fa-calendar-check' },
+  { label: 'Pending assignments', icon: 'fa-list-check' },
+  { label: 'Aaj ka schedule', icon: 'fa-calendar-day' },
+  { label: 'Koi urgent cheez?', icon: 'fa-bolt' },
 ];
 
 function formatTime(date = new Date()) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function renderInlineMarkdown(text) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
 }
 
 function renderMarkdown(text) {
@@ -52,16 +62,6 @@ function renderMarkdown(text) {
   return output;
 }
 
-function renderInlineMarkdown(text) {
-  const parts = String(text || '').split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
-}
-
 function TypingIndicator() {
   return (
     <div className="chat-message-row bot">
@@ -96,7 +96,7 @@ function ChatMessage({ message, onRetry }) {
 }
 
 export default function Chatbot({ open, onClose }) {
-  const { apiFetch, refreshNotifications } = useAppContext();
+  const { apiFetch, refreshNotifications, authUser } = useAppContext();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
@@ -124,7 +124,7 @@ export default function Chatbot({ open, onClose }) {
         setMessages([]);
         setInput('');
         setStatus('idle');
-      }, 0);
+      }, 180);
       return;
     }
 
@@ -162,15 +162,15 @@ export default function Chatbot({ open, onClose }) {
         method: 'POST',
         body: JSON.stringify({
           prompt,
-          user_id: '1',
+          ...(authUser?.id ? { user_id: authUser.id } : {}),
           history,
         }),
-      }, false);
+      });
 
       const botMessage = {
         id: `assistant-${nextMessageIdRef.current++}`,
         role: 'assistant',
-        text: payload?.response || 'mujhe nahi pata, context mein nahi hai',
+        text: payload?.response || 'Mujhe context mein jawab nahi mila.',
         time: formatTime(),
       };
 
@@ -185,7 +185,7 @@ export default function Chatbot({ open, onClose }) {
         {
           id: `assistant-error-${nextMessageIdRef.current++}`,
           role: 'assistant',
-          text: 'Oops, kuch masla hua. Please try again.',
+          text: 'Chat request fail ho gayi. Please retry.',
           time: formatTime(),
           error: true,
           retryPrompt: prompt,
@@ -214,6 +214,9 @@ export default function Chatbot({ open, onClose }) {
       <button className="chat-backdrop" type="button" aria-label="Close chatbot" onClick={onClose}></button>
       <aside className="chat-panel" aria-label="AcadPulse AI chat panel">
         <header className="chat-panel-header">
+          <div className="chat-ai-mark" aria-hidden="true">
+            <i className="fa-solid fa-robot"></i>
+          </div>
           <div className="chat-title-block">
             <div className="chat-title-row">
               <span className="chat-ready-dot"></span>
@@ -228,17 +231,27 @@ export default function Chatbot({ open, onClose }) {
 
         <div className="chat-message-area">
           {messages.length === 0 && !isSending ? (
-            <div className="chat-empty-prompts">
-              {QUICK_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt}
-                  className="chat-prompt-pill"
-                  type="button"
-                  onClick={() => sendPrompt(prompt)}
-                >
-                  {prompt}
-                </button>
-              ))}
+            <div className="chat-empty-state">
+              <div className="chat-empty-orb" aria-hidden="true">
+                <i className="fa-solid fa-graduation-cap"></i>
+              </div>
+              <div className="chat-empty-copy">
+                <h3>Academic assistant</h3>
+                <p>English ya Roman Urdu mein poochain.</p>
+              </div>
+              <div className="chat-empty-prompts">
+                {QUICK_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt.label}
+                    className="chat-prompt-pill"
+                    type="button"
+                    onClick={() => sendPrompt(prompt.label)}
+                  >
+                    <i className={`fa-solid ${prompt.icon}`}></i>
+                    <span>{prompt.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map((message) => (

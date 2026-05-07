@@ -1,0 +1,47 @@
+I have attached a detailed project description document for AcadPulse — read it fully and understand the complete scope before writing any code.
+AcadPulse is a full stack AI-powered academic notification aggregator for Pakistani university students. It unifies WhatsApp, Gmail, and Google Classroom into one smart dashboard that understands Roman Urdu, extracts deadlines, scores urgency, and lets students interact with their academic data via an AI chatbot.
+Build the complete full stack project exactly as described in the document. Here is the tech stack to use:
+
+Backend: FastAPI (Python)
+WhatsApp Bridge: Baileys (Node.js) communicating with FastAPI via REST
+AI Classifier: XLM-RoBERTa fine-tuned model via HuggingFace
+LLM: Groq API with Llama 3.1 8B (free tier) for deadline extraction and chatbot
+Database: PostgreSQL with psycopg2
+Frontend: React with glassmorphism dark theme (purple #7c3aed, cyan #06b6d4, background #080810)
+Notifications: plyer for desktop popups
+Auth: JWT via python-jose, Google OAuth, WhatsApp OTP
+
+The project lives at d:\Acadpulse\acadpulse\ on Windows with this folder structure:
+
+backend\ — FastAPI Python app
+whatsapp-bridge\ — Node.js Baileys bridge
+frontend\ — React app
+
+Build everything in this order:
+
+Folder structure and all config files (.env templates, requirements.txt, package.json)
+PostgreSQL schema — all tables: users, notifications, courses, abbreviations, unknown_abbreviations, archived_notifications, user_settings, timetable
+FastAPI backend with all endpoints fully implemented
+Baileys WhatsApp bridge with QR scanning, message receiving, reconnection logic
+Google OAuth flow covering Gmail and Classroom scopes in one login
+XLM-RoBERTa classifier loaded in FastAPI, connected to the message pipeline
+Groq LLM integration — deadline extraction with JSON parsing, rate limit handling, retry logic
+Full message pipeline — abbreviation expansion → classification → deadline extraction → urgency scoring → save to DB
+Urgency scoring system with auto-refresh every 3 hours via APScheduler
+Desktop notifications via plyer with batching and sound
+Agentic chatbot with function calling — mark done, add, update, delete, map courses
+React frontend — login, signup, 7-step onboarding, and full dashboard with all tabs: Home, Assignments & Quizzes, Announcements, Materials, Events, Timetable, Courses, Archives
+Chatbot slide-in panel, manual add modal, semester reset modal
+JWT authentication wired end to end between frontend and backend
+
+For every file you create:
+
+Give the exact file path
+Handle all edge cases described in the document
+Add clear comments explaining non-obvious logic
+Match Pakistani university context throughout — Roman Urdu support, local abbreviations, PST timezone
+
+After all code is written:
+
+Give me the exact PowerShell commands to install all dependencies and start all three services (FastAPI, Node bridge, React) simultaneously
+Give me a single end-to-end test command that verifies the full pipeline is working: receive a WhatsApp message → classify → extract deadline → score urgency → appear on dashboard

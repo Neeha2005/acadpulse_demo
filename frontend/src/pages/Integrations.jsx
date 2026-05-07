@@ -3,12 +3,18 @@ import { useState } from 'react';
 export default function Integrations() {
   const [syncing, setSyncing] = useState(null);
   
-  const handleForceSync = (platform) => {
+  const handleForceSync = async (platform) => {
     setSyncing(platform);
-    console.log(`[API MOCK TETHER] POST backend.com/api/sync/${platform}`);
-    setTimeout(() => {
+    try {
+      if (platform === 'whatsapp') {
+        await fetch('/whatsapp/health');
+      } else if (platform === 'classroom') {
+        await fetch('/classroom/fetch');
+      }
+    } catch {
+    } finally {
       setSyncing(null);
-    }, 1500);
+    }
   };
 
   return (

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / "backend" / ".env")
 
 app = FastAPI(title="AcadPulse DB Viewer")
+SENSITIVE_COLUMNS = {"password_hash"}
 
 
 def get_connection():
@@ -116,7 +117,7 @@ def show_table(table_name: str, limit: int = Query(default=50, ge=1, le=500)):
         body_rows.append(
             "<tr>"
             + "".join(
-                f"<td>{html.escape(str(row.get(column, '')))}</td>"
+                f"<td>{html.escape('••••••' if column in SENSITIVE_COLUMNS and row.get(column) else str(row.get(column, '')))}</td>"
                 for column in columns
             )
             + "</tr>"

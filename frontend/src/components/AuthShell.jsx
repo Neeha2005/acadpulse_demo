@@ -1,28 +1,13 @@
-import {
-  BrainCircuit,
-  GraduationCap,
-  RadioTower,
-  Zap,
-} from 'lucide-react';
-
-const featureItems = [
-  {
-    icon: RadioTower,
-    text: 'Connects WhatsApp, Gmail & Classroom',
-  },
-  {
-    icon: BrainCircuit,
-    text: 'AI that understands Roman Urdu',
-  },
-  {
-    icon: Zap,
-    text: 'Never miss a deadline again',
-  },
-];
+import { GraduationCap } from 'lucide-react';
 
 export default function AuthShell({ children }) {
   return (
-    <div className="auth-shell">
+    <div className="auth-shell auth-shell-enter">
+      <div className="auth-bg-orb auth-bg-orb-1" aria-hidden="true"></div>
+      <div className="auth-bg-orb auth-bg-orb-2" aria-hidden="true"></div>
+      <div className="auth-bg-orb auth-bg-orb-3" aria-hidden="true"></div>
+      <div className="auth-bg-orb auth-bg-orb-4" aria-hidden="true"></div>
+
       <aside className="auth-brand-panel">
         <div className="auth-brand-orb" aria-hidden="true"></div>
         <div className="auth-brand-float auth-brand-float-a" aria-hidden="true"></div>
@@ -39,16 +24,6 @@ export default function AuthShell({ children }) {
             </div>
           </div>
 
-          <div className="auth-feature-list">
-            {featureItems.map(({ icon: Icon, text }) => (
-              <div className="auth-feature-item" key={text}>
-                <span className="auth-feature-icon">
-                  <Icon size={16} strokeWidth={2.1} />
-                </span>
-                <span>{text}</span>
-              </div>
-            ))}
-          </div>
         </div>
 
         <div className="auth-brand-quote">Built for Pakistani university students.</div>

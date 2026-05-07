@@ -1,5 +1,5 @@
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import AccountModal from './AccountModal';
@@ -10,7 +10,6 @@ import { useAppContext } from '../context/AppContext';
 
 export default function Layout() {
   const location = useLocation();
-  const navigate = useNavigate();
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [showChatbot, setShowChatbot] = useState(false);
@@ -21,17 +20,8 @@ export default function Layout() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { activeTaskModal, setActiveTaskModal, apiFetch, refreshNotifications } = useAppContext();
 
-  useEffect(() => {
-    if (location.pathname === '/chat') {
-      window.setTimeout(() => setShowChatbot(true), 0);
-    }
-  }, [location.pathname]);
-
   const closeChatbot = () => {
     setShowChatbot(false);
-    if (location.pathname === '/chat') {
-      navigate('/dashboard', { replace: true });
-    }
   };
 
   const handleSemesterReset = async () => {
@@ -39,10 +29,10 @@ export default function Layout() {
 
     setResetStatus('saving');
     try {
-      const payload = await apiFetch('/semester/reset?user_id=1', { method: 'POST' }, false);
+      const payload = await apiFetch('/semester/reset', { method: 'POST' });
       setShowSemesterReset(false);
       setResetConfirmText('');
-      setToast(`Semester archived! Fresh start ✨ ${payload?.archived_count ?? 0} items archived.`);
+      setToast(`Semester reset complete. ${payload?.deleted_count ?? 0} items cleared.`);
       await refreshNotifications();
       window.setTimeout(() => window.location.reload(), 900);
     } catch {
@@ -56,22 +46,29 @@ export default function Layout() {
   return (
     <>
       <Sidebar 
-        onOpenAccount={() => setShowAccountModal(true)} 
+        onOpenAccount={() => setShowAccountModal(true)}
         onOpenSemesterReset={() => setShowSemesterReset(true)}
-        onOpenChatbot={() => {
-          setShowChatbot(true);
-          navigate('/chat');
-        }}
-        chatbotOpen={showChatbot}
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
       <div className="main-content">
         <Topbar onOpenAddTask={() => setShowAddTaskModal(true)} />
-        <Outlet />
+        <div key={location.key} className="page-transition">
+          <Outlet />
+        </div>
       </div>
       {showAccountModal && <AccountModal onClose={() => setShowAccountModal(false)} />}
       {showAddTaskModal && <AddTaskModal onClose={() => setShowAddTaskModal(false)} />}
+      <button
+        className={`chat-fab ${showChatbot ? 'is-open' : ''}`}
+        type="button"
+        onClick={() => setShowChatbot(true)}
+        aria-label="Open AcadPulse AI"
+        title="AcadPulse AI"
+      >
+        <span className="chat-fab-glow"></span>
+        <i className="fa-solid fa-robot"></i>
+      </button>
       <Chatbot open={showChatbot} onClose={closeChatbot} />
       {showSemesterReset && (
         <div className="modal-overlay">
@@ -87,7 +84,7 @@ export default function Layout() {
             </div>
             <div className="modal-body">
               <p className="semester-reset-copy">
-                All current notifications will be archived. Your timetable and course mappings will be reset. This cannot be undone.
+                All current notifications, timetable entries, and course mappings will be cleared. This cannot be undone.
               </p>
               <label className="semester-reset-label">
                 Type RESET to confirm
@@ -108,7 +105,7 @@ export default function Layout() {
                 disabled={resetConfirmText !== 'RESET' || resetStatus === 'saving'}
                 onClick={handleSemesterReset}
               >
-                {resetStatus === 'saving' ? 'Archiving...' : 'Archive & Reset'}
+                {resetStatus === 'saving' ? 'Resetting...' : 'Reset Semester'}
               </button>
             </div>
           </div>

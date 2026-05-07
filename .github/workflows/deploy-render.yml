@@ -1,0 +1,25 @@
+name: Deploy Backend To Render
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-render.yml"
+
+jobs:
+  deploy:
+    name: Trigger Render deploy hook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "Missing RENDER_DEPLOY_HOOK_URL secret"
+            exit 1
+          fi
+          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_URL"

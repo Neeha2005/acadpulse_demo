@@ -19,7 +19,7 @@ export default function Topbar({ onOpenAddTask }) {
   return (
     <div className="topbar glass-topbar">
       <div className="search-wrap glass-input-wrap">
-        <i className="fa-solid fa-search"></i>
+        <i className="fa-solid fa-search topbar-search-icon"></i>
         <input 
             type="text" 
             placeholder="Search assignments, messages, or materials..." 
@@ -29,17 +29,17 @@ export default function Topbar({ onOpenAddTask }) {
         <SearchDropdown query={searchQuery} onSelect={() => setSearchQuery('')} />
       </div>
       <div className="topbar-actions">
-        <button className="icon-btn glass-icon-btn" title="Sync integrations" onClick={reloadSync} disabled={isSyncing}>
+        <button className="icon-btn glass-icon-btn topbar-icon-btn" title="Sync integrations" onClick={reloadSync} disabled={isSyncing}>
           <i className={`fa-solid fa-rotate-right ${isSyncing ? 'fa-spin text-primary' : ''}`}></i>
         </button>
         <div className="topbar-wrapper">
           <button 
-             className={`icon-btn glass-icon-btn ${notifications.length > 0 ? 'active-notif' : ''}`} 
+             className={`icon-btn glass-icon-btn topbar-icon-btn ${notifications.length > 0 ? 'active-notif' : ''}`} 
              title="Notifications" 
              onClick={() => setShowNotifs(!showNotifs)}
           >
              <i className="fa-regular fa-bell"></i>
-             {notifications.length > 0 && <span className="pip"></span>}
+             {notifications.length > 0 && <span className="pip bell-pip"></span>}
           </button>
           
           <div className={`notif-dropdown ${showNotifs ? 'show' : ''}`}>
@@ -50,7 +50,7 @@ export default function Topbar({ onOpenAddTask }) {
              <div className="notif-drop-list">
                 {notifications.map(n => (
                    <div className="notif-drop-item" key={n.id}>
-                      <div className={`nd-icon text-${n.source}`} style={{background: `var(--${n.source}-subtle)`}}>
+                      <div className={`nd-icon ${n.source}`}>
                          <i className={`${n.iconFamily || 'fa-brands'} ${n.icon}`}></i>
                       </div>
                       <div className="nd-content">

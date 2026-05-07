@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const DATE_FILTERS = ['All', 'Today', 'This Week', 'With Deadline'];
@@ -39,7 +40,7 @@ function getAnnouncementTone(notification) {
 }
 
 export default function Announcements() {
-  const { notifications, refreshNotifications } = useAppContext();
+  const { notifications, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [courseFilter, setCourseFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('All');
@@ -83,8 +84,10 @@ export default function Announcements() {
     }
   };
 
+  if (dataLoading) return <PageSkeleton variant="list" />;
+
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll announcements-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">ACADEMIC BROADCASTS</span>
@@ -149,20 +152,20 @@ export default function Announcements() {
           </button>
         </div>
 
-        <div style={{ padding: '0 24px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+        <div className="list-filter-grid">
+          <div className="filters glass-pill-group list-filter-group">
             {SOURCE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <select className="input-field" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+          <select className="list-filter-select" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
             {courseOptions.map((course) => (
               <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
             ))}
           </select>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {DATE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
                 {filter}
@@ -172,6 +175,19 @@ export default function Announcements() {
         </div>
 
         <div className="notification-stream" style={{ padding: '8px 24px 24px' }}>
+          {visibleAnnouncements.length === 0 && (
+            <div className="empty-state glass-empty-state" style={{ margin: '0 0 16px' }}>
+              <div className="empty-state-icon"><i className="fa-solid fa-inbox"></i></div>
+              <p style={{ margin: '8px 0 4px' }}>
+                {announcements.length === 0 ? 'No announcements yet' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {announcements.length === 0
+                  ? 'Announcements from WhatsApp groups, Gmail, and Google Classroom will appear here once connected.'
+                  : 'Try adjusting the source, course, or date filter above.'}
+              </span>
+            </div>
+          )}
           {visibleAnnouncements.length > 0 ? visibleAnnouncements.map((announcement) => (
             <div className="notif-item" key={announcement.id}>
               <div className={`notif-icon-wrap ${announcement.source}`}>
@@ -193,12 +209,7 @@ export default function Announcements() {
                 </div>
               </div>
             </div>
-          )) : (
-            <div className="empty-state glass-empty-state">
-              <div className="empty-state-icon"><i className="fa-solid fa-inbox"></i></div>
-              <p>No matching announcements</p>
-            </div>
-          )}
+          )) : null}
         </div>
       </div>
     </div>

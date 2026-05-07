@@ -12,45 +12,33 @@ function textToAliases(text) {
     .filter(Boolean);
 }
 
+const EMPTY_COURSE = {
+  course_code: '',
+  short_name: '',
+  course_name: '',
+  aliases: '',
+};
+
 export default function Courses() {
-  const { apiFetch } = useAppContext();
+  const { apiFetch, authUser, user } = useAppContext();
   const [courses, setCourses] = useState([]);
   const [aliasDrafts, setAliasDrafts] = useState({});
-  const [newCourse, setNewCourse] = useState({
-    course_code: '',
-    short_name: '',
-    course_name: '',
-    aliases: '',
-  });
-  const [ambiguityForm, setAmbiguityForm] = useState({
-    message: '',
-    group_name: '',
-    source_type: 'whatsapp',
-    source_reference_id: '',
-    course_id: '',
-    alias: '',
-    save_alias: true,
-  });
-  const [classificationResult, setClassificationResult] = useState(null);
+  const [newCourse, setNewCourse] = useState(EMPTY_COURSE);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState('');
-  const [classifying, setClassifying] = useState(false);
-  const [resolving, setResolving] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || '';
+  const userQuery = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
 
   const loadCourses = useCallback(async () => {
     setLoading(true);
     setError('');
 
     try {
-      const payload = await apiFetch('/courses', {}, false);
+      const payload = await apiFetch(`/courses${userQuery}`, {}, false);
       const nextCourses = Array.isArray(payload?.courses) ? payload.courses : [];
       setCourses(nextCourses);
-      setAmbiguityForm((current) => ({
-        ...current,
-        course_id: current.course_id || nextCourses[0]?.id || '',
-      }));
       setAliasDrafts(Object.fromEntries(
         nextCourses.map((course) => [course.id, aliasesToText(course.aliases)]),
       ));
@@ -59,10 +47,9 @@ export default function Courses() {
     } finally {
       setLoading(false);
     }
-  }, [apiFetch]);
+  }, [apiFetch, userQuery]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCourses();
   }, [loadCourses]);
 
@@ -99,13 +86,14 @@ export default function Courses() {
       const payload = await apiFetch(`/courses/${course.id}/aliases`, {
         method: 'PATCH',
         body: JSON.stringify({
+          user_id: userId,
           aliases: textToAliases(aliasDrafts[course.id]),
         }),
       }, false);
       if (payload?.course) {
         updateCourseInState(payload.course);
       }
-      setStatus(`Aliases saved for ${course.course_code}.`);
+      setStatus(`${course.course_code} aliases saved.`);
     } catch (saveError) {
       setError(saveError.message || 'Unable to save aliases.');
     } finally {
@@ -136,13 +124,14 @@ export default function Courses() {
           short_name: shortName,
           course_name: courseName,
           aliases: textToAliases(newCourse.aliases),
+          user_id: userId,
         }),
       }, false);
       if (payload?.course) {
         updateCourseInState(payload.course);
       }
-      setNewCourse({ course_code: '', short_name: '', course_name: '', aliases: '' });
-      setStatus(`${courseCode} saved. Course short name will be used for course matching.`);
+      setNewCourse(EMPTY_COURSE);
+      setStatus(`${courseCode} saved.`);
     } catch (saveError) {
       setError(saveError.message || 'Unable to save course.');
     } finally {
@@ -150,101 +139,15 @@ export default function Courses() {
     }
   };
 
-  const handleClassifyAmbiguity = async (event) => {
-    event.preventDefault();
-    const message = ambiguityForm.message.trim();
-
-    if (!message) {
-      setError('Message text is required before classification.');
-      return;
-    }
-
-    setClassifying(true);
-    setClassificationResult(null);
-    setStatus('');
-    setError('');
-
-    try {
-      const payload = await apiFetch('/messages/classify-course', {
-        method: 'POST',
-        body: JSON.stringify({
-          message,
-          group_name: ambiguityForm.group_name.trim() || null,
-        }),
-      }, false);
-
-      setClassificationResult(payload);
-      if (payload?.course_id) {
-        setAmbiguityForm((current) => ({
-          ...current,
-          course_id: payload.course_id,
-        }));
-      }
-    } catch (classifyError) {
-      setError(classifyError.message || 'Unable to classify this message.');
-    } finally {
-      setClassifying(false);
-    }
-  };
-
-  const handleResolveAmbiguity = async () => {
-    const message = ambiguityForm.message.trim();
-    const courseId = ambiguityForm.course_id.trim();
-
-    if (!message || !courseId) {
-      setError('Message and confirmed course are required.');
-      return;
-    }
-
-    setResolving(true);
-    setStatus('');
-    setError('');
-
-    try {
-      const payload = await apiFetch('/messages/resolve-course-ambiguity', {
-        method: 'POST',
-        body: JSON.stringify({
-          message,
-          group_name: ambiguityForm.group_name.trim() || null,
-          source_type: ambiguityForm.source_type,
-          source_reference_id: ambiguityForm.source_reference_id.trim() || null,
-          course_id: courseId,
-          alias: ambiguityForm.alias.trim() || null,
-          save_alias: ambiguityForm.save_alias,
-        }),
-      }, false);
-
-      if (payload?.course) {
-        updateCourseInState(payload.course);
-      }
-      setClassificationResult(payload?.classification || null);
-      setStatus('Ambiguity resolved and classifier memory updated.');
-      setAmbiguityForm((current) => ({
-        ...current,
-        alias: '',
-      }));
-    } catch (resolveError) {
-      setError(resolveError.message || 'Unable to resolve this ambiguity.');
-    } finally {
-      setResolving(false);
-    }
-  };
-
   return (
-    <div className="dashboard-scroll">
-      <section className="hero-stats glass-banner">
+    <div className="dashboard-scroll courses-page">
+      <section className="hero-stats glass-banner courses-hero">
         <div className="welcome-text">
-          <span className="hero-kicker">COURSE ROSTER</span>
-          <h1 className="hero-title">Abbreviation Dictionary</h1>
-          <p>
-            Teach AcadPulse course short forms like OS, DSA, DBMS, AI, and SE so WhatsApp, Gmail, and Classroom messages map cleanly.
-          </p>
+          <span className="hero-kicker">COURSES</span>
+          <h1 className="hero-title">Course Library</h1>
+          <p>Keep course codes, names, and short forms clean so incoming messages map correctly.</p>
         </div>
         <div className="hero-pill-group">
-          <div className="hero-pill hero-pill-critical">
-            <span className="hero-pill-label">Need Aliases</span>
-            <strong>{coursesWithoutAliases.length}</strong>
-          </div>
           <div className="hero-pill hero-pill-pending">
             <span className="hero-pill-label">Courses</span>
             <strong>{courses.length}</strong>
@@ -253,102 +156,84 @@ export default function Courses() {
             <span className="hero-pill-label">Aliases</span>
             <strong>{totalAliases}</strong>
           </div>
+          <div className="hero-pill hero-pill-critical">
+            <span className="hero-pill-label">Need Aliases</span>
+            <strong>{coursesWithoutAliases.length}</strong>
+          </div>
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-book"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">classification base</div>
-          </div>
-          <div className="stat-value stat-value-pending">{courses.length}</div>
-          <div className="stat-label">Courses</div>
+      {(error || status) && (
+        <div className={`course-alert ${error ? 'error' : 'success'}`}>
+          <i className={`fa-solid ${error ? 'fa-triangle-exclamation' : 'fa-check'}`}></i>
+          {error || status}
         </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-solid fa-tags"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">known short forms</div>
-          </div>
-          <div className="stat-value stat-value-messages">{totalAliases}</div>
-          <div className="stat-label">Saved Aliases</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-triangle-exclamation"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">mapping risk</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{coursesWithoutAliases.length}</div>
-          <div className="stat-label">Without Aliases</div>
-        </div>
-      </div>
+      )}
 
-      <div className="content-grid">
-        <div className="panel tasks-panel glass-panel panel-accent">
+      <div className="courses-layout">
+        <section className="panel glass-panel panel-accent course-form-panel">
           <div className="panel-header">
             <div>
               <h2 className="panel-title"><i className="fa-solid fa-plus text-primary"></i> Add Course</h2>
-              <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-                Existing course codes are updated instead of duplicated.
-              </p>
+              <p>Code and full name are required. Aliases are optional but recommended.</p>
             </div>
           </div>
-          <form onSubmit={handleCreateCourse} style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <input
-              value={newCourse.course_code}
-              onChange={(event) => setNewCourse((current) => ({ ...current, course_code: event.target.value }))}
-              placeholder="Course code, e.g. CS301"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <input
-              value={newCourse.short_name}
-              onChange={(event) => setNewCourse((current) => ({ ...current, short_name: event.target.value }))}
-              placeholder="Short name, e.g. OS, DB, NLP"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <input
-              value={newCourse.course_name}
-              onChange={(event) => setNewCourse((current) => ({ ...current, course_name: event.target.value }))}
-              placeholder="Course name, e.g. Operating Systems"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <input
-              value={newCourse.aliases}
-              onChange={(event) => setNewCourse((current) => ({ ...current, aliases: event.target.value }))}
-              placeholder="Aliases, comma-separated: OS, Ops Sys, Operating System"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
+
+          <form className="course-form" onSubmit={handleCreateCourse}>
+            <label>
+              <span>Course Code</span>
+              <input
+                value={newCourse.course_code}
+                onChange={(event) => setNewCourse((current) => ({ ...current, course_code: event.target.value }))}
+                placeholder="CS301"
+              />
+            </label>
+            <label>
+              <span>Course Name</span>
+              <input
+                value={newCourse.course_name}
+                onChange={(event) => setNewCourse((current) => ({ ...current, course_name: event.target.value }))}
+                placeholder="Operating Systems"
+              />
+            </label>
+            <label>
+              <span>Short Name</span>
+              <input
+                value={newCourse.short_name}
+                onChange={(event) => setNewCourse((current) => ({ ...current, short_name: event.target.value }))}
+                placeholder="OS"
+              />
+            </label>
+            <label>
+              <span>Aliases</span>
+              <textarea
+                value={newCourse.aliases}
+                onChange={(event) => setNewCourse((current) => ({ ...current, aliases: event.target.value }))}
+                placeholder="OS, Ops Sys, Operating System"
+                rows={3}
+              />
+            </label>
             <button className="btn btn-primary" type="submit" disabled={savingId === 'new-course'}>
-              {savingId === 'new-course' ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-floppy-disk"></i> Save Course</>}
+              {savingId === 'new-course'
+                ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</>
+                : <><i className="fa-solid fa-floppy-disk"></i> Save Course</>}
             </button>
           </form>
-        </div>
+        </section>
 
-        <div className="panel glass-panel panel-accent">
+        <section className="panel glass-panel panel-accent course-list-panel">
           <div className="panel-header">
             <div>
-              <h2 className="panel-title"><i className="fa-solid fa-tags text-primary"></i> Alias Editor</h2>
-              <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-                These aliases are used by exact, fuzzy, and LLM course matching.
-              </p>
+              <h2 className="panel-title"><i className="fa-solid fa-book-open text-primary"></i> Saved Courses</h2>
+              <p>{courses.length} courses available for matching.</p>
             </div>
-            <button className="text-btn gradient-link" onClick={loadCourses} disabled={loading}>
-              {loading ? 'Loading...' : 'Refresh'}
+            <button className="btn btn-outline" type="button" onClick={loadCourses} disabled={loading}>
+              <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
+              Refresh
             </button>
           </div>
 
-          <div className="tasks-list" style={{ padding: 24 }}>
-            {error && (
-              <div style={{ color: 'var(--urgent)', padding: 12, background: 'var(--urgent-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--urgent)', fontSize: 13 }}>
-                <i className="fa-solid fa-triangle-exclamation"></i> {error}
-              </div>
-            )}
-            {status && (
-              <div style={{ color: 'var(--success)', padding: 12, background: 'var(--success-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--success)', fontSize: 13 }}>
-                <i className="fa-solid fa-check"></i> {status}
-              </div>
-            )}
-
+          <div className="course-list">
             {loading ? (
               <div className="empty-state glass-empty-state">
                 <div className="empty-state-icon"><i className="fa-solid fa-circle-notch fa-spin"></i></div>
@@ -360,135 +245,30 @@ export default function Courses() {
                 <p>No courses saved yet</p>
               </div>
             ) : courses.map((course) => (
-              <div key={course.id} className="task-card" style={{ cursor: 'default' }}>
-                <div className="task-top">
-                  <span className="task-course">{course.course_code}</span>
-                  <span className="task-due"><i className="fa-solid fa-tags"></i> {course.aliases?.length || 0}</span>
+              <article key={course.id} className="course-card">
+                <div className="course-card-main">
+                  <div className="course-code-mark">{course.course_code}</div>
+                  <div className="course-card-copy">
+                    <h3>{course.course_name}</h3>
+                    <p>{course.short_name ? `Short name: ${course.short_name}` : 'No short name saved'}</p>
+                  </div>
+                  <span className="course-alias-count">{course.aliases?.length || 0} aliases</span>
                 </div>
-                <h3 className="task-title">{course.course_name}</h3>
-                {course.short_name && (
-                  <p style={{ margin: '0 0 10px', color: 'var(--text-muted)', fontSize: 12 }}>
-                    Short name: <strong>{course.short_name}</strong>
-                  </p>
-                )}
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <div className="course-alias-editor">
                   <input
                     value={aliasDrafts[course.id] || ''}
                     onChange={(event) => setAliasDrafts((current) => ({ ...current, [course.id]: event.target.value }))}
-                    placeholder="Add aliases separated by commas"
-                    style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+                    placeholder="Aliases separated by commas"
                   />
                   <button className="btn btn-outline" type="button" onClick={() => handleSaveAliases(course)} disabled={savingId === course.id}>
                     {savingId === course.id ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-floppy-disk"></i>}
                     Save
                   </button>
                 </div>
-              </div>
+              </article>
             ))}
           </div>
-        </div>
-      </div>
-
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-        <div className="panel-header">
-          <div>
-            <h2 className="panel-title"><i className="fa-solid fa-route text-primary"></i> Ambiguity Resolution</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              Test uncertain messages, confirm the right course, and save the lesson for future matching.
-            </p>
-          </div>
-        </div>
-
-        <div style={{ padding: 24, display: 'grid', gap: 18 }}>
-          <form onSubmit={handleClassifyAmbiguity} style={{ display: 'grid', gap: 14 }}>
-            <textarea
-              value={ambiguityForm.message}
-              onChange={(event) => setAmbiguityForm((current) => ({ ...current, message: event.target.value }))}
-              placeholder="Paste an ambiguous message, e.g. OS quiz shifted to Friday"
-              rows={4}
-              style={{ width: '100%', resize: 'vertical', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit' }}
-            />
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-              <input
-                value={ambiguityForm.group_name}
-                onChange={(event) => setAmbiguityForm((current) => ({ ...current, group_name: event.target.value }))}
-                placeholder="Source name, e.g. CS301 Group"
-                style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-              />
-              <select
-                value={ambiguityForm.source_type}
-                onChange={(event) => setAmbiguityForm((current) => ({ ...current, source_type: event.target.value }))}
-                style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-              >
-                <option value="whatsapp">WhatsApp</option>
-                <option value="gmail">Gmail</option>
-                <option value="classroom">Classroom</option>
-              </select>
-              <input
-                value={ambiguityForm.source_reference_id}
-                onChange={(event) => setAmbiguityForm((current) => ({ ...current, source_reference_id: event.target.value }))}
-                placeholder="Source ID to map, optional"
-                style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-              />
-            </div>
-
-            <button className="btn btn-outline" type="submit" disabled={classifying}>
-              {classifying ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Classifying...</> : <><i className="fa-solid fa-wand-magic-sparkles"></i> Classify Message</>}
-            </button>
-          </form>
-
-          {classificationResult && (
-            <div className="task-card" style={{ cursor: 'default' }}>
-              <div className="task-top">
-                <span className="task-course">{classificationResult.method}</span>
-                <span className="task-due">
-                  <i className="fa-solid fa-gauge-high"></i> {Math.round((classificationResult.confidence || 0) * 100)}%
-                </span>
-              </div>
-              <h3 className="task-title">
-                {classificationResult.course_name || 'No confident course match'}
-              </h3>
-              <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>
-                {classificationResult.requires_user_confirmation
-                  ? 'Human confirmation required before this mapping should be trusted.'
-                  : 'High confidence match. You can still confirm it to save a source mapping or alias.'}
-              </p>
-            </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, alignItems: 'center' }}>
-            <select
-              value={ambiguityForm.course_id}
-              onChange={(event) => setAmbiguityForm((current) => ({ ...current, course_id: event.target.value }))}
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            >
-              <option value="">Select confirmed course</option>
-              {courses.map((course) => (
-                <option key={course.id} value={course.id}>
-                  {course.course_code} - {course.course_name}
-                </option>
-              ))}
-            </select>
-            <input
-              value={ambiguityForm.alias}
-              onChange={(event) => setAmbiguityForm((current) => ({ ...current, alias: event.target.value }))}
-              placeholder="Alias to learn, e.g. OS"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
-            />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)', fontSize: 13 }}>
-              <input
-                type="checkbox"
-                checked={ambiguityForm.save_alias}
-                onChange={(event) => setAmbiguityForm((current) => ({ ...current, save_alias: event.target.checked }))}
-              />
-              Save alias
-            </label>
-            <button className="btn btn-primary" type="button" onClick={handleResolveAmbiguity} disabled={resolving || courses.length === 0}>
-              {resolving ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Confirm Mapping</>}
-            </button>
-          </div>
-        </div>
+        </section>
       </div>
     </div>
   );

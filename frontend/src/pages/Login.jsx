@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Lock, Mail, TriangleAlert, WifiOff } from 'lucide-react'
+import { Check, Eye, EyeOff, Lock, Mail, TriangleAlert, WifiOff } from 'lucide-react'
 import AuthShell from '../components/AuthShell'
 import { useAppContext } from '../context/AppContext'
 
@@ -14,6 +14,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [success, setSuccess] = useState(false)
   const [shake, setShake] = useState(false)
   const [networkError, setNetworkError] = useState('')
   const [formError, setFormError] = useState(() => oauthParams.get('oauth_error') || '')
@@ -31,12 +32,22 @@ export default function Login() {
     if (oauthToken) {
       const oauthName = oauthParams.get('oauth_name') || 'Google User'
       const oauthEmail = oauthParams.get('oauth_email') || ''
+      const returnTo = oauthParams.get('return_to') || ''
+      const googleConnected = oauthParams.get('google_connected') === '1'
+      const googleIntegration = oauthParams.get('google_integration') || ''
       completeLoginSession(oauthToken, {
         name: oauthName,
         fullName: oauthName,
         email: oauthEmail,
       })
-      navigate('/onboarding', { replace: true })
+      if (returnTo) {
+        const params = new URLSearchParams()
+        if (googleConnected) params.set('google_connected', '1')
+        if (googleIntegration) params.set('google_integration', googleIntegration)
+        navigate(`/${returnTo}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true })
+      } else {
+        navigate('/onboarding', { replace: true })
+      }
     }
   }, [completeLoginSession, navigate, oauthParams])
 
@@ -88,6 +99,8 @@ export default function Login() {
       const storedUserId = localStorage.getItem('acadpulse_user_id') || authUser?.id || ''
       const query = storedUserId ? `?user_id=${encodeURIComponent(storedUserId)}` : ''
       const payload = await apiFetch(`/onboarding/status${query}`, {}, false)
+      setSuccess(true)
+      await new Promise((resolve) => window.setTimeout(resolve, 750))
       navigate(payload?.completed ? '/dashboard' : '/onboarding')
     } catch (error) {
       setFormError(error?.payload?.detail || error?.message || 'Unable to sign in')
@@ -140,19 +153,19 @@ export default function Login() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <div className="auth-field-group">
-            <label htmlFor="login-email">Phone or email</label>
-            <div className={`auth-input-wrap ${fieldErrors.email ? 'has-error' : ''}`}>
-              <Mail size={16} />
+            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.email ? 'has-error' : ''}`}>
+              <Mail size={16} className="auth-field-icon" />
               <input
                 id="login-email"
                 type="text"
-                placeholder="+92 300 1234567 or student@university.edu"
+                placeholder=" "
                 value={email}
                 onChange={(event) => {
                   setEmail(event.target.value)
                   setFieldErrors((prev) => ({ ...prev, email: '' }))
                 }}
               />
+              <label htmlFor="login-email" className="auth-float-label">Phone or email</label>
             </div>
             {fieldErrors.email && (
               <div className="auth-inline-error auth-banner-fade">
@@ -163,19 +176,19 @@ export default function Login() {
           </div>
 
           <div className="auth-field-group">
-            <label htmlFor="login-password">Password</label>
-            <div className={`auth-input-wrap ${fieldErrors.password ? 'has-error' : ''}`}>
-              <Lock size={16} />
+            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.password ? 'has-error' : ''}`}>
+              <Lock size={16} className="auth-field-icon" />
               <input
                 id="login-password"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
+                placeholder=" "
                 value={password}
                 onChange={(event) => {
                   setPassword(event.target.value)
                   setFieldErrors((prev) => ({ ...prev, password: '' }))
                 }}
               />
+              <label htmlFor="login-password" className="auth-float-label">Password</label>
               <button
                 type="button"
                 className="auth-input-toggle"
@@ -199,8 +212,16 @@ export default function Login() {
             </button>
           </div>
 
-          <button type="submit" className="auth-submit-btn" disabled={loading}>
-            {loading ? <span className="auth-spinner"></span> : 'Sign In'}
+          <button
+            type="submit"
+            className={`auth-submit-btn ${success ? 'auth-submit-success' : ''}`}
+            disabled={loading || success}
+          >
+            {loading
+              ? <span className="auth-spinner"></span>
+              : success
+                ? <Check size={20} strokeWidth={2.5} />
+                : 'Sign In'}
           </button>
         </form>
 

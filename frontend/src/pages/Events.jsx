@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import TaskCard from '../components/TaskCard';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const DATE_FILTERS = ['All', 'Upcoming', 'No Date'];
@@ -41,7 +42,7 @@ function EventItem({ task }) {
 }
 
 export default function Events() {
-  const { tasks, refreshNotifications } = useAppContext();
+  const { tasks, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -79,8 +80,10 @@ export default function Events() {
     }
   };
 
+  if (dataLoading) return <PageSkeleton variant="list" />;
+
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll events-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">SCHEDULE SIGNALS</span>
@@ -145,15 +148,15 @@ export default function Events() {
           </button>
         </div>
 
-        <div style={{ padding: '0 24px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+        <div className="list-filter-grid">
+          <div className="filters glass-pill-group list-filter-group">
             {SOURCE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {DATE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
                 {filter}
@@ -172,7 +175,14 @@ export default function Events() {
           ) : (
             <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
               <div className="empty-state-icon"><i className="fa-solid fa-calendar-xmark"></i></div>
-              <p>No matching events</p>
+              <p style={{ margin: '8px 0 4px' }}>
+                {eventTasks.length === 0 ? 'No events or exam schedules found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {eventTasks.length === 0
+                  ? 'Events and exam schedules from connected WhatsApp groups, Gmail, and Classroom will appear here.'
+                  : 'Try adjusting the source or date filter above.'}
+              </span>
             </div>
           )}
         </div>

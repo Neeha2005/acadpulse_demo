@@ -1,106 +1,94 @@
-import { useMemo, useState } from 'react';
-import { useAppContext } from '../context/AppContext';
+import { useMemo, useState } from 'react'
+import { useAppContext } from '../context/AppContext'
+import ClassScheduleSection from '../components/ClassScheduleSection'
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function parseDeadline(task) {
-  if (!task.deadline) return null;
-  const parsed = new Date(task.deadline);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (!task.deadline) return null
+  const parsed = new Date(task.deadline)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 function startOfDay(date) {
-  const next = new Date(date);
-  next.setHours(0, 0, 0, 0);
-  return next;
+  const next = new Date(date)
+  next.setHours(0, 0, 0, 0)
+  return next
 }
 
 function addDays(date, days) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
 }
 
 function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear()
     && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate();
+    && a.getDate() === b.getDate()
 }
 
 function formatDayLabel(date) {
-  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 function formatMonthLabel(date) {
-  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
 
 function formatTaskTime(date) {
-  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
 function getTaskBorderColor(task) {
-  if (task.urgency === 'urgent') return 'var(--urgent)';
-  if (task.source === 'whatsapp') return 'var(--whatsapp)';
-  if (task.source === 'classroom') return 'var(--warning)';
-  if (task.source === 'gmail') return 'var(--urgent)';
-  return 'var(--primary)';
+  if (task.urgency === 'urgent') return 'var(--urgent)'
+  if (task.source === 'whatsapp') return 'var(--whatsapp)'
+  if (task.source === 'classroom') return 'var(--warning)'
+  if (task.source === 'gmail') return 'var(--urgent)'
+  return 'var(--primary)'
 }
 
 function buildMonthCells(anchorDate, scheduledTasks) {
-  const firstOfMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
-  const firstVisible = addDays(firstOfMonth, -firstOfMonth.getDay());
+  const firstOfMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1)
+  const firstVisible = addDays(firstOfMonth, -firstOfMonth.getDay())
   return Array.from({ length: 42 }, (_, index) => {
-    const date = addDays(firstVisible, index);
+    const date = addDays(firstVisible, index)
     return {
       date,
       isCurrentMonth: date.getMonth() === anchorDate.getMonth(),
       items: scheduledTasks.filter((task) => sameDay(task.deadlineDate, date)),
-    };
-  });
+    }
+  })
 }
 
 function ScheduleItem({ task, compact = false, onOpen }) {
-  const borderColor = getTaskBorderColor(task);
+  const borderColor = getTaskBorderColor(task)
 
   return (
     <button
+      className={`schedule-item ${compact ? 'compact' : ''}`}
       type="button"
       onClick={() => onOpen(task)}
       title={`${task.title} - ${task.course}\nDue: ${task.due || 'No deadline set'}`}
-      style={{
-        width: '100%',
-        background: 'rgba(0,0,0,0.35)',
-        border: '1px solid var(--border)',
-        borderLeft: `4px solid ${borderColor}`,
-        borderRadius: 6,
-        padding: compact ? '7px 8px' : 12,
-        cursor: 'pointer',
-        color: 'var(--text)',
-        textAlign: 'left',
-        transition: 'background 0.2s ease, border-color 0.2s ease',
-      }}
+      style={{ '--schedule-color': borderColor }}
     >
-      <span style={{ fontSize: compact ? 10 : 11, color: borderColor, fontWeight: 700, display: 'block', marginBottom: 4 }}>
+      <span className="schedule-item-time">
         {task.deadlineDate ? formatTaskTime(task.deadlineDate) : 'No time'}
       </span>
-      <h4 style={{ fontSize: compact ? 11 : 13, margin: 0, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {task.title}
-      </h4>
-      <p style={{ fontSize: compact ? 10 : 11, margin: '4px 0 0', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {task.course}
-      </p>
+      <h4>{task.title}</h4>
+      <p>{task.course}</p>
     </button>
-  );
+  )
 }
 
 export default function Timetable() {
-  const [view, setView] = useState('week');
-  const { tasks, setActiveTaskModal } = useAppContext();
+  const [view, setView] = useState('week')
+  const { tasks, setActiveTaskModal, apiFetch, authUser, user } = useAppContext()
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || ''
 
-  const today = startOfDay(new Date());
-  const weekStart = addDays(today, -today.getDay());
-  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+  const today = startOfDay(new Date())
+  const weekStart = addDays(today, -today.getDay())
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index))
 
   const scheduledTasks = useMemo(
     () => tasks
@@ -108,30 +96,29 @@ export default function Timetable() {
       .filter((task) => task.deadlineDate)
       .sort((a, b) => a.deadlineDate.getTime() - b.deadlineDate.getTime()),
     [tasks],
-  );
+  )
 
   const unscheduledTasks = useMemo(
     () => tasks.filter((task) => !parseDeadline(task)),
     [tasks],
-  );
+  )
 
   const weekMapping = weekDays.map((date) => ({
     date,
     items: scheduledTasks.filter((task) => sameDay(task.deadlineDate, date)),
-  }));
+  }))
 
-  const monthCells = buildMonthCells(today, scheduledTasks);
-  const upcomingCount = scheduledTasks.filter((task) => task.deadlineDate >= today).length;
-  const urgentCount = scheduledTasks.filter((task) => task.urgency === 'urgent').length;
-  const todayCount = scheduledTasks.filter((task) => sameDay(task.deadlineDate, today)).length;
+  const monthCells = buildMonthCells(today, scheduledTasks)
+  const upcomingCount = scheduledTasks.filter((task) => task.deadlineDate >= today).length
+  const todayCount = scheduledTasks.filter((task) => sameDay(task.deadlineDate, today)).length
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll timetable-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
-          <span className="hero-kicker">TIME BLOCKS</span>
-          <h1 className="hero-title">Master Timetable</h1>
-          <p>Your dated assignments, quizzes, events, and exam schedules organized by real deadlines.</p>
+          <span className="hero-kicker">TIMETABLE</span>
+          <h1 className="hero-title">Schedule</h1>
+          <p>Classes and dated academic items in one clean view.</p>
         </div>
         <div className="hero-pill-group">
           <div className="hero-pill hero-pill-critical">
@@ -149,34 +136,7 @@ export default function Timetable() {
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-calendar-day"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">dated queue</div>
-          </div>
-          <div className="stat-value stat-value-pending">{scheduledTasks.length}</div>
-          <div className="stat-label">Scheduled Items</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-fire"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">live urgency</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{urgentCount}</div>
-          <div className="stat-label">Urgent Slots</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-solid fa-calendar-xmark"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">needs date</div>
-          </div>
-          <div className="stat-value stat-value-messages">{unscheduledTasks.length}</div>
-          <div className="stat-label">Unscheduled Items</div>
-        </div>
-      </div>
-
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
+      <div className="panel glass-panel panel-accent timetable-panel">
         <div className="panel-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
           <div>
             <h2 className="panel-title"><i className="fa-regular fa-calendar text-primary"></i> {view === 'week' ? 'This Week' : formatMonthLabel(today)}</h2>
@@ -190,7 +150,7 @@ export default function Timetable() {
           </div>
         </div>
 
-        <div className="modal-body" style={{ minHeight: 420, padding: view === 'week' ? '24px' : '24px' }}>
+        <div className="modal-body" style={{ minHeight: 420, padding: '24px' }}>
           {view === 'week' ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
               {weekMapping.map((dayBlock) => (
@@ -223,7 +183,7 @@ export default function Timetable() {
                 <div key={day} style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', paddingBottom: 8, textTransform: 'uppercase', fontWeight: 700 }}>{day}</div>
               ))}
               {monthCells.map((block) => {
-                const activeDay = sameDay(block.date, today);
+                const activeDay = sameDay(block.date, today)
                 return (
                   <div
                     key={block.date.toISOString()}
@@ -250,26 +210,14 @@ export default function Timetable() {
                       )}
                     </div>
                   </div>
-                );
+                )
               })}
             </div>
           )}
         </div>
       </div>
 
-      {unscheduledTasks.length > 0 && (
-        <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-          <div className="panel-header">
-            <h2 className="panel-title"><i className="fa-solid fa-calendar-xmark text-warning"></i> Unscheduled Items</h2>
-            <span className="badge badge-warning">{unscheduledTasks.length} need dates</span>
-          </div>
-          <div className="tasks-list" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-            {unscheduledTasks.slice(0, 6).map((task) => (
-              <ScheduleItem key={task.id} task={task} onOpen={setActiveTaskModal} />
-            ))}
-          </div>
-        </div>
-      )}
+      <ClassScheduleSection apiFetch={apiFetch} userId={userId} />
     </div>
-  );
+  )
 }

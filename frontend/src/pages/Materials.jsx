@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import AttachmentList from '../components/AttachmentList';
+import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const TYPE_FILTERS = ['All', 'PDF', 'Slides', 'Video', 'Link', 'Notes'];
@@ -11,16 +13,51 @@ function getTime(value) {
 }
 
 function isMaterial(notification) {
-  return (notification.category || '').toLowerCase() === 'material';
+  if ((notification.category || '').toLowerCase() === 'material') return true;
+  return hasMaterialAttachment(notification);
+}
+
+function getAttachmentSignature(attachment) {
+  return `${attachment?.file_type || ''} ${attachment?.file_name || ''}`.toLowerCase();
+}
+
+function isMaterialAttachment(attachment) {
+  const signature = getAttachmentSignature(attachment);
+  return (
+    signature.includes('pdf')
+    || signature.includes('slide')
+    || signature.includes('ppt')
+    || signature.includes('presentation')
+    || signature.includes('video')
+    || signature.includes('youtube')
+    || signature.includes('document')
+    || signature.includes('sheet')
+    || signature.includes('text/url')
+    || signature.includes('link')
+    || signature.includes('note')
+    || signature.includes('.pdf')
+    || signature.includes('.ppt')
+    || signature.includes('.pptx')
+    || signature.includes('.doc')
+    || signature.includes('.docx')
+  );
+}
+
+function hasMaterialAttachment(notification) {
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : [];
+  return attachments.some(isMaterialAttachment);
 }
 
 function detectMaterialType(notification) {
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : [];
+  const attachmentText = attachments.map(getAttachmentSignature).join(' ');
   const text = `${notification.title || ''} ${notification.preview || ''} ${notification.rawText || ''}`.toLowerCase();
-  if (text.includes('pdf')) return 'PDF';
-  if (text.includes('slide') || text.includes('ppt')) return 'Slides';
-  if (text.includes('youtube') || text.includes('video')) return 'Video';
-  if (text.includes('http') || text.includes('link')) return 'Link';
-  if (text.includes('note') || text.includes('reading')) return 'Notes';
+  const combined = `${text} ${attachmentText}`;
+  if (combined.includes('pdf')) return 'PDF';
+  if (combined.includes('slide') || combined.includes('ppt') || combined.includes('presentation')) return 'Slides';
+  if (combined.includes('youtube') || combined.includes('video')) return 'Video';
+  if (combined.includes('http') || combined.includes('link') || combined.includes('text/url')) return 'Link';
+  if (combined.includes('note') || combined.includes('reading') || combined.includes('document') || combined.includes('doc')) return 'Notes';
   return 'Notes';
 }
 
@@ -40,7 +77,7 @@ function getMaterialIcon(type) {
 }
 
 export default function Materials() {
-  const { notifications, refreshNotifications } = useAppContext();
+  const { notifications, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
   const [typeFilter, setTypeFilter] = useState('All');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -74,8 +111,10 @@ export default function Materials() {
     }
   };
 
+  if (dataLoading) return <PageSkeleton variant="list" />;
+
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll materials-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">STUDY RESOURCES</span>
@@ -140,15 +179,15 @@ export default function Materials() {
           </button>
         </div>
 
-        <div style={{ padding: '0 24px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+        <div className="list-filter-grid">
+          <div className="filters glass-pill-group list-filter-group">
             {SOURCE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {TYPE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${typeFilter === filter ? 'active' : ''}`} onClick={() => setTypeFilter(filter)}>
                 {filter}
@@ -158,6 +197,19 @@ export default function Materials() {
         </div>
 
         <div className="notification-stream" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          {visibleMaterials.length === 0 && (
+            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1', margin: '0 0 16px' }}>
+              <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
+              <p style={{ margin: '8px 0 4px' }}>
+                {materials.length === 0 ? 'No materials found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {materials.length === 0
+                  ? 'Lecture notes, PDFs, slides, and links shared in WhatsApp groups or Google Classroom will appear here.'
+                  : 'Try adjusting the source or type filter above.'}
+              </span>
+            </div>
+          )}
           {visibleMaterials.length > 0 ? visibleMaterials.map((material) => (
             <div className="notif-item" key={material.id} style={{ alignItems: 'flex-start' }}>
               <div className={`notif-icon-wrap ${material.source}`}>
@@ -173,15 +225,16 @@ export default function Materials() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                   <span className="badge badge-success">{material.materialType}</span>
                   <span className="badge badge-warning">{material.sourceLabel}</span>
+                  {material.attachmentCount > 0 && (
+                    <span className="badge badge-muted">
+                      {material.attachmentCount} attachment{material.attachmentCount === 1 ? '' : 's'}
+                    </span>
+                  )}
                 </div>
+                <AttachmentList attachments={material.attachments} compact />
               </div>
             </div>
-          )) : (
-            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
-              <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
-              <p>No matching materials</p>
-            </div>
-          )}
+          )) : null}
         </div>
       </div>
     </div>

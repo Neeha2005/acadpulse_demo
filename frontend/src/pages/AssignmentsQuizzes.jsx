@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import TaskCard from '../components/TaskCard';
 import { useAppContext } from '../context/AppContext';
+import PageSkeleton from '../components/PageSkeleton';
 
 const TYPE_FILTERS = ['All', 'Assignments', 'Quizzes'];
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
@@ -22,7 +23,7 @@ function isAssignmentOrQuiz(task) {
 }
 
 export default function AssignmentsQuizzes() {
-  const { tasks, refreshNotifications } = useAppContext();
+  const { tasks, refreshNotifications, dataLoading } = useAppContext();
   const [typeFilter, setTypeFilter] = useState('All');
   const [sourceFilter, setSourceFilter] = useState('All');
   const [courseFilter, setCourseFilter] = useState('All');
@@ -71,8 +72,10 @@ export default function AssignmentsQuizzes() {
     }
   };
 
+  if (dataLoading) return <PageSkeleton variant="cards" />;
+
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll assignments-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">ACADEMIC WORKLOAD</span>
@@ -137,27 +140,27 @@ export default function AssignmentsQuizzes() {
           </button>
         </div>
 
-        <div style={{ padding: '0 24px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+        <div className="list-filter-grid">
+          <div className="filters glass-pill-group list-filter-group">
             {TYPE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${typeFilter === filter ? 'active' : ''}`} onClick={() => setTypeFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {SOURCE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <select className="input-field" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+          <select className="list-filter-select" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
             {courseOptions.map((course) => (
               <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
             ))}
           </select>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {STATUS_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${statusFilter === filter ? 'active' : ''}`} onClick={() => setStatusFilter(filter)}>
                 {filter}
@@ -172,7 +175,14 @@ export default function AssignmentsQuizzes() {
           ) : (
             <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
               <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
-              <p>No matching assignments or quizzes</p>
+              <p style={{ margin: '8px 0 4px' }}>
+                {academicTasks.length === 0 ? 'No assignments or quizzes found' : 'No items match your filters'}
+              </p>
+              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                {academicTasks.length === 0
+                  ? 'Assignments and quizzes appear here once your WhatsApp, Gmail, or Classroom sources send deadline-bearing messages.'
+                  : 'Try changing the type, source, or status filter above.'}
+              </span>
             </div>
           )}
         </div>

@@ -1,291 +1,312 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
 
+const PAGE_SIZE = 20;
+const FILTERS = [
+  ['all', 'All'],
+  ['announcement', 'Announcements'],
+  ['assignment', 'Assignments'],
+  ['material', 'Materials'],
+];
+
+function formatRelativeTime(value) {
+  if (!value) return 'just now';
+  const diff = Date.now() - new Date(value).getTime();
+  const minutes = Math.max(0, Math.floor(diff / 60000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function formatDue(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function titleFromText(text) {
+  const clean = String(text || '').replace(/^Title:\s*/i, '').split('\n').find(Boolean) || 'Classroom item';
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
+}
+
+function Toast({ message, type, onClose }) {
+  useEffect(() => {
+    if (!message) return undefined;
+    const timer = setTimeout(onClose, 3500);
+    return () => clearTimeout(timer);
+  }, [message, onClose]);
+  if (!message) return null;
+  return <div className={`integration-toast ${type}`}>{message}</div>;
+}
+
+function SkeletonRows() {
+  return <div className="integration-log-list">{[0, 1, 2].map((item) => <div className="integration-skeleton-row" key={item} />)}</div>;
+}
+
 export default function ClassroomIntegration() {
-  const { notifications, tasks, apiFetch } = useAppContext();
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [oauthStatus, setOauthStatus] = useState(true);
+  const { apiFetch, authUser, user, authReady, authToken, refreshNotifications } = useAppContext();
+  const location = useLocation();
+  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || '';
+  const [googleStatus, setGoogleStatus] = useState({ connected: false });
+  const [loadingStatus, setLoadingStatus] = useState(true);
   const [localCourses, setLocalCourses] = useState([]);
   const [classroomCourses, setClassroomCourses] = useState([]);
   const [mappings, setMappings] = useState([]);
   const [selectedClassroomCourse, setSelectedClassroomCourse] = useState('');
   const [selectedLocalCourse, setSelectedLocalCourse] = useState('');
-  const [manualClassroomId, setManualClassroomId] = useState('');
-  const [manualClassroomName, setManualClassroomName] = useState('');
-  const [loadingMappings, setLoadingMappings] = useState(true);
-  const [savingMapping, setSavingMapping] = useState(false);
-  const [mappingStatus, setMappingStatus] = useState('');
-  const [mappingError, setMappingError] = useState('');
+  const [newCourseName, setNewCourseName] = useState('');
+  const [logs, setLogs] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [expanded, setExpanded] = useState({});
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMappings, setLoadingMappings] = useState(false);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'success' });
 
-  const classroomNotifs = notifications.filter(n => n.source === 'classroom');
-  const classroomTasks = tasks.filter(t => t.source === 'classroom');
-  const mappedClassroomIds = useMemo(
-    () => new Set(mappings.map(mapping => mapping.source_reference_id)),
-    [mappings],
-  );
+  const connected = googleStatus.connected;
+  const selectedClassroom = classroomCourses.find((course) => course.classroom_id === selectedClassroomCourse);
 
-  const loadMappingData = useCallback(async () => {
+  const loadStatus = useCallback(async () => {
+    if (!authToken) return;
+    setLoadingStatus(true);
+    try {
+      const payload = await apiFetch('/google/status');
+      setGoogleStatus({ connected: Boolean(payload?.connected) });
+    } catch {
+      setGoogleStatus({ connected: false });
+    } finally {
+      setLoadingStatus(false);
+    }
+  }, [apiFetch, authToken]);
+
+  const loadMappingData = useCallback(async (syncCourses = false) => {
+    if (!userId) return;
     setLoadingMappings(true);
-    setMappingError('');
-
     try {
       const [coursesPayload, classroomPayload, mappingsPayload] = await Promise.all([
-        apiFetch('/courses', {}, false),
-        apiFetch('/classroom/courses', {}, false),
-        apiFetch('/course-source-mappings?source_type=classroom', {}, false),
+        apiFetch(`/courses?user_id=${encodeURIComponent(userId)}`, {}, false),
+        apiFetch(`/classroom/courses?user_id=${encodeURIComponent(userId)}${syncCourses ? '&sync=true' : ''}`),
+        apiFetch(`/course-source-mappings?source_type=classroom&user_id=${encodeURIComponent(userId)}`, {}, false),
       ]);
-
       const nextLocalCourses = Array.isArray(coursesPayload?.courses) ? coursesPayload.courses : [];
       const nextClassroomCourses = Array.isArray(classroomPayload?.courses) ? classroomPayload.courses : [];
       const nextMappings = Array.isArray(mappingsPayload?.mappings) ? mappingsPayload.mappings : [];
-
       setLocalCourses(nextLocalCourses);
       setClassroomCourses(nextClassroomCourses);
       setMappings(nextMappings);
-      setSelectedLocalCourse(current => current || nextLocalCourses[0]?.id || '');
-      setSelectedClassroomCourse(current => current || nextClassroomCourses[0]?.classroom_id || '');
+      setSelectedLocalCourse((current) => current || nextLocalCourses[0]?.id || '');
+      setSelectedClassroomCourse((current) => current || nextClassroomCourses[0]?.classroom_id || '');
     } catch (error) {
-      setMappingError(error.message || 'Unable to load Classroom mapping data.');
+      setToast({ message: error?.message || 'Unable to load Classroom data', type: 'error' });
     } finally {
       setLoadingMappings(false);
     }
-  }, [apiFetch]);
+  }, [apiFetch, userId]);
+
+  const loadLogs = useCallback(async (nextOffset = 0, append = false) => {
+    if (!userId) return;
+    setLoadingLogs(true);
+    try {
+      const payload = await apiFetch(`/notifications?user_id=${encodeURIComponent(userId)}&source=classroom&limit=${PAGE_SIZE}&offset=${nextOffset}`, {}, false);
+      const rows = Array.isArray(payload?.notifications) ? payload.notifications : [];
+      setLogs((current) => append ? [...current, ...rows] : rows);
+      setOffset(nextOffset + rows.length);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (error) {
+      setToast({ message: error?.message || 'Unable to load Classroom logs', type: 'error' });
+    } finally {
+      setLoadingLogs(false);
+    }
+  }, [apiFetch, userId]);
+
+  const syncClassroom = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await loadMappingData(true);
+      setToast({ message: 'Classroom courses refreshed', type: 'success' });
+      await loadLogs(0, false);
+      refreshNotifications?.();
+    } catch (error) {
+      setToast({ message: error?.message || 'Unable to sync Classroom', type: 'error' });
+    } finally {
+      setSyncing(false);
+    }
+  }, [apiFetch, loadLogs, loadMappingData, refreshNotifications]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadMappingData();
-  }, [loadMappingData]);
-
-  const handleForceSync = async () => {
-    setIsSyncing(true);
-    setMappingError('');
-    setMappingStatus('');
-
-    try {
-      const payload = await apiFetch('/classroom/fetch', {}, false);
-      const saved = payload?.stats?.new_notifications_saved ?? 0;
-      setMappingStatus(`Classroom sync complete. ${saved} new notifications saved.`);
-      await loadMappingData();
-    } catch (error) {
-      setMappingError(error.message || 'Unable to sync Google Classroom right now.');
-    } finally {
-      setIsSyncing(false);
+    if (!authReady || !authToken) return undefined;
+    const params = new URLSearchParams(location.search);
+    const oauthReturned = params.get('google_connected') === '1' || params.get('connection') === '1';
+    loadStatus();
+    loadMappingData(connected);
+    loadLogs(0, false);
+    if (oauthReturned) {
+      setGoogleStatus({ connected: true });
+      window.dispatchEvent(new Event('acadpulse:integration-status-refresh'));
+      setToast({ message: 'Google connected successfully', type: 'success' });
+      window.history.replaceState({}, '', '/integrations/classroom');
+      setTimeout(loadStatus, 1000);
+      setTimeout(syncClassroom, 800);
     }
-  };
+    return undefined;
+  }, [authReady, authToken, loadLogs, loadMappingData, loadStatus, location.search, syncClassroom]);
 
-  const handleOAuth = () => {
-    setOauthStatus(!oauthStatus);
-  };
+  const displayedLogs = useMemo(() => {
+    const sorted = [...logs].sort((a, b) => new Date(b.received_at || b.created_at || 0) - new Date(a.received_at || a.created_at || 0));
+    if (filter === 'all') return sorted;
+    return sorted.filter((item) => String(item.category || '').toLowerCase() === filter);
+  }, [filter, logs]);
 
-  const handleSaveManualClassroomCourse = async (event) => {
+  const saveMapping = async (event) => {
     event.preventDefault();
-    const classroomId = manualClassroomId.trim();
-    if (!classroomId) {
-      setMappingError('Classroom course ID is required.');
+    if (!selectedClassroomCourse || (!selectedLocalCourse && !newCourseName.trim())) {
+      setToast({ message: 'Select both courses before saving', type: 'error' });
       return;
     }
-
-    setSavingMapping(true);
-    setMappingError('');
-    setMappingStatus('');
-
+    setSaving(true);
     try {
-      await apiFetch('/classroom/courses', {
+      await apiFetch('/courses/map', {
         method: 'POST',
         body: JSON.stringify({
-          classroom_id: classroomId,
-          classroom_name: manualClassroomName.trim() || classroomId,
+          user_id: userId,
+          classroom_course_id: selectedClassroomCourse,
+          classroom_course_name: selectedClassroom?.classroom_name || selectedClassroomCourse,
+          acadpulse_course_id: selectedLocalCourse === '__new__' ? '' : selectedLocalCourse,
+          acadpulse_course: selectedLocalCourse === '__new__' ? newCourseName.trim() : '',
         }),
       }, false);
-      setManualClassroomId('');
-      setManualClassroomName('');
-      setMappingStatus('Classroom course saved. Select a local course to map it.');
+      setToast({ message: 'Course mapped successfully', type: 'success' });
+      setSelectedClassroomCourse('');
+      setSelectedLocalCourse(localCourses[0]?.id || '');
+      setNewCourseName('');
       await loadMappingData();
-      setSelectedClassroomCourse(classroomId);
     } catch (error) {
-      setMappingError(error.message || 'Unable to save Classroom course.');
+      setToast({ message: error?.message || 'Unable to save mapping', type: 'error' });
     } finally {
-      setSavingMapping(false);
+      setSaving(false);
     }
   };
 
-  const handleSaveMapping = async (event) => {
-    event.preventDefault();
-    if (!selectedClassroomCourse || !selectedLocalCourse) {
-      setMappingError('Select both a Classroom course and a local course.');
-      return;
-    }
-
-    setSavingMapping(true);
-    setMappingError('');
-    setMappingStatus('');
-
+  const deleteMapping = async (mappingId) => {
     try {
-      const payload = await apiFetch('/course-source-mappings', {
-        method: 'POST',
-        body: JSON.stringify({
-          source_type: 'classroom',
-          source_reference_id: selectedClassroomCourse,
-          course_id: selectedLocalCourse,
-        }),
-      }, false);
-
-      setMappings(Array.isArray(payload?.mappings) ? payload.mappings : []);
-      setMappingStatus('Mapping saved. Future Classroom content from this course will attach to the selected course.');
+      await apiFetch(`/courses/map/${mappingId}?user_id=${encodeURIComponent(userId)}`, { method: 'DELETE' }, false);
+      setMappings((current) => current.filter((mapping) => String(mapping.id) !== String(mappingId)));
+      setToast({ message: 'Mapping deleted', type: 'success' });
     } catch (error) {
-      setMappingError(error.message || 'Unable to save Classroom mapping.');
-    } finally {
-      setSavingMapping(false);
+      setToast({ message: error?.message || 'Unable to delete mapping', type: 'error' });
     }
+  };
+
+  const handleConnect = () => {
+    window.location.href = `/auth/google?user_id=${encodeURIComponent(userId)}&next_path=integrations/classroom`;
   };
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll integration-page">
       <section className="hero-stats glass-banner">
-        <div style={{display: 'flex', gap: 20, alignItems: 'center'}}>
-           <div style={{width: 64, height: 64, borderRadius: 16, background: 'var(--warning-subtle)', color: 'var(--warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32}}>
-              <i className="fa-brands fa-google"></i>
-           </div>
-           <div>
-              <h1 style={{margin: '0 0 8px 0'}}>Google Classroom Interface</h1>
-              <p style={{margin: 0, color: 'var(--text-muted)'}}>Map Classroom course IDs to your AcadPulse course roster and sync academic updates.</p>
-           </div>
-           <div style={{marginLeft: 'auto', display: 'flex', gap: 16}}>
-               <button className="btn btn-outline" onClick={handleOAuth}>
-                  {oauthStatus ? 'Revoke Local Access' : 'Authenticate Google OAuth'}
-               </button>
-               <button className="btn btn-primary" onClick={handleForceSync} disabled={isSyncing || !oauthStatus}>
-                  {isSyncing ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Polling Google API...</> : 'Force Fast Sync'}
-               </button>
-           </div>
+        <div className="integration-hero">
+          <div className="integration-hero-icon classroom"><i className="fa-brands fa-google"></i></div>
+          <div>
+            <h1>Google Classroom</h1>
+            <p>{connected ? 'Connected - map Classroom courses to sync announcements and assignments.' : 'Connect your Google account to sync Classroom content into AcadPulse.'}</p>
+          </div>
+          <div className="integration-hero-action">
+            {connected ? <span className="integration-connected">✓ Connected</span> : (
+              <button className="btn btn-primary" onClick={handleConnect} disabled={loadingStatus}><i className="fa-brands fa-google"></i> Connect with Google</button>
+            )}
+          </div>
         </div>
       </section>
-      
-      <div className="content-grid" style={{marginTop: 32}}>
-         <div className="panel tasks-panel glass-panel panel-accent">
-            <div className="panel-header">
-               <h2 className="panel-title"><i className="fa-solid fa-diagram-project text-warning"></i> Course Mapping</h2>
-               <button className="text-btn" onClick={loadMappingData} disabled={loadingMappings}>
-                  {loadingMappings ? 'Loading...' : 'Refresh'}
-               </button>
+
+      <div className="content-grid integration-grid">
+        <div className="panel tasks-panel glass-panel panel-accent">
+          <div className="panel-header">
+            <h2 className="panel-title"><i className="fa-solid fa-diagram-project text-warning"></i> Course Mapping</h2>
+            <button className="text-btn" onClick={syncClassroom} disabled={!connected || syncing}>{syncing ? 'Refreshing...' : 'Refresh'}</button>
+          </div>
+          <div className="integration-panel-body">
+            {!connected && !loadingStatus && <div className="integration-warning"><i className="fa-solid fa-triangle-exclamation"></i> Connect Google above to enable live Classroom sync. Existing mappings can still be edited.</div>}
+            <form className="integration-form" onSubmit={saveMapping}>
+              <label className="integration-field">
+                <span>Classroom Course</span>
+                <select value={selectedClassroomCourse} onChange={(e) => setSelectedClassroomCourse(e.target.value)} disabled={loadingMappings}>
+                  <option value="">{loadingMappings ? 'Loading your courses...' : classroomCourses.length ? 'Select a Classroom course' : 'No active courses found'}</option>
+                  {classroomCourses.map((course) => <option value={course.classroom_id} key={course.classroom_id}>{course.classroom_name || course.classroom_id}</option>)}
+                </select>
+              </label>
+              <label className="integration-field">
+                <span>AcadPulse Course</span>
+                <select value={selectedLocalCourse} onChange={(e) => setSelectedLocalCourse(e.target.value)}>
+                  <option value="">Select a course</option>
+                  {localCourses.map((course) => <option value={course.id} key={course.id}>{course.course_code} - {course.course_name}</option>)}
+                  <option value="__new__">+ Create new course</option>
+                </select>
+              </label>
+              {selectedLocalCourse === '__new__' && <input className="integration-text-input" value={newCourseName} onChange={(e) => setNewCourseName(e.target.value)} placeholder="New AcadPulse course name" />}
+              <button className="btn btn-primary" type="submit" disabled={saving || !selectedClassroomCourse}>{saving ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-link"></i> Save Mapping</>}</button>
+            </form>
+            <div className="integration-saved-list">
+              <strong>Saved Mappings</strong>
+              {mappings.length === 0 ? <span className="integration-muted">No Classroom courses mapped yet</span> : mappings.map((mapping) => (
+                <div className="integration-mapping-row" key={mapping.id}>
+                  <span>{mapping.source_name || mapping.source_reference_id}</span>
+                  <i className="fa-solid fa-arrow-right"></i>
+                  <span>{mapping.course_name || mapping.course_code}</span>
+                  <button onClick={() => deleteMapping(mapping.id)} aria-label="Delete mapping">×</button>
+                </div>
+              ))}
             </div>
-            <div style={{padding: 24, display: 'flex', flexDirection: 'column', gap: 20}}>
-               {!oauthStatus && (
-                 <div style={{color: 'var(--warning)', padding: 12, background: 'var(--warning-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--warning)', fontSize: 14}}>
-                    <i className="fa-solid fa-triangle-exclamation"></i> Classroom API is disconnected. Existing mappings can still be edited.
-                 </div>
-               )}
+          </div>
+        </div>
 
-               <form onSubmit={handleSaveMapping} style={{display: 'flex', flexDirection: 'column', gap: 14}}>
-                  <div>
-                     <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>Classroom Course</label>
-                     <select value={selectedClassroomCourse} onChange={event => setSelectedClassroomCourse(event.target.value)} style={{width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}}>
-                        <option value="">Select a Classroom course</option>
-                        {classroomCourses.map(course => (
-                           <option value={course.classroom_id} key={course.classroom_id}>
-                              {course.classroom_name || course.classroom_id}{mappedClassroomIds.has(course.classroom_id) ? ' - mapped' : ''}
-                           </option>
-                        ))}
-                     </select>
-                  </div>
-
-                  <div>
-                     <label style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block'}}>AcadPulse Course</label>
-                     <select value={selectedLocalCourse} onChange={event => setSelectedLocalCourse(event.target.value)} style={{width: '100%', padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}}>
-                        <option value="">Select a course</option>
-                        {localCourses.map(course => (
-                           <option value={course.id} key={course.id}>
-                              {course.course_code} - {course.course_name}
-                           </option>
-                        ))}
-                     </select>
-                  </div>
-
-                  <button className="btn btn-primary" type="submit" disabled={savingMapping || !selectedClassroomCourse || !selectedLocalCourse}>
-                     {savingMapping ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-link"></i> Save Mapping</>}
-                  </button>
-               </form>
-
-               <form onSubmit={handleSaveManualClassroomCourse} style={{padding: 16, background: 'rgba(0,0,0,0.28)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', display: 'flex', flexDirection: 'column', gap: 12}}>
-                  <strong style={{fontSize: 13}}>Add Classroom course manually</strong>
-                  <input value={manualClassroomId} onChange={event => setManualClassroomId(event.target.value)} placeholder="Google Classroom course ID" style={{width: '100%', padding: '11px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}} />
-                  <input value={manualClassroomName} onChange={event => setManualClassroomName(event.target.value)} placeholder="Course name optional" style={{width: '100%', padding: '11px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)'}} />
-                  <button className="btn btn-outline" type="submit" disabled={savingMapping || !manualClassroomId.trim()}>
-                     <i className="fa-solid fa-plus"></i> Add Course
-                  </button>
-               </form>
-
-               {mappingError && (
-                  <div style={{color: 'var(--urgent)', padding: 12, background: 'var(--urgent-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--urgent)', fontSize: 13}}>
-                     <i className="fa-solid fa-triangle-exclamation"></i> {mappingError}
-                  </div>
-               )}
-               {mappingStatus && (
-                  <div style={{color: 'var(--success)', padding: 12, background: 'var(--success-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--success)', fontSize: 13}}>
-                     <i className="fa-solid fa-check"></i> {mappingStatus}
-                  </div>
-               )}
-
-               <div style={{display: 'flex', justifyContent: 'space-between', background: 'var(--surface-hover)', padding: '20px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)'}}>
-                  <div>
-                    <strong style={{fontSize: 32, display: 'block', color: 'var(--warning)'}}>{classroomTasks.length}</strong>
-                    <span style={{fontSize: 12, color: 'var(--text-muted)'}}>Active Tasks Extracted</span>
-                  </div>
-                  <div style={{textAlign: 'right'}}>
-                    <strong style={{fontSize: 32, display: 'block', color: 'var(--text)'}}>{mappings.length}</strong>
-                    <span style={{fontSize: 12, color: 'var(--text-muted)'}}>Courses Mapped</span>
-                  </div>
-               </div>
-            </div>
-         </div>
-         
-         <div className="panel glass-panel panel-accent">
-            <div className="panel-header">
-               <h2 className="panel-title"><i className="fa-solid fa-graduation-cap text-warning"></i> Classroom Polling Logs</h2>
-               <span className="badge badge-warning">{classroomNotifs.length} items queued</span>
-            </div>
-            <div className="notification-stream" style={{padding: '0 24px 24px'}}>
-               <div style={{display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10}}>
-                  <strong style={{fontSize: 13, color: 'var(--text-muted)'}}>Saved mappings</strong>
-                  {mappings.length === 0 ? (
-                     <div style={{fontSize: 13, color: 'var(--text-faint)'}}>No Classroom courses mapped yet.</div>
-                  ) : mappings.map(mapping => (
-                     <div key={mapping.id} style={{padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg)', display: 'flex', justifyContent: 'space-between', gap: 12}}>
-                        <div style={{minWidth: 0}}>
-                           <div style={{fontSize: 14, fontWeight: 600}}>{mapping.source_name || mapping.source_reference_id}</div>
-                           <div style={{fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere'}}>{mapping.source_reference_id}</div>
-                        </div>
-                        <span className="badge badge-warning" style={{alignSelf: 'center', whiteSpace: 'nowrap'}}>{mapping.course_code}</span>
-                     </div>
-                  ))}
-               </div>
-
-            {!oauthStatus ? (
-               <div style={{color: 'var(--urgent)', padding: 16, background: 'var(--urgent-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--urgent)', fontSize: 14}}>
-                  <strong>WARNING:</strong> Missing global OAuth tokens. Target stream unavailable.
-               </div>
-            ) : classroomNotifs.length === 0 ? (
-                <div style={{color: 'var(--text-muted)', fontSize: 13}}>No recent data from this vector.</div>
+        <div className="panel glass-panel panel-accent">
+          <div className="panel-header">
+            <h2 className="panel-title"><i className="fa-solid fa-graduation-cap text-warning"></i> Classroom Logs</h2>
+            <span className="badge badge-warning">{displayedLogs.length} items</span>
+          </div>
+          <div className="integration-panel-body">
+            <div className="integration-filter-row">{FILTERS.map(([key, label]) => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}</button>)}</div>
+            {loadingLogs && !logs.length ? <SkeletonRows /> : !connected ? (
+              <div className="integration-empty"><i className="fa-brands fa-google"></i><span>Connect Google above to see Classroom notifications here.</span></div>
+            ) : displayedLogs.length === 0 ? (
+              <div className="integration-empty"><i className="fa-brands fa-google"></i><span>No Classroom messages yet. Click "Refresh" to pull data.</span></div>
             ) : (
-                classroomNotifs.map(n => (
-                   <div className="notif-item" key={n.id}>
-                      <div className="notif-icon-wrap classroom" style={{background: 'var(--surface-hover)', color: 'var(--warning)'}}>
-                        <i className="fa-brands fa-google"></i>
+              <div className="integration-log-list">
+                {displayedLogs.map((item) => {
+                  const urgent = ['high', 'critical'].includes(String(item.urgency_level || item.urgency_label || '').toLowerCase());
+                  return (
+                    <div className="integration-log-card" key={item.id}>
+                      <button className="integration-expand" onClick={() => setExpanded((cur) => ({ ...cur, [item.id]: !cur[item.id] }))}>{expanded[item.id] ? '⌃' : '⌄'}</button>
+                      <div className="integration-log-top">
+                        <span className="integration-badge">{item.category || 'classroom'}</span>
+                        <span className="integration-course">{item.short_name || item.course_code || item.course_name || item.sender_name || 'Classroom'}</span>
+                        {urgent && <span className={`integration-urgency ${item.urgency_level || item.urgency_label}`}>{item.urgency_level || item.urgency_label}</span>}
+                        <span className="integration-time">{formatRelativeTime(item.received_at || item.created_at)}</span>
                       </div>
-                      <div className="notif-content">
-                         <div className="notif-header">
-                            <span className="notif-sender">{n.sender}</span>
-                            <span className="notif-time">{n.time}</span>
-                         </div>
-                         <h4 className="notif-title">{n.title}</h4>
-                         <p className="notif-preview">{n.preview}</p>
-                      </div>
-                   </div>
-                ))
+                      <strong>{titleFromText(item.message_text)}</strong>
+                      {item.deadline && <small>Due: {formatDue(item.deadline)}</small>}
+                      {expanded[item.id] && (
+                        <>
+                          <p>{String(item.expanded_text || item.message_text || '').slice(0, 300)}</p>
+                          <AttachmentList attachments={item.attachments} compact />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            </div>
-         </div>
+            {connected && hasMore && <button className="btn btn-outline integration-load-more" onClick={() => loadLogs(offset, true)} disabled={loadingLogs}>Load more</button>}
+          </div>
+        </div>
       </div>
+      <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'success' })} />
     </div>
-  )
+  );
 }

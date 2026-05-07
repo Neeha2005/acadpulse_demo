@@ -10,8 +10,11 @@ import {
 } from 'react'
 
 const AppContext = createContext()
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8005'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
+const THEME_STORAGE_KEY = 'acadpulse_theme'
+const URGENCY_REFRESH_COOLDOWN_MS = 60 * 1000
+const BACKGROUND_DATA_REFRESH_MS = 60 * 1000
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
 
@@ -172,6 +175,7 @@ function extractNotificationPreview(messageText) {
 
 function buildUiNotification(notification) {
   const meta = getSourceMeta(notification.source_type)
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : []
   return {
     id: String(notification.id),
     backendId: String(notification.id),
@@ -190,6 +194,8 @@ function buildUiNotification(notification) {
     deadline: notification.deadline || null,
     category: notification.category || null,
     urgencyLabel: notification.urgency_label || 'none',
+    attachments,
+    attachmentCount: attachments.length,
   }
 }
 
@@ -227,6 +233,7 @@ function buildTaskFromNotification(notification) {
     icon: meta.icon,
     iconFamily: meta.iconFamily,
     isCompleted: Boolean(notification.is_completed),
+    attachments: Array.isArray(notification.attachments) ? notification.attachments : [],
   }
 }
 
@@ -237,8 +244,18 @@ export function AppProvider({ children }) {
   const [activeTaskModal, setActiveTaskModal] = useState(null)
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('acadpulse_token'))
   const [authReady, setAuthReady] = useState(false)
+  const [dataLoading, setDataLoading] = useState(true)
   const [authUser, setAuthUser] = useState(() => (authToken ? getStoredUser() : null))
+  const [googleConnected, setGoogleConnected] = useState(false)
+  const [whatsappStatus, setWhatsappStatus] = useState('unknown')
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
+  const userRef = useRef(user)
+  const lastUrgencyRefreshAtRef = useRef(0)
+
+  useEffect(() => {
+    localStorage.setItem(THEME_STORAGE_KEY, 'dark')
+    document.documentElement.setAttribute('data-theme', 'dark')
+  }, [])
 
   const persistUser = useCallback((nextUser) => {
     localStorage.setItem('acadpulse_user_id', nextUser.id || '')
@@ -246,6 +263,7 @@ export function AppProvider({ children }) {
     localStorage.setItem('acadpulse_user_email', nextUser.email || '')
     localStorage.setItem('acadpulse_user_phone', nextUser.phone || '')
     if (nextUser.university) localStorage.setItem('acadpulse_university', nextUser.university)
+    userRef.current = nextUser
     setUser(nextUser)
     setAuthUser(nextUser)
   }, [])
@@ -269,16 +287,17 @@ export function AppProvider({ children }) {
   const completeLoginSession = useCallback((token, nextUser) => {
     localStorage.setItem('acadpulse_token', token)
     setAuthToken(token)
+    const cur = userRef.current
     persistUser({
       id: nextUser.id || '',
       fullName: nextUser.name || nextUser.fullName || 'Scholar',
       email: nextUser.email || '',
-      phone: nextUser.phone || user.phone,
-      university: nextUser.university || user.university || '',
-      degree: nextUser.degree || user.degree || '',
-      semester: nextUser.semester || user.semester || '',
+      phone: nextUser.phone || cur.phone,
+      university: nextUser.university || cur.university || '',
+      degree: nextUser.degree || cur.degree || '',
+      semester: nextUser.semester || cur.semester || '',
     })
-  }, [persistUser, user])
+  }, [persistUser])
 
   const apiFetch = useCallback(
     async (path, options = {}, requireAuth = true) => {
@@ -287,7 +306,7 @@ export function AppProvider({ children }) {
         headers.set('Content-Type', 'application/json')
       }
 
-      if (requireAuth && authToken) {
+      if (authToken && (requireAuth || authToken)) {
         headers.set('Authorization', `Bearer ${authToken}`)
       }
 
@@ -327,14 +346,15 @@ export function AppProvider({ children }) {
 
     try {
       const payload = await apiFetch('/auth/me')
+      const cur = userRef.current
       const nextUser = {
         id: payload.user.id,
         fullName: payload.user.name,
         email: payload.user.email,
-        phone: payload.user.phone || user.phone,
-        university: payload.user.university || user.university || '',
-        degree: payload.user.degree || user.degree || '',
-        semester: payload.user.semester || user.semester || '',
+        phone: payload.user.phone || cur.phone,
+        university: payload.user.university || cur.university || '',
+        degree: payload.user.degree || cur.degree || '',
+        semester: payload.user.semester || cur.semester || '',
       }
       persistUser(nextUser)
       setAuthReady(true)
@@ -346,10 +366,38 @@ export function AppProvider({ children }) {
       setAuthReady(true)
       return null
     }
-  }, [apiFetch, authToken, clearAuthSession, persistUser, user])
+  }, [apiFetch, authToken, clearAuthSession, persistUser])
 
-  const refreshNotifications = useCallback(async () => {
-    const payload = await apiFetch('/notifications?include_completed=true&limit=200', {}, false)
+  const refreshUrgency = useCallback(async (overrideUserId, force = false) => {
+    const uid = overrideUserId || authUser?.id
+    if (!uid || !authToken) return null
+
+    const now = Date.now()
+    if (!force && now - lastUrgencyRefreshAtRef.current < URGENCY_REFRESH_COOLDOWN_MS) {
+      return null
+    }
+
+    lastUrgencyRefreshAtRef.current = now
+    try {
+      return await apiFetch(`/urgency/refresh?user_id=${encodeURIComponent(uid)}`)
+    } catch (error) {
+      lastUrgencyRefreshAtRef.current = 0
+      throw error
+    }
+  }, [apiFetch, authToken, authUser?.id])
+
+  const refreshNotifications = useCallback(async (overrideUserId) => {
+    const uid = overrideUserId || authUser?.id
+    if (uid && authToken) {
+      try {
+        await refreshUrgency(uid)
+      } catch (error) {
+        console.warn('Failed to refresh urgency before loading notifications:', error)
+      }
+    }
+    const params = new URLSearchParams({ include_completed: 'true', limit: '200' })
+    if (uid) params.set('user_id', uid)
+    const payload = await apiFetch(`/notifications?${params}`, {}, Boolean(uid))
     const backendRows = Array.isArray(payload?.notifications) ? payload.notifications : []
     const nextNotifications = backendRows.map(buildUiNotification)
     const nextTasks = sortTasksByPriority(backendRows.map(buildTaskFromNotification).filter(Boolean))
@@ -359,17 +407,52 @@ export function AppProvider({ children }) {
       notifications: nextNotifications,
       tasks: nextTasks,
     }
-  }, [apiFetch])
+  }, [apiFetch, authToken, authUser?.id, refreshUrgency])
 
   useEffect(() => {
     refreshAuthenticatedUser()
   }, [refreshAuthenticatedUser])
 
+  // Fetch integration connection statuses when authenticated
   useEffect(() => {
-    refreshNotifications().catch((error) => {
-      console.error('Failed to load notifications from backend:', error)
-    })
-  }, [refreshNotifications])
+    if (!authToken || !authReady) return
+    const uid = authUser?.id || userRef.current?.id || localStorage.getItem('acadpulse_user_id') || ''
+    const refreshIntegrationStatuses = () => {
+      apiFetch('/google/status').then(payload => {
+      setGoogleConnected(Boolean(payload?.connected))
+    }).catch(() => {})
+      const whatsappPath = uid ? `/whatsapp/status?user_id=${encodeURIComponent(uid)}` : '/whatsapp/status'
+      apiFetch(whatsappPath, {}, false).then(payload => {
+      setWhatsappStatus(payload?.whatsapp?.status || 'unknown')
+    }).catch(() => {})
+    }
+    refreshIntegrationStatuses()
+    window.addEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
+    return () => window.removeEventListener('acadpulse:integration-status-refresh', refreshIntegrationStatuses)
+  }, [authToken, authReady, apiFetch, authUser?.id])
+
+  useEffect(() => {
+    if (!authToken) {
+      setDataLoading(false)
+      return
+    }
+    setDataLoading(true)
+    refreshNotifications()
+      .catch((error) => {
+        console.error('Failed to load notifications from backend:', error)
+      })
+      .finally(() => {
+        setDataLoading(false)
+      })
+  }, [refreshNotifications, authToken])
+
+  useEffect(() => {
+    if (!authToken || !authReady) return undefined
+    const intervalId = window.setInterval(() => {
+      refreshNotifications().catch(() => {})
+    }, BACKGROUND_DATA_REFRESH_MS)
+    return () => window.clearInterval(intervalId)
+  }, [authReady, authToken, refreshNotifications])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -389,7 +472,7 @@ export function AppProvider({ children }) {
     }
 
     tasks
-      .filter((task) => !task.isCompleted && ['high', 'critical'].includes(task.urgencyLabel))
+      .filter((task) => !task.isCompleted && ['high', 'critical', 'overdue'].includes(task.urgencyLabel))
       .forEach((task) => {
         const notificationKey = String(task.backendId || task.id)
         if (notifiedTaskIdsRef.current.has(notificationKey)) {
@@ -461,6 +544,7 @@ export function AppProvider({ children }) {
       {
         method: 'POST',
         body: JSON.stringify({
+          user_id: taskInput.user_id || authUser?.id || userRef.current?.id || undefined,
           title: taskInput.title,
           course: taskInput.course || '',
           description: taskInput.content || '',
@@ -486,7 +570,7 @@ export function AppProvider({ children }) {
 
     await refreshNotifications()
     return null
-  }, [apiFetch, refreshNotifications])
+  }, [apiFetch, refreshNotifications, authUser?.id])
 
   const completeTask = useCallback(async (task) => {
     if (task?.backendId) {
@@ -519,6 +603,7 @@ export function AppProvider({ children }) {
       authUser,
       authToken,
       authReady,
+      dataLoading,
       isAuthenticated: Boolean(authToken),
       activeTaskModal,
       setActiveTaskModal,
@@ -533,7 +618,10 @@ export function AppProvider({ children }) {
       apiFetch,
       completeLoginSession,
       refreshAuthenticatedUser,
+      refreshUrgency,
       refreshNotifications,
+      googleConnected,
+      whatsappStatus,
     }),
     [
       tasks,
@@ -542,6 +630,7 @@ export function AppProvider({ children }) {
       authUser,
       authToken,
       authReady,
+      dataLoading,
       activeTaskModal,
       addTask,
       createManualTask,
@@ -554,7 +643,10 @@ export function AppProvider({ children }) {
       apiFetch,
       completeLoginSession,
       refreshAuthenticatedUser,
+      refreshUrgency,
       refreshNotifications,
+      googleConnected,
+      whatsappStatus,
     ],
   )
 

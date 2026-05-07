@@ -8,14 +8,14 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 def get_db_connection():
-    """Establish a connection to the Supabase PostgreSQL database."""
+    """Establish a connection to the PostgreSQL database."""
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),
         database=os.getenv("DB_NAME", "postgres"),
         user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASSWORD", "postgres"),
         port=os.getenv("DB_PORT", "5432"),
-        sslmode="require"  # Supabase requires SSL for remote connections
+        sslmode=os.getenv("DB_SSLMODE", "prefer"),
     )
     return conn
 def insert_notification(
@@ -41,8 +41,8 @@ def insert_notification(
             INSERT INTO notifications (
                 user_id, source_type, external_message_id, sender_name, 
                 message_text, category, received_at, course_id, source_reference_id, 
-                deadline, urgency_level, expanded_text
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                deadline, urgency_level
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, source_type, external_message_id) DO NOTHING
             RETURNING id;
             """,
@@ -58,7 +58,6 @@ def insert_notification(
                 source_ref,
                 deadline,
                 urgency_level,
-                expanded_text or text,
             )
         )
         result = cur.fetchone()
@@ -136,7 +135,7 @@ def get_pending_deadline_notifications(user_id):
     try:
         cur.execute(
             """
-            SELECT id, deadline, urgency_label
+            SELECT id, deadline, urgency_level AS urgency_label
             FROM notifications
             WHERE user_id = %s
               AND is_completed = FALSE
@@ -179,13 +178,11 @@ def update_notification_urgency(notification_id, score, label):
         cur.execute(
             """
             UPDATE notifications
-            SET urgency_score = %s,
-                urgency_label = %s,
-                urgency_level = NULLIF(%s, 'none')
+            SET urgency_level = NULLIF(%s, 'none')
             WHERE id = %s
             RETURNING id;
             """,
-            (score, label, label, notification_id),
+            (label, notification_id),
         )
         updated = cur.fetchone() is not None
         conn.commit()
@@ -198,7 +195,7 @@ def update_notification_urgency(notification_id, score, label):
         cur.close()
         conn.close()
 
-def update_notification_completion(notification_id, completed=True):
+def update_notification_completion(notification_id, completed=True, user_id=None):
     """Update completion status. Returns the updated row or None if not found."""
     if not notification_id:
         return None
@@ -206,11 +203,17 @@ def update_notification_completion(notification_id, completed=True):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        user_filter = "AND user_id = %s" if user_id else ""
+        params = [completed, notification_id]
+        if user_id:
+            params.append(user_id)
+
         cur.execute(
-            """
+            f"""
             UPDATE notifications
             SET is_completed = %s
             WHERE id = %s
+              {user_filter}
             RETURNING
                 id,
                 user_id,
@@ -219,13 +222,12 @@ def update_notification_completion(notification_id, completed=True):
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
+                urgency_level,
                 is_completed,
                 received_at,
                 created_at;
             """,
-            (completed, notification_id),
+            params,
         )
         row = cur.fetchone()
         conn.commit()
@@ -286,8 +288,6 @@ def update_notification_fields(
                 message_text,
                 category,
                 deadline,
-                urgency_score,
-                urgency_label,
                 urgency_level,
                 is_completed,
                 received_at,
@@ -370,7 +370,7 @@ def get_course_by_name(course_name, user_id):
         cur.close()
         conn.close()
 
-def list_notifications(user_id=None, include_completed=False, source_type=None, limit=100):
+def list_notifications(user_id=None, include_completed=False, source_type=None, limit=100, offset=0):
     """Fetch notifications with optional filters for dashboard sync."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -393,7 +393,7 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         if clauses:
             where_sql = "WHERE " + " AND ".join(clauses)
 
-        params.append(limit)
+        params.extend([limit, offset])
 
         cur.execute(
             f"""
@@ -411,8 +411,6 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
                 n.message_text,
                 n.category,
                 n.deadline,
-                n.urgency_score,
-                n.urgency_label,
                 n.urgency_level,
                 n.is_completed,
                 n.received_at,
@@ -421,15 +419,104 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
             LEFT JOIN courses c ON c.id = n.course_id
             {where_sql}
             ORDER BY
-                CASE WHEN n.deadline IS NULL THEN 1 ELSE 0 END,
-                n.deadline ASC NULLS LAST,
                 n.received_at DESC NULLS LAST,
                 n.created_at DESC
-            LIMIT %s;
+            LIMIT %s OFFSET %s;
             """,
             params,
         )
         return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def ensure_attachments_schema():
+    """Create the attachments table if it does not exist yet."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attachments (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_notification_id
+            ON attachments(notification_id);
+            """
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def insert_attachment(notification_id, file_name, file_path, file_type=""):
+    """Persist one attachment record for a notification."""
+    if not notification_id or not file_name:
+        return None
+
+    ensure_attachments_schema()
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            INSERT INTO attachments (notification_id, file_name, file_path, file_type)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, notification_id, file_name, file_path, file_type;
+            """,
+            (notification_id, file_name, file_path or "", file_type or ""),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_attachments_for_notifications(notification_ids):
+    """Fetch attachments grouped by notification ID for a list of notifications."""
+    ids = [str(notification_id) for notification_id in (notification_ids or []) if notification_id]
+    if not ids:
+        return {}
+
+    ensure_attachments_schema()
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, notification_id, file_name, file_path, file_type
+            FROM attachments
+            WHERE notification_id = ANY(%s::uuid[])
+            ORDER BY file_name ASC, id ASC;
+            """,
+            (ids,),
+        )
+        grouped = {}
+        for row in cur.fetchall():
+            key = str(row["notification_id"])
+            grouped.setdefault(key, []).append(row)
+        return grouped
     finally:
         cur.close()
         conn.close()
@@ -617,7 +704,35 @@ def upsert_course(course_code, course_name, aliases=None, user_id=None, short_na
     replace_course_aliases(course_id, aliases or [])
     return course_id
 
-def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False):
+def ensure_whatsapp_group_selection_schema(cur):
+    """Keep older databases compatible with per-user WhatsApp group selection."""
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS is_selected BOOLEAN NOT NULL DEFAULT TRUE;
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS is_ignored BOOLEAN NOT NULL DEFAULT FALSE;
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE user_whatsapp_groups
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        """
+    )
+
+
+def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=False, selected=False):
     """Store a WhatsApp group seen by the bridge and optionally attach it to a user."""
     if not group_id:
         return None
@@ -639,13 +754,27 @@ def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=Fa
         whatsapp_group_pk = cur.fetchone()[0]
 
         if user_id:
+            ensure_whatsapp_group_selection_schema(cur)
             cur.execute(
                 """
-                INSERT INTO user_whatsapp_groups (user_id, whatsapp_group_id)
-                VALUES (%s, %s)
-                ON CONFLICT DO NOTHING;
+                INSERT INTO user_whatsapp_groups (
+                    user_id, whatsapp_group_id, is_selected, is_ignored, detected_at, updated_at
+                )
+                VALUES (%s, %s, %s, FALSE, NOW(), NOW())
+                ON CONFLICT (user_id, whatsapp_group_id) DO UPDATE
+                SET
+                    is_selected = CASE
+                        WHEN EXCLUDED.is_selected THEN TRUE
+                        WHEN user_whatsapp_groups.is_ignored THEN FALSE
+                        ELSE user_whatsapp_groups.is_selected
+                    END,
+                    is_ignored = CASE
+                        WHEN EXCLUDED.is_selected THEN FALSE
+                        ELSE user_whatsapp_groups.is_ignored
+                    END,
+                    updated_at = NOW();
                 """,
-                (user_id, whatsapp_group_pk),
+                (user_id, whatsapp_group_pk, bool(selected)),
             )
 
         conn.commit()
@@ -658,8 +787,8 @@ def record_whatsapp_group(group_id, group_name=None, user_id=None, is_general=Fa
         cur.close()
         conn.close()
 
-def list_whatsapp_groups(user_id=None):
-    """Return WhatsApp groups from saved groups and previously stored notifications."""
+def list_whatsapp_groups(user_id=None, selected_only=True):
+    """Return selected WhatsApp groups for mapping/dashboard use."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
@@ -667,8 +796,21 @@ def list_whatsapp_groups(user_id=None):
         group_user_filter = ""
         notification_user_filter = ""
         if user_id:
-            group_user_filter = "WHERE uwg.user_id = %s OR uwg.user_id IS NULL"
-            notification_user_filter = "AND n.user_id = %s"
+            ensure_whatsapp_group_selection_schema(cur)
+            selection_filter = "AND uwg.is_selected = TRUE AND uwg.is_ignored = FALSE" if selected_only else "AND uwg.is_ignored = FALSE"
+            group_user_filter = f"WHERE uwg.user_id = %s {selection_filter}"
+            notification_user_filter = """
+                  AND n.user_id = %s
+                  AND EXISTS (
+                      SELECT 1
+                      FROM whatsapp_groups nwg
+                      JOIN user_whatsapp_groups nuwg ON nuwg.whatsapp_group_id = nwg.id
+                      WHERE nuwg.user_id = n.user_id
+                        AND nwg.whatsapp_group_id = n.source_reference_id
+                        AND nuwg.is_selected = TRUE
+                        AND nuwg.is_ignored = FALSE
+                  )
+            """ if selected_only else "AND n.user_id = %s"
             params.extend([user_id, user_id])
 
         cur.execute(
@@ -678,9 +820,11 @@ def list_whatsapp_groups(user_id=None):
                     wg.whatsapp_group_id AS group_id,
                     wg.group_name,
                     wg.is_general,
+                    COALESCE(uwg.is_selected, FALSE) AS is_selected,
+                    COALESCE(uwg.is_ignored, FALSE) AS is_ignored,
                     'saved' AS source
                 FROM whatsapp_groups wg
-                LEFT JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
+                JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
                 {group_user_filter}
             ),
             notification_groups AS (
@@ -688,6 +832,8 @@ def list_whatsapp_groups(user_id=None):
                     n.source_reference_id AS group_id,
                     COALESCE(n.source_reference_id, 'WhatsApp group') AS group_name,
                     FALSE AS is_general,
+                    TRUE AS is_selected,
+                    FALSE AS is_ignored,
                     'notifications' AS source
                 FROM notifications n
                 WHERE n.source_type = 'whatsapp'
@@ -698,6 +844,8 @@ def list_whatsapp_groups(user_id=None):
                 group_id,
                 group_name,
                 is_general,
+                is_selected,
+                is_ignored,
                 source
             FROM (
                 SELECT * FROM saved_groups
@@ -710,6 +858,117 @@ def list_whatsapp_groups(user_id=None):
             params,
         )
         return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_detected_whatsapp_groups(user_id):
+    """Return all non-ignored WhatsApp groups detected for a specific user."""
+    if not user_id:
+        return []
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            SELECT
+                wg.whatsapp_group_id AS group_id,
+                wg.group_name,
+                wg.is_general,
+                uwg.is_selected,
+                uwg.is_ignored,
+                uwg.detected_at,
+                uwg.updated_at,
+                'detected' AS source
+            FROM user_whatsapp_groups uwg
+            JOIN whatsapp_groups wg ON wg.id = uwg.whatsapp_group_id
+            WHERE uwg.user_id = %s
+              AND uwg.is_ignored = FALSE
+            ORDER BY uwg.is_selected DESC, wg.group_name ASC;
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def save_user_whatsapp_group_selection(user_id, group_ids):
+    """Mark selected groups for a user and ignore all other detected groups."""
+    selected_ids = [str(group_id).strip() for group_id in (group_ids or []) if str(group_id or "").strip()]
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            UPDATE user_whatsapp_groups
+            SET is_selected = FALSE,
+                is_ignored = TRUE,
+                updated_at = NOW()
+            WHERE user_id = %s;
+            """,
+            (user_id,),
+        )
+        if selected_ids:
+            cur.execute(
+                """
+                UPDATE user_whatsapp_groups uwg
+                SET is_selected = TRUE,
+                    is_ignored = FALSE,
+                    updated_at = NOW()
+                FROM whatsapp_groups wg
+                WHERE uwg.whatsapp_group_id = wg.id
+                  AND uwg.user_id = %s
+                  AND wg.whatsapp_group_id = ANY(%s);
+                """,
+                (user_id, selected_ids),
+            )
+        cur.execute(
+            """
+            DELETE FROM course_source_mappings csm
+            USING whatsapp_groups wg
+            JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
+            WHERE csm.user_id = %s
+              AND uwg.user_id = %s
+              AND csm.source_type = 'whatsapp'
+              AND csm.source_reference_id = wg.whatsapp_group_id
+              AND uwg.is_ignored = TRUE;
+            """,
+            (user_id, user_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+    return list_whatsapp_groups(user_id=user_id, selected_only=True)
+
+
+def is_user_whatsapp_group_selected(user_id, group_id):
+    if not user_id or not group_id:
+        return False
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            SELECT COALESCE(uwg.is_selected, FALSE) AND NOT COALESCE(uwg.is_ignored, FALSE)
+            FROM user_whatsapp_groups uwg
+            JOIN whatsapp_groups wg ON wg.id = uwg.whatsapp_group_id
+            WHERE uwg.user_id = %s
+              AND wg.whatsapp_group_id = %s;
+            """,
+            (user_id, group_id),
+        )
+        row = cur.fetchone()
+        return bool(row and row[0])
     finally:
         cur.close()
         conn.close()
@@ -901,13 +1160,6 @@ def get_or_create_user(full_name, email):
         new_user = cur.fetchone()
         conn.commit()
         
-        # Seed default abbreviations for new user
-        try:
-            from notification_abbr import seed_default_abbreviations
-            seed_default_abbreviations(new_user[0])
-        except Exception as e:
-            print(f"Error seeding abbreviations: {e}")
-            
         return new_user[0]
     finally:
         cur.close()
@@ -919,7 +1171,8 @@ def get_user_by_email(email):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE email = %s
             LIMIT 1
@@ -939,7 +1192,8 @@ def get_user_by_login(identifier):
     try:
         cur.execute(
             """
-            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester
+            SELECT id, full_name, email, whatsapp_number, password_hash, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE LOWER(email) = %s
                OR regexp_replace(COALESCE(whatsapp_number, ''), '\\D', '', 'g') = %s
@@ -983,7 +1237,8 @@ def get_user_by_id(user_id):
     try:
         cur.execute(
             """
-            SELECT id, full_name as name, email, university, degree, semester
+            SELECT id, full_name as name, email, university, degree, semester,
+                   whatsapp_connected, gmail_connected, classroom_connected
             FROM users
             WHERE id = %s
             LIMIT 1
@@ -1029,9 +1284,9 @@ def get_chatbot_context_data(user_id):
             """
             SELECT 
                 COUNT(*) FILTER (WHERE is_completed = false) as total_pending,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'critical') as critical_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'high') as high_count,
-                COUNT(*) FILTER (WHERE is_completed = false AND urgency_label = 'overdue') as overdue_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'critical') as critical_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'high') as high_count,
+                COUNT(*) FILTER (WHERE is_completed = false AND urgency_level = 'overdue') as overdue_count,
                 COUNT(*) FILTER (WHERE is_completed = false AND deadline::date = CURRENT_DATE) as due_today
             FROM notifications
             WHERE user_id = %s
@@ -1044,12 +1299,12 @@ def get_chatbot_context_data(user_id):
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.urgency_score, n.source_type as source
+                   n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label IN ('critical', 'high')
-            ORDER BY n.urgency_score DESC
+              AND n.urgency_level IN ('critical', 'high')
+            ORDER BY n.deadline ASC NULLS LAST
             LIMIT 10
             """,
             (user_id,)
@@ -1060,11 +1315,11 @@ def get_chatbot_context_data(user_id):
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
-                   n.deadline, n.urgency_label as urgency, n.source_type as source
+                   n.deadline, n.urgency_level as urgency, n.source_type as source
             FROM notifications n
             LEFT JOIN courses c ON n.course_id = c.id
             WHERE n.user_id = %s AND n.is_completed = false 
-              AND n.urgency_label NOT IN ('critical', 'high', 'overdue')
+              AND COALESCE(n.urgency_level, 'none') NOT IN ('critical', 'high', 'overdue')
             ORDER BY n.deadline ASC NULLS LAST
             LIMIT 15
             """,
@@ -1134,10 +1389,6 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
         user_id = cur.fetchone()[0]
         conn.commit()
         
-        # Seed default abbreviations for new user
-        from notification_abbr import seed_default_abbreviations
-        seed_default_abbreviations(user_id)
-        
         return user_id
     except Exception:
         conn.rollback()
@@ -1145,6 +1396,98 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
     finally:
         cur.close()
         conn.close()
+
+def get_timetable_slots(user_id):
+    """Get all class schedule slots for a user, joined with course info."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT t.id, t.user_id, t.course_id, t.day_of_week, t.start_time, t.end_time, t.room_number,
+                   c.course_code, c.course_name, c.short_name
+            FROM timetable_entries t
+            LEFT JOIN courses c ON t.course_id = c.id
+            WHERE t.user_id = %s
+            ORDER BY t.day_of_week, t.start_time
+            """,
+            (user_id,),
+        )
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_timetable_slot(user_id, course_id, day_of_week, start_time, end_time, room_number=None):
+    """Insert a new class schedule slot."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            INSERT INTO timetable_entries (user_id, course_id, day_of_week, start_time, end_time, room_number)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, user_id, course_id, day_of_week, start_time, end_time, room_number
+            """,
+            (user_id, course_id, day_of_week, start_time, end_time, room_number),
+        )
+        conn.commit()
+        return cur.fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_timetable_slot(slot_id, user_id, course_id=None, day_of_week=None, start_time=None, end_time=None, room_number=None):
+    """Update fields on a class schedule slot owned by user_id."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            UPDATE timetable_entries
+            SET course_id    = COALESCE(%s, course_id),
+                day_of_week  = COALESCE(%s, day_of_week),
+                start_time   = COALESCE(%s, start_time),
+                end_time     = COALESCE(%s, end_time),
+                room_number  = COALESCE(%s, room_number)
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, course_id, day_of_week, start_time, end_time, room_number
+            """,
+            (course_id, day_of_week, start_time, end_time, room_number, slot_id, user_id),
+        )
+        conn.commit()
+        return cur.fetchone()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_timetable_slot(slot_id, user_id):
+    """Delete a class schedule slot owned by user_id. Returns True if deleted."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM timetable_entries WHERE id = %s AND user_id = %s RETURNING id",
+            (slot_id, user_id),
+        )
+        conn.commit()
+        return cur.fetchone() is not None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
 
 def notification_exists(external_id, source_type, user_id=None):
     """Check if a notification with the given source identity exists.

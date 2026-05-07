@@ -8,6 +8,8 @@ env/
 backend/.tmp/
 backend/credentials.json
 backend/token.json
+backend/google_tokens/
+backend/whatsapp_status_state.json
 .env
 *.egg-info/
 
@@ -23,6 +25,8 @@ whatsapp/auth/
 whatsapp/auth_info/
 whatsapp/queue/
 whatsapp/sessions/
+whatsapp/sessions-current/
+whatsapp/sessions-onboarding-fresh/
 whatsapp/baileys_store.json
 whatsapp/selected_groups.json
 whatsapp/*.log
@@ -57,3 +61,4 @@ desktop.ini
 .idea/
 *.suo
 *.user
+*.pyc
