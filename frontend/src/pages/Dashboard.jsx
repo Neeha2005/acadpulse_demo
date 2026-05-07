@@ -53,8 +53,7 @@ export default function Dashboard() {
           <h1 className="hero-title">Welcome back, <span className="accent">{firstName}</span>.</h1>
           <p>
             You have <strong className="text-warning">{urgentCount} active deadlines</strong>,
-            <strong className="text-warning"> {risingCount} items rising</strong>, and
-            <strong className="text-warning"> {messageCount} live notifications</strong>.
+            <strong className="text-warning"> {risingCount} items rising</strong>.
           </p>
         </div>
         <div className="hero-pill-group">
@@ -89,14 +88,6 @@ export default function Dashboard() {
           </div>
           <div className="stat-value stat-value-pending">{pendingCount}</div>
           <div className="stat-label">Pending Assignments</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-brands fa-whatsapp"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">Live backend feed</div>
-          </div>
-          <div className="stat-value stat-value-messages">{messageCount}</div>
-          <div className="stat-label">Unread Messages</div>
         </div>
       </div>
 

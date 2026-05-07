@@ -81,89 +81,89 @@ export default function Signup() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <div className="auth-signup-grid">
-          <div className="auth-field-group wide">
-            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.name ? 'has-error' : ''}`}>
-              <User size={16} className="auth-field-icon" />
-              <input
-                id="signup-name"
-                type="text"
-                placeholder=" "
-                value={form.name}
-                onChange={(event) => updateField('name', event.target.value)}
-              />
-              <label htmlFor="signup-name" className="auth-float-label">Full name</label>
+            <div className="auth-field-group wide">
+              <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.name ? 'has-error' : ''}`}>
+                <User size={16} className="auth-field-icon" />
+                <input
+                  id="signup-name"
+                  type="text"
+                  placeholder=" "
+                  value={form.name}
+                  onChange={(event) => updateField('name', event.target.value)}
+                />
+                <label htmlFor="signup-name" className="auth-float-label">Full name</label>
+              </div>
+              {fieldErrors.name && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.name}</span></div>}
             </div>
-            {fieldErrors.name && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.name}</span></div>}
-          </div>
 
-          <div className="auth-field-group">
-            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.phone ? 'has-error' : ''}`}>
-              <Phone size={16} className="auth-field-icon" />
-              <input
-                id="signup-phone"
-                type="text"
-                placeholder=" "
-                value={form.phone}
-                onChange={(event) => updateField('phone', event.target.value)}
-              />
-              <label htmlFor="signup-phone" className="auth-float-label">Phone number</label>
+            <div className="auth-field-group">
+              <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.phone ? 'has-error' : ''}`}>
+                <Phone size={16} className="auth-field-icon" />
+                <input
+                  id="signup-phone"
+                  type="text"
+                  placeholder=" "
+                  value={form.phone}
+                  onChange={(event) => updateField('phone', event.target.value)}
+                />
+                <label htmlFor="signup-phone" className="auth-float-label">Phone number</label>
+              </div>
+              {fieldErrors.phone && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.phone}</span></div>}
             </div>
-            {fieldErrors.phone && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.phone}</span></div>}
-          </div>
 
-          <div className="auth-field-group">
-            <div className="auth-input-wrap auth-float-wrap">
-              <Mail size={16} className="auth-field-icon" />
-              <input
-                id="signup-email"
-                type="email"
-                placeholder=" "
-                value={form.email}
-                onChange={(event) => updateField('email', event.target.value)}
-              />
-              <label htmlFor="signup-email" className="auth-float-label">
-                Email address <em style={{ fontStyle: 'normal', color: 'var(--text-faint)', fontWeight: 400 }}>optional</em>
-              </label>
+            <div className="auth-field-group">
+              <div className="auth-input-wrap auth-float-wrap">
+                <Mail size={16} className="auth-field-icon" />
+                <input
+                  id="signup-email"
+                  type="email"
+                  placeholder=" "
+                  value={form.email}
+                  onChange={(event) => updateField('email', event.target.value)}
+                />
+                <label htmlFor="signup-email" className="auth-float-label">
+                  Email address <span className="auth-label-helper">optional</span>
+                </label>
+              </div>
             </div>
-          </div>
 
-          <div className="auth-field-group">
-            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.university ? 'has-error' : ''}`}>
-              <School size={16} className="auth-field-icon" />
-              <input
-                id="signup-university"
-                type="text"
-                placeholder=" "
-                value={form.university}
-                onChange={(event) => updateField('university', event.target.value)}
-              />
-              <label htmlFor="signup-university" className="auth-float-label">University</label>
+            <div className="auth-field-group">
+              <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.university ? 'has-error' : ''}`}>
+                <School size={16} className="auth-field-icon" />
+                <input
+                  id="signup-university"
+                  type="text"
+                  placeholder=" "
+                  value={form.university}
+                  onChange={(event) => updateField('university', event.target.value)}
+                />
+                <label htmlFor="signup-university" className="auth-float-label">University</label>
+              </div>
+              {fieldErrors.university && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.university}</span></div>}
             </div>
-            {fieldErrors.university && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.university}</span></div>}
-          </div>
 
-          <div className="auth-field-group">
-            <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.password ? 'has-error' : ''}`}>
-              <Lock size={16} className="auth-field-icon" />
-              <input
-                id="signup-password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder=" "
-                value={form.password}
-                onChange={(event) => updateField('password', event.target.value)}
-              />
-              <label htmlFor="signup-password" className="auth-float-label">Password (min. 8 characters)</label>
-              <button
-                type="button"
-                className="auth-input-toggle"
-                onClick={() => setShowPassword((current) => !current)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
+            <div className="auth-field-group">
+              <div className={`auth-input-wrap auth-float-wrap ${fieldErrors.password ? 'has-error' : ''}`}>
+                <Lock size={16} className="auth-field-icon" />
+                <input
+                  id="signup-password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder=" "
+                  value={form.password}
+                  onChange={(event) => updateField('password', event.target.value)}
+                />
+                <label htmlFor="signup-password" className="auth-float-label">Password (min. 8 characters)</label>
+                <button
+                  type="button"
+                  className="auth-input-toggle"
+                  onClick={() => setShowPassword((current) => !current)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              {fieldErrors.password && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.password}</span></div>}
             </div>
-            {fieldErrors.password && <div className="auth-inline-error"><TriangleAlert size={14} /><span>{fieldErrors.password}</span></div>}
-          </div>
           </div>
 
           <button
