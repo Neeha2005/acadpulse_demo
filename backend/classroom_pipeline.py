@@ -18,20 +18,16 @@ def _main_helpers() -> Dict[str, Any]:
         calculate_urgency,
         classify_keyword,
         classify_with_fallback,
-        extract_deadlines_hybrid,
-        first_deadline_date,
+        extract_primary_deadline_llm_first,
         normalize_received_at,
-        parse_strict_deadline_datetime,
     )
 
     return {
         "calculate_urgency": calculate_urgency,
         "classify_keyword": classify_keyword,
         "classify_with_fallback": classify_with_fallback,
-        "extract_deadlines_hybrid": extract_deadlines_hybrid,
-        "first_deadline_date": first_deadline_date,
+        "extract_primary_deadline_llm_first": extract_primary_deadline_llm_first,
         "normalize_received_at": normalize_received_at,
-        "parse_strict_deadline_datetime": parse_strict_deadline_datetime,
     }
 
 
@@ -141,10 +137,8 @@ async def process_classroom_resource(
         calculate_urgency = helpers["calculate_urgency"]
         classify_keyword = helpers["classify_keyword"]
         classify_with_fallback = helpers["classify_with_fallback"]
-        extract_deadlines_hybrid = helpers["extract_deadlines_hybrid"]
-        first_deadline_date = helpers["first_deadline_date"]
+        extract_primary_deadline_llm_first = helpers["extract_primary_deadline_llm_first"]
         normalize_received_at = helpers["normalize_received_at"]
-        parse_strict_deadline_datetime = helpers["parse_strict_deadline_datetime"]
 
         # Step 1: Field extraction based on resource_type
         if resource_type == "announcement":
@@ -237,10 +231,7 @@ async def process_classroom_resource(
             if structured_deadline is not None:
                 deadline = structured_deadline
             elif category in {"assignment", "quiz", "announcement", "event"}:
-                deadline_candidates = extract_deadlines_hybrid(message_text)
-                first_deadline = first_deadline_date(deadline_candidates)
-                if first_deadline:
-                    deadline = parse_strict_deadline_datetime(first_deadline)
+                deadline = extract_primary_deadline_llm_first(message_text)
 
         # Step 6: Urgency calculation
         urgency_level = None

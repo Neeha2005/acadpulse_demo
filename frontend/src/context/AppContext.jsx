@@ -13,6 +13,8 @@ const AppContext = createContext()
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const DESKTOP_NOTIFIED_STORAGE_KEY = 'acadpulse_desktop_notified_v1'
 const THEME_STORAGE_KEY = 'acadpulse_theme'
+const URGENCY_REFRESH_COOLDOWN_MS = 60 * 1000
+const BACKGROUND_DATA_REFRESH_MS = 60 * 1000
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
 
@@ -173,6 +175,7 @@ function extractNotificationPreview(messageText) {
 
 function buildUiNotification(notification) {
   const meta = getSourceMeta(notification.source_type)
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : []
   return {
     id: String(notification.id),
     backendId: String(notification.id),
@@ -191,6 +194,8 @@ function buildUiNotification(notification) {
     deadline: notification.deadline || null,
     category: notification.category || null,
     urgencyLabel: notification.urgency_label || 'none',
+    attachments,
+    attachmentCount: attachments.length,
   }
 }
 
@@ -228,6 +233,7 @@ function buildTaskFromNotification(notification) {
     icon: meta.icon,
     iconFamily: meta.iconFamily,
     isCompleted: Boolean(notification.is_completed),
+    attachments: Array.isArray(notification.attachments) ? notification.attachments : [],
   }
 }
 
@@ -244,6 +250,7 @@ export function AppProvider({ children }) {
   const [whatsappStatus, setWhatsappStatus] = useState('unknown')
   const notifiedTaskIdsRef = useRef(new Set(getStoredNotifiedIds()))
   const userRef = useRef(user)
+  const lastUrgencyRefreshAtRef = useRef(0)
 
   useEffect(() => {
     localStorage.setItem(THEME_STORAGE_KEY, 'dark')
@@ -361,8 +368,33 @@ export function AppProvider({ children }) {
     }
   }, [apiFetch, authToken, clearAuthSession, persistUser])
 
+  const refreshUrgency = useCallback(async (overrideUserId, force = false) => {
+    const uid = overrideUserId || authUser?.id
+    if (!uid || !authToken) return null
+
+    const now = Date.now()
+    if (!force && now - lastUrgencyRefreshAtRef.current < URGENCY_REFRESH_COOLDOWN_MS) {
+      return null
+    }
+
+    lastUrgencyRefreshAtRef.current = now
+    try {
+      return await apiFetch(`/urgency/refresh?user_id=${encodeURIComponent(uid)}`)
+    } catch (error) {
+      lastUrgencyRefreshAtRef.current = 0
+      throw error
+    }
+  }, [apiFetch, authToken, authUser?.id])
+
   const refreshNotifications = useCallback(async (overrideUserId) => {
     const uid = overrideUserId || authUser?.id
+    if (uid && authToken) {
+      try {
+        await refreshUrgency(uid)
+      } catch (error) {
+        console.warn('Failed to refresh urgency before loading notifications:', error)
+      }
+    }
     const params = new URLSearchParams({ include_completed: 'true', limit: '200' })
     if (uid) params.set('user_id', uid)
     const payload = await apiFetch(`/notifications?${params}`, {}, Boolean(uid))
@@ -375,7 +407,7 @@ export function AppProvider({ children }) {
       notifications: nextNotifications,
       tasks: nextTasks,
     }
-  }, [apiFetch, authUser?.id])
+  }, [apiFetch, authToken, authUser?.id, refreshUrgency])
 
   useEffect(() => {
     refreshAuthenticatedUser()
@@ -415,6 +447,14 @@ export function AppProvider({ children }) {
   }, [refreshNotifications, authToken])
 
   useEffect(() => {
+    if (!authToken || !authReady) return undefined
+    const intervalId = window.setInterval(() => {
+      refreshNotifications().catch(() => {})
+    }, BACKGROUND_DATA_REFRESH_MS)
+    return () => window.clearInterval(intervalId)
+  }, [authReady, authToken, refreshNotifications])
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
       return
     }
@@ -432,7 +472,7 @@ export function AppProvider({ children }) {
     }
 
     tasks
-      .filter((task) => !task.isCompleted && ['high', 'critical'].includes(task.urgencyLabel))
+      .filter((task) => !task.isCompleted && ['high', 'critical', 'overdue'].includes(task.urgencyLabel))
       .forEach((task) => {
         const notificationKey = String(task.backendId || task.id)
         if (notifiedTaskIdsRef.current.has(notificationKey)) {
@@ -578,6 +618,7 @@ export function AppProvider({ children }) {
       apiFetch,
       completeLoginSession,
       refreshAuthenticatedUser,
+      refreshUrgency,
       refreshNotifications,
       googleConnected,
       whatsappStatus,
@@ -602,6 +643,7 @@ export function AppProvider({ children }) {
       apiFetch,
       completeLoginSession,
       refreshAuthenticatedUser,
+      refreshUrgency,
       refreshNotifications,
       googleConnected,
       whatsappStatus,

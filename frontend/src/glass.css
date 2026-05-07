@@ -1095,6 +1095,48 @@ body {
   border-radius: 999px;
 }
 
+.list-filter-grid {
+  padding: 0 24px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.list-filter-group {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  padding: 8px;
+}
+
+.list-filter-select {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+  padding: 0 14px;
+  outline: none;
+  box-shadow: var(--shadow-subtle);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.list-filter-select:focus {
+  border-color: rgba(56, 189, 248, 0.46);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+}
+
+.list-filter-select option {
+  background: #161922;
+  color: var(--text);
+}
+
 .empty-state {
   min-height: 170px;
   border: 1px dashed rgba(255, 255, 255, 0.1);
@@ -1258,6 +1300,10 @@ body {
   .panel-header {
     align-items: flex-start;
   }
+
+  .list-filter-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 620px) {
@@ -1296,6 +1342,16 @@ body {
   .notification-stream,
   .integration-panel-body {
     padding-inline: 14px !important;
+  }
+
+  .list-filter-grid {
+    grid-template-columns: 1fr;
+    padding-inline: 14px;
+  }
+
+  .list-filter-group,
+  .list-filter-select {
+    width: 100%;
   }
 
   .notif-item {

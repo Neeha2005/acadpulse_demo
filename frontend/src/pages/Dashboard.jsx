@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
+import AttachmentList from '../components/AttachmentList';
+import ClassScheduleSection from '../components/ClassScheduleSection';
 import TaskCard from '../components/TaskCard';
 import PageSkeleton from '../components/PageSkeleton';
 
@@ -172,10 +174,12 @@ export default function Dashboard() {
                   <div className="notif-header">
                     <span className="notif-sender">{n.sender}</span>
                     <span className={`source-mini-badge ${n.source}`}>{n.sourceLabel}</span>
+                    {n.attachmentCount > 0 && <span className="source-mini-badge" style={{ background: 'var(--surface-hover)', color: 'var(--text-muted)' }}>{n.attachmentCount} file{n.attachmentCount === 1 ? '' : 's'}</span>}
                     <span className="notif-time">{n.time}</span>
                   </div>
                   <h4 className="notif-title">{n.title}</h4>
                   <p className="notif-preview">{n.preview}</p>
+                  <AttachmentList attachments={n.attachments} compact />
                 </div>
               </div>
             )) : (
@@ -194,6 +198,13 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <ClassScheduleSection
+        apiFetch={apiFetch}
+        userId={user.id || localStorage.getItem('acadpulse_user_id') || ''}
+        title="Dashboard Timetable"
+        marginTop={24}
+      />
     </div>
   );
 }

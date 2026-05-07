@@ -140,27 +140,27 @@ export default function AssignmentsQuizzes() {
           </button>
         </div>
 
-        <div style={{ padding: '0 24px 16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+        <div className="list-filter-grid">
+          <div className="filters glass-pill-group list-filter-group">
             {TYPE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${typeFilter === filter ? 'active' : ''}`} onClick={() => setTypeFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {SOURCE_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
                 {filter}
               </button>
             ))}
           </div>
-          <select className="input-field" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+          <select className="list-filter-select" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
             {courseOptions.map((course) => (
               <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
             ))}
           </select>
-          <div className="filters glass-pill-group" style={{ flexWrap: 'wrap' }}>
+          <div className="filters glass-pill-group list-filter-group">
             {STATUS_FILTERS.map((filter) => (
               <button key={filter} className={`filter-btn glass-filter-pill ${statusFilter === filter ? 'active' : ''}`} onClick={() => setStatusFilter(filter)}>
                 {filter}

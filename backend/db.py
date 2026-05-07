@@ -430,6 +430,97 @@ def list_notifications(user_id=None, include_completed=False, source_type=None, 
         cur.close()
         conn.close()
 
+
+def ensure_attachments_schema():
+    """Create the attachments table if it does not exist yet."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attachments (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                notification_id UUID NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_attachments_notification_id
+            ON attachments(notification_id);
+            """
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def insert_attachment(notification_id, file_name, file_path, file_type=""):
+    """Persist one attachment record for a notification."""
+    if not notification_id or not file_name:
+        return None
+
+    ensure_attachments_schema()
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            INSERT INTO attachments (notification_id, file_name, file_path, file_type)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, notification_id, file_name, file_path, file_type;
+            """,
+            (notification_id, file_name, file_path or "", file_type or ""),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_attachments_for_notifications(notification_ids):
+    """Fetch attachments grouped by notification ID for a list of notifications."""
+    ids = [str(notification_id) for notification_id in (notification_ids or []) if notification_id]
+    if not ids:
+        return {}
+
+    ensure_attachments_schema()
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT id, notification_id, file_name, file_path, file_type
+            FROM attachments
+            WHERE notification_id = ANY(%s::uuid[])
+            ORDER BY file_name ASC, id ASC;
+            """,
+            (ids,),
+        )
+        grouped = {}
+        for row in cur.fetchall():
+            key = str(row["notification_id"])
+            grouped.setdefault(key, []).append(row)
+        return grouped
+    finally:
+        cur.close()
+        conn.close()
+
 def list_courses(user_id=None):
     """Fetch courses available to a user, including aliases where present."""
     conn = get_db_connection()
@@ -1069,13 +1160,6 @@ def get_or_create_user(full_name, email):
         new_user = cur.fetchone()
         conn.commit()
         
-        # Seed default abbreviations for new user
-        try:
-            from notification_abbr import seed_default_abbreviations
-            seed_default_abbreviations(new_user[0])
-        except Exception as e:
-            print(f"Error seeding abbreviations: {e}")
-            
         return new_user[0]
     finally:
         cur.close()
@@ -1305,10 +1389,6 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
         user_id = cur.fetchone()[0]
         conn.commit()
         
-        # Seed default abbreviations for new user
-        from notification_abbr import seed_default_abbreviations
-        seed_default_abbreviations(user_id)
-        
         return user_id
     except Exception:
         conn.rollback()
@@ -1320,7 +1400,7 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
 def get_timetable_slots(user_id):
     """Get all class schedule slots for a user, joined with course info."""
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
             """
@@ -1342,7 +1422,7 @@ def get_timetable_slots(user_id):
 def create_timetable_slot(user_id, course_id, day_of_week, start_time, end_time, room_number=None):
     """Insert a new class schedule slot."""
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
             """
@@ -1365,7 +1445,7 @@ def create_timetable_slot(user_id, course_id, day_of_week, start_time, end_time,
 def update_timetable_slot(slot_id, user_id, course_id=None, day_of_week=None, start_time=None, end_time=None, room_number=None):
     """Update fields on a class schedule slot owned by user_id."""
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
             """

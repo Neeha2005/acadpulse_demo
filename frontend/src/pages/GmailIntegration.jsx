@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
 
 const PAGE_SIZE = 20;
@@ -232,7 +233,12 @@ export default function GmailIntegration() {
                       <strong>{titleFromText(item.message_text)}</strong>
                       <small>{item.sender_name || 'Gmail'} {item.source_reference_id ? `- ${item.source_reference_id}` : ''}</small>
                       {item.deadline && <small>Due: {formatDue(item.deadline)}</small>}
-                      {expanded[item.id] && <p>{String(item.expanded_text || item.message_text || '').slice(0, 300)}</p>}
+                      {expanded[item.id] && (
+                        <>
+                          <p>{String(item.expanded_text || item.message_text || '').slice(0, 300)}</p>
+                          <AttachmentList attachments={item.attachments} compact />
+                        </>
+                      )}
                     </div>
                   );
                 })}

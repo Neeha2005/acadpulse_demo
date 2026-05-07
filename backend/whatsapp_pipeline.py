@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from db import get_db_connection, insert_notification, notification_exists
-from main import normalize_received_at
 
 
 logger = logging.getLogger(__name__)
@@ -32,9 +31,8 @@ def _main_helpers():
         classify_keyword,
         classify_with_fallback,
         classify_course_for_message,
-        extract_deadlines_hybrid,
-        first_deadline_date,
-        parse_strict_deadline_datetime,
+        extract_primary_deadline_llm_first,
+        normalize_received_at,
     )
 
     return {
@@ -42,9 +40,8 @@ def _main_helpers():
         "classify_keyword": classify_keyword,
         "classify_with_fallback": classify_with_fallback,
         "classify_course_for_message": classify_course_for_message,
-        "extract_deadlines_hybrid": extract_deadlines_hybrid,
-        "first_deadline_date": first_deadline_date,
-        "parse_strict_deadline_datetime": parse_strict_deadline_datetime,
+        "extract_primary_deadline_llm_first": extract_primary_deadline_llm_first,
+        "normalize_received_at": normalize_received_at,
     }
 
 
@@ -978,9 +975,8 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         classify_keyword = helpers["classify_keyword"]
         classify_with_fallback = helpers["classify_with_fallback"]
         classify_course_for_message = helpers["classify_course_for_message"]
-        extract_deadlines_hybrid = helpers["extract_deadlines_hybrid"]
-        first_deadline_date = helpers["first_deadline_date"]
-        parse_strict_deadline_datetime = helpers["parse_strict_deadline_datetime"]
+        extract_primary_deadline_llm_first = helpers["extract_primary_deadline_llm_first"]
+        normalize_received_at = helpers["normalize_received_at"]
 
         # Step 1: Extract batch metadata
         normalized_messages = batch.get("normalized_messages") or [batch.get("normalized_payload") or {}]
@@ -1102,10 +1098,7 @@ async def process_buffered_batch(batch: dict) -> Optional[uuid.UUID]:
         deadline = None
         if category != "material" and category in {"assignment", "quiz", "announcement", "event"}:
             deadline_source_text = media_context_text if has_media else combined_text
-            deadline_candidates = await asyncio.to_thread(extract_deadlines_hybrid, deadline_source_text)
-            first_deadline = first_deadline_date(deadline_candidates)
-            if first_deadline:
-                deadline = parse_strict_deadline_datetime(first_deadline)
+            deadline = await asyncio.to_thread(extract_primary_deadline_llm_first, deadline_source_text)
 
         # Step 8: Urgency calculation
         urgency_level = None

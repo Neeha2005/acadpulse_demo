@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
 
 export default function WhatsAppIntegration() {
@@ -449,10 +450,12 @@ export default function WhatsAppIntegration() {
                   <div className="notif-content">
                     <div className="notif-header">
                       <span className="notif-sender">{n.sender}</span>
+                      {n.attachmentCount > 0 && <span className="source-mini-badge" style={{ background: 'var(--surface-hover)', color: 'var(--text-muted)' }}>{n.attachmentCount} file{n.attachmentCount === 1 ? '' : 's'}</span>}
                       <span className="notif-time">{n.time}</span>
                     </div>
                     <h4 className="notif-title">{n.title}</h4>
                     <p className="notif-preview">{n.preview}</p>
+                    <AttachmentList attachments={n.attachments} compact />
                   </div>
                 </div>
               ))
