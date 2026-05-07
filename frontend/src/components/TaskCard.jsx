@@ -40,6 +40,8 @@ export default function TaskCard({ task }) {
   return (
     <div 
       className={`task-card ${task.urgency === 'urgent' ? 'urgent' : ''}`}
+      data-source={task.source}
+      data-urgency={urgencyLabel}
       style={{ opacity: completeState === 'fade' ? 0 : 1, transition: 'opacity 0.3s ease' }}
       onClick={(e) => {
         if(e.target.closest('button')) return;
@@ -54,7 +56,7 @@ export default function TaskCard({ task }) {
       <div className="task-footer">
         <span className={`task-source ${colorCls}`}><i className={`${iconFormat} ${task.icon}`}></i> {task.sourceLabel}</span>
         {urgencyLabel !== 'none' && <span className={`badge ${urgencyBadgeClass}`}>{urgencyLabel}</span>}
-        <button className="icon-btn complete-task-btn" style={{width: 28, height: 28, fontSize: 12}} onClick={handleComplete}>
+        <button className="icon-btn complete-task-btn" onClick={handleComplete}>
           {completeState === 'syncing' ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-check"></i>}
         </button>
       </div>

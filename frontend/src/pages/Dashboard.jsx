@@ -50,7 +50,7 @@ export default function Dashboard() {
     <div className="dashboard-scroll">
       <section className="hero-stats glass-banner">
         <div className="hero-orb"></div>
-        <div className="welcome-text">
+        <div className="welcome-text hero-copy">
           <span className="hero-kicker">STUDENT OPERATIONS</span>
           <h1 className="hero-title">Welcome back, <span className="accent">{firstName}</span>.</h1>
           <p>
@@ -73,25 +73,6 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
-
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-fire"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent"><i className="fa-solid fa-arrow-down"></i> live urgency</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{urgentCount}</div>
-          <div className="stat-label">Urgent Deadlines</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-clock-rotate-left"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending"><i className="fa-solid fa-arrow-up"></i> pending queue</div>
-          </div>
-          <div className="stat-value stat-value-pending">{pendingCount}</div>
-          <div className="stat-label">Pending Assignments</div>
-        </div>
-      </div>
 
       {isEmpty && authToken && (
         <div className="panel glass-panel panel-accent" style={{ marginTop: 0, marginBottom: 0 }}>
@@ -168,13 +149,13 @@ export default function Dashboard() {
           </div>
           <div className="notification-stream" style={{ padding: '0 24px 24px' }}>
             {filteredNotifs.length > 0 ? filteredNotifs.map(n => (
-              <div className="notif-item" key={n.id}>
+              <div className="notif-item" key={n.id} data-source={n.source}>
                 <div className={`notif-icon-wrap ${n.source}`}><i className={`${n.iconFamily || 'fa-brands'} ${n.icon}`}></i></div>
                 <div className="notif-content">
                   <div className="notif-header">
                     <span className="notif-sender">{n.sender}</span>
                     <span className={`source-mini-badge ${n.source}`}>{n.sourceLabel}</span>
-                    {n.attachmentCount > 0 && <span className="source-mini-badge" style={{ background: 'var(--surface-hover)', color: 'var(--text-muted)' }}>{n.attachmentCount} file{n.attachmentCount === 1 ? '' : 's'}</span>}
+                    {n.attachmentCount > 0 && <span className="source-mini-badge neutral">{n.attachmentCount} file{n.attachmentCount === 1 ? '' : 's'}</span>}
                     <span className="notif-time">{n.time}</span>
                   </div>
                   <h4 className="notif-title">{n.title}</h4>

@@ -74,6 +74,11 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
     return map
   }, [slots])
 
+  const activeCourseCount = useMemo(
+    () => new Set(slots.map((slot) => slot.course_id).filter(Boolean)).size,
+    [slots],
+  )
+
   const handleEdit = (slot) => {
     setEditId(slot.id)
     setForm({
@@ -137,15 +142,15 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
   }
 
   return (
-    <div className="panel glass-panel panel-accent" style={{ marginTop }}>
-      <div className="panel-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
+    <div className="panel glass-panel panel-accent class-schedule-panel" style={{ marginTop }}>
+      <div className="panel-header class-schedule-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
         <div>
           <h2 className="panel-title"><i className="fa-solid fa-chalkboard-user text-primary"></i> {title}</h2>
           <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
             Your weekly class timetable from Monday to Friday
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="class-schedule-toolbar">
           <button className="btn btn-outline" onClick={load} disabled={loading} title="Refresh">
             <i className={`fa-solid fa-rotate-right ${loading ? 'fa-spin' : ''}`}></i>
           </button>
@@ -157,47 +162,67 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
         </div>
       </div>
 
-      <div style={{ padding: 24 }}>
+      <div className="class-schedule-body">
         {error && (
-          <div style={{ color: 'var(--urgent)', background: 'var(--urgent-subtle)', border: '1px solid var(--urgent)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13 }}>
+          <div className="class-schedule-alert error">
             <i className="fa-solid fa-triangle-exclamation"></i> {error}
           </div>
         )}
 
+        {!loading && (
+          <div className="class-schedule-summary">
+            <div className="class-schedule-chip">
+              <span className="class-schedule-chip-label">Weekly Slots</span>
+              <strong>{slots.length}</strong>
+            </div>
+            <div className="class-schedule-chip">
+              <span className="class-schedule-chip-label">Active Courses</span>
+              <strong>{activeCourseCount}</strong>
+            </div>
+            <div className="class-schedule-chip">
+              <span className="class-schedule-chip-label">Open Days</span>
+              <strong>{CLASS_DAYS.filter(({ dow }) => slotsByDow[dow].length > 0).length}</strong>
+            </div>
+          </div>
+        )}
+
         {loading ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 32 }}>
+          <div className="timetable-loading">
             <i className="fa-solid fa-circle-notch fa-spin"></i> Loading class schedule...
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 12, overflowX: 'auto' }}>
+          <div className="class-week-grid">
             {CLASS_DAYS.map(({ dow, label }) => (
-              <div key={dow} style={{ minHeight: 180 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, textAlign: 'center' }}>
+              <div key={dow} className="class-day-column">
+                <div className="class-day-title">
                   {label}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="class-day-slots">
                   {slotsByDow[dow].length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--text-faint)', textAlign: 'center', paddingTop: 20 }}>No classes</div>
+                    <div className="class-day-empty">No classes</div>
                   ) : slotsByDow[dow].map((slot) => {
                     const color = colorMap[slot.course_id] || 'var(--primary)'
                     return (
-                      <div key={slot.id} style={{ background: 'var(--surface-hover)', border: '1px solid var(--border)', borderLeft: `4px solid ${color}`, borderRadius: 8, padding: '10px 12px', position: 'relative' }}>
-                        <div style={{ fontSize: 11, color, fontWeight: 700, marginBottom: 3 }}>
+                      <div key={slot.id} className="class-slot-card" style={{ '--slot-color': color }}>
+                        <div className="class-slot-time">
                           {fmt12(slot.start_time)} - {fmt12(slot.end_time)}
                         </div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {slot.course_code || '-'}
+                        <div className="class-slot-code">
+                          {slot.course_code || slot.course_name || '-'}
                         </div>
+                        {slot.course_name && slot.course_code && (
+                          <div className="class-slot-meta">{slot.course_name}</div>
+                        )}
                         {slot.room_number && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                          <div className="class-slot-room">
                             <i className="fa-solid fa-location-dot" style={{ marginRight: 4 }}></i>{slot.room_number}
                           </div>
                         )}
-                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                          <button type="button" title="Edit" onClick={() => handleEdit(slot)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px 4px', fontSize: 12 }}>
+                        <div className="class-slot-actions">
+                          <button type="button" title="Edit" className="class-slot-action class-slot-edit" onClick={() => handleEdit(slot)}>
                             <i className="fa-solid fa-pen"></i>
                           </button>
-                          <button type="button" title="Delete" onClick={() => handleDelete(slot.id)} disabled={deleting === slot.id} style={{ background: 'none', border: 'none', color: 'var(--urgent)', cursor: 'pointer', padding: '2px 4px', fontSize: 12 }}>
+                          <button type="button" title="Delete" className="class-slot-action class-slot-delete" onClick={() => handleDelete(slot.id)} disabled={deleting === slot.id}>
                             {deleting === slot.id ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-trash-can"></i>}
                           </button>
                         </div>
@@ -211,12 +236,12 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
         )}
 
         {showForm && (
-          <form onSubmit={handleSubmit} style={{ marginTop: 24, padding: 20, background: 'rgba(0,0,0,0.28)', border: '1px solid var(--border)', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <strong style={{ fontSize: 14 }}>{editId ? 'Edit Class Slot' : 'Add New Class Slot'}</strong>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <form onSubmit={handleSubmit} className="class-slot-form">
+            <strong className="class-slot-form-title">{editId ? 'Edit Class Slot' : 'Add New Class Slot'}</strong>
+            <div className="class-slot-form-grid">
               <div>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Course *</label>
-                <select value={form.course_id} onChange={(e) => setForm((current) => ({ ...current, course_id: e.target.value }))} style={{ width: '100%', padding: '10px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} required>
+                <label className="class-slot-field-label">Course *</label>
+                <select className="class-slot-field" value={form.course_id} onChange={(e) => setForm((current) => ({ ...current, course_id: e.target.value }))} required>
                   <option value="">Select course</option>
                   {courses.map((course) => (
                     <option key={course.id} value={course.id}>{course.course_code} - {course.course_name}</option>
@@ -224,25 +249,25 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
                 </select>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Day *</label>
-                <select value={form.day_of_week} onChange={(e) => setForm((current) => ({ ...current, day_of_week: Number(e.target.value) }))} style={{ width: '100%', padding: '10px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }}>
+                <label className="class-slot-field-label">Day *</label>
+                <select className="class-slot-field" value={form.day_of_week} onChange={(e) => setForm((current) => ({ ...current, day_of_week: Number(e.target.value) }))}>
                   {CLASS_DAYS.map(({ dow, label }) => <option key={dow} value={dow}>{label}</option>)}
                 </select>
               </div>
               <div>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Start Time *</label>
-                <input type="time" value={form.start_time} onChange={(e) => setForm((current) => ({ ...current, start_time: e.target.value }))} style={{ width: '100%', padding: '10px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} required />
+                <label className="class-slot-field-label">Start Time *</label>
+                <input className="class-slot-field" type="time" value={form.start_time} onChange={(e) => setForm((current) => ({ ...current, start_time: e.target.value }))} required />
               </div>
               <div>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>End Time *</label>
-                <input type="time" value={form.end_time} onChange={(e) => setForm((current) => ({ ...current, end_time: e.target.value }))} style={{ width: '100%', padding: '10px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} required />
+                <label className="class-slot-field-label">End Time *</label>
+                <input className="class-slot-field" type="time" value={form.end_time} onChange={(e) => setForm((current) => ({ ...current, end_time: e.target.value }))} required />
               </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Room / Location</label>
-                <input type="text" value={form.room_number} onChange={(e) => setForm((current) => ({ ...current, room_number: e.target.value }))} placeholder="e.g. Room 301, Online, Lab-A" style={{ width: '100%', padding: '10px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} />
+              <div className="class-slot-field-span">
+                <label className="class-slot-field-label">Room / Location</label>
+                <input className="class-slot-field" type="text" value={form.room_number} onChange={(e) => setForm((current) => ({ ...current, room_number: e.target.value }))} placeholder="e.g. Room 301, Online, Lab-A" />
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <div className="class-slot-form-actions">
               <button type="button" className="btn btn-outline" onClick={handleCancel}>Cancel</button>
               <button type="submit" className="btn btn-primary" disabled={saving}>
                 {saving ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : editId ? 'Save Changes' : 'Add Slot'}

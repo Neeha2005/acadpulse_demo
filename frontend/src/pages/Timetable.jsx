@@ -113,7 +113,7 @@ export default function Timetable() {
   const todayCount = scheduledTasks.filter((task) => sameDay(task.deadlineDate, today)).length
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll timetable-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">TIMETABLE</span>

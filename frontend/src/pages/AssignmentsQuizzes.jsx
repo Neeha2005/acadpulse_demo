@@ -75,7 +75,7 @@ export default function AssignmentsQuizzes() {
   if (dataLoading) return <PageSkeleton variant="cards" />;
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll assignments-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">ACADEMIC WORKLOAD</span>

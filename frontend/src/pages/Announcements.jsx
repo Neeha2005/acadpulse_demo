@@ -87,7 +87,7 @@ export default function Announcements() {
   if (dataLoading) return <PageSkeleton variant="list" />;
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll announcements-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">ACADEMIC BROADCASTS</span>

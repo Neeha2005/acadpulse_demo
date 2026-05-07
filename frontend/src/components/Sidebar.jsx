@@ -3,20 +3,21 @@ import { useAppContext } from '../context/AppContext';
 
 function IntegrationStatusPill({ status }) {
   if (status === 'connected') {
-    return <span className="nav-status-pill nav-label" style={{ color: 'var(--success)', background: 'var(--success-subtle)', border: '1px solid var(--success)' }}>Connected</span>;
+    return <span className="nav-status-pill nav-status-connected nav-label">Connected</span>;
   }
   if (status === 'qr_required') {
-    return <span className="nav-status-pill nav-label" style={{ color: 'var(--warning)', background: 'var(--warning-subtle)', border: '1px solid var(--warning)' }}>Scan QR</span>;
+    return <span className="nav-status-pill nav-status-qr nav-label">Scan QR</span>;
   }
   if (status === 'disconnected') {
-    return <span className="nav-status-pill nav-label" style={{ color: 'var(--urgent)', background: 'var(--urgent-subtle)', border: '1px solid var(--urgent)' }}>Off</span>;
+    return <span className="nav-status-pill nav-status-off nav-label">Off</span>;
   }
-  return <span className="nav-status-pill status-pill-muted nav-label">–</span>;
+  return <span className="nav-status-pill status-pill-muted nav-label">-</span>;
 }
 
 export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed, onToggle }) {
   const { user, googleConnected, whatsappStatus } = useAppContext();
   const initials = user.fullName ? user.fullName.substring(0, 2).toUpperCase() : 'SC';
+  const studentMeta = user.university || 'Student';
 
   const waStatus = whatsappStatus === 'connected' ? 'connected'
     : whatsappStatus === 'qr_required' ? 'qr_required'
@@ -32,7 +33,10 @@ export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed,
             <i className="fa-solid fa-graduation-cap logo-icon"></i>
           </div>
           <div className="logo">
-            <span className="logo-text gradient-logo">AcadPulse</span>
+            <div className="logo-copy">
+              <span className="logo-text gradient-logo">AcadPulse</span>
+              <span className="logo-badge">STU</span>
+            </div>
             <span className="logo-subtitle">Student Command Center</span>
           </div>
         </div>
@@ -42,34 +46,34 @@ export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed,
       </div>
       <nav className="sidebar-nav">
         <div className="nav-section nav-section-accent">Main</div>
-        <NavLink to="/dashboard" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Dashboard">
-          <i className="fa-solid fa-house"></i> <span className="nav-label">Dashboard</span>
+        <NavLink to="/dashboard" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Dashboard" data-tooltip="Dashboard">
+          <span className="nav-glyph"><i className="fa-solid fa-house"></i></span> <span className="nav-label">Dashboard</span>
         </NavLink>
-        <NavLink to="/assignments" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Assignments">
-          <i className="fa-solid fa-list-check"></i> <span className="nav-label">Assignments</span>
+        <NavLink to="/assignments" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Assignments" data-tooltip="Assignments">
+          <span className="nav-glyph"><i className="fa-solid fa-list-check"></i></span> <span className="nav-label">Assignments</span>
         </NavLink>
-        <NavLink to="/events" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Events">
-          <i className="fa-solid fa-calendar-days"></i> <span className="nav-label">Events</span>
+        <NavLink to="/events" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Events" data-tooltip="Events">
+          <span className="nav-glyph"><i className="fa-solid fa-calendar-days"></i></span> <span className="nav-label">Events</span>
         </NavLink>
-        <NavLink to="/announcements" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Announcements">
-          <i className="fa-solid fa-bullhorn"></i> <span className="nav-label">Announcements</span>
+        <NavLink to="/announcements" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Announcements" data-tooltip="Announcements">
+          <span className="nav-glyph"><i className="fa-solid fa-bullhorn"></i></span> <span className="nav-label">Announcements</span>
         </NavLink>
-        <NavLink to="/materials" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Materials">
-          <i className="fa-solid fa-folder-open"></i> <span className="nav-label">Materials</span>
+        <NavLink to="/materials" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Materials" data-tooltip="Materials">
+          <span className="nav-glyph"><i className="fa-solid fa-folder-open"></i></span> <span className="nav-label">Materials</span>
         </NavLink>
-        <NavLink to="/timetable" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Timetable">
-          <i className="fa-solid fa-calendar"></i> <span className="nav-label">Timetable</span>
+        <NavLink to="/timetable" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Timetable" data-tooltip="Timetable">
+          <span className="nav-glyph"><i className="fa-solid fa-calendar"></i></span> <span className="nav-label">Timetable</span>
         </NavLink>
-        <NavLink to="/courses" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Courses">
-          <i className="fa-solid fa-book"></i> <span className="nav-label">Courses</span>
+        <NavLink to="/courses" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Courses" data-tooltip="Courses">
+          <span className="nav-glyph"><i className="fa-solid fa-book"></i></span> <span className="nav-label">Courses</span>
         </NavLink>
-        <NavLink to="/onboarding" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Onboarding">
-          <i className="fa-solid fa-compass"></i> <span className="nav-label">Onboarding</span>
+        <NavLink to="/onboarding" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Onboarding" data-tooltip="Onboarding">
+          <span className="nav-glyph"><i className="fa-solid fa-compass"></i></span> <span className="nav-label">Onboarding</span>
         </NavLink>
 
         <div className="sidebar-divider"></div>
         <div className="nav-section nav-section-accent">Integrations</div>
-        <NavLink to="/integrations/whatsapp" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="WhatsApp">
+        <NavLink to="/integrations/whatsapp" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="WhatsApp" data-tooltip="WhatsApp">
           <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-whatsapp"><i className="fa-brands fa-whatsapp"></i></span>
@@ -78,7 +82,7 @@ export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed,
             <IntegrationStatusPill status={waStatus} />
           </div>
         </NavLink>
-        <NavLink to="/integrations/classroom" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Classroom">
+        <NavLink to="/integrations/classroom" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Classroom" data-tooltip="Classroom">
           <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-classroom"><i className="fa-brands fa-google"></i></span>
@@ -87,7 +91,7 @@ export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed,
             <IntegrationStatusPill status={googleStatus} />
           </div>
         </NavLink>
-        <NavLink to="/integrations/gmail" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Gmail">
+        <NavLink to="/integrations/gmail" className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'} title="Gmail" data-tooltip="Gmail">
           <div className="has-badge nav-badge-row">
             <span className="nav-icon-label">
               <span className="nav-icon-glass nav-icon-gmail"><i className="fa-regular fa-envelope"></i></span>
@@ -98,15 +102,18 @@ export default function Sidebar({ onOpenAccount, onOpenSemesterReset, collapsed,
         </NavLink>
       </nav>
       <div className="sidebar-footer">
-        <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset}>
-          New Semester
+        <button className="semester-reset-link nav-label" type="button" onClick={onOpenSemesterReset} data-tooltip="New Semester">
+          <span className="semester-reset-icon"><i className="fa-solid fa-rotate-left"></i></span>
+          <span className="semester-reset-text">New Semester</span>
         </button>
-        <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings">
+        <div className="user-profile profile-glass" onClick={onOpenAccount} title="Account Settings" data-tooltip="Account Settings">
           <div className="avatar">{initials}</div>
           <div className="user-info nav-label">
             <div className="user-name">{user.fullName}</div>
+            <div className="user-role">{studentMeta}</div>
             <div className="status-indicator"><div className="dot online"></div> Online</div>
           </div>
+          <div className="user-profile-chevron"><i className="fa-solid fa-chevron-up"></i></div>
         </div>
       </div>
     </div>

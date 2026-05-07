@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
+import AttachmentList from '../components/AttachmentList';
 import PageSkeleton from '../components/PageSkeleton';
 
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
@@ -12,16 +13,51 @@ function getTime(value) {
 }
 
 function isMaterial(notification) {
-  return (notification.category || '').toLowerCase() === 'material';
+  if ((notification.category || '').toLowerCase() === 'material') return true;
+  return hasMaterialAttachment(notification);
+}
+
+function getAttachmentSignature(attachment) {
+  return `${attachment?.file_type || ''} ${attachment?.file_name || ''}`.toLowerCase();
+}
+
+function isMaterialAttachment(attachment) {
+  const signature = getAttachmentSignature(attachment);
+  return (
+    signature.includes('pdf')
+    || signature.includes('slide')
+    || signature.includes('ppt')
+    || signature.includes('presentation')
+    || signature.includes('video')
+    || signature.includes('youtube')
+    || signature.includes('document')
+    || signature.includes('sheet')
+    || signature.includes('text/url')
+    || signature.includes('link')
+    || signature.includes('note')
+    || signature.includes('.pdf')
+    || signature.includes('.ppt')
+    || signature.includes('.pptx')
+    || signature.includes('.doc')
+    || signature.includes('.docx')
+  );
+}
+
+function hasMaterialAttachment(notification) {
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : [];
+  return attachments.some(isMaterialAttachment);
 }
 
 function detectMaterialType(notification) {
+  const attachments = Array.isArray(notification.attachments) ? notification.attachments : [];
+  const attachmentText = attachments.map(getAttachmentSignature).join(' ');
   const text = `${notification.title || ''} ${notification.preview || ''} ${notification.rawText || ''}`.toLowerCase();
-  if (text.includes('pdf')) return 'PDF';
-  if (text.includes('slide') || text.includes('ppt')) return 'Slides';
-  if (text.includes('youtube') || text.includes('video')) return 'Video';
-  if (text.includes('http') || text.includes('link')) return 'Link';
-  if (text.includes('note') || text.includes('reading')) return 'Notes';
+  const combined = `${text} ${attachmentText}`;
+  if (combined.includes('pdf')) return 'PDF';
+  if (combined.includes('slide') || combined.includes('ppt') || combined.includes('presentation')) return 'Slides';
+  if (combined.includes('youtube') || combined.includes('video')) return 'Video';
+  if (combined.includes('http') || combined.includes('link') || combined.includes('text/url')) return 'Link';
+  if (combined.includes('note') || combined.includes('reading') || combined.includes('document') || combined.includes('doc')) return 'Notes';
   return 'Notes';
 }
 
@@ -78,7 +114,7 @@ export default function Materials() {
   if (dataLoading) return <PageSkeleton variant="list" />;
 
   return (
-    <div className="dashboard-scroll">
+    <div className="dashboard-scroll materials-page">
       <section className="hero-stats glass-banner">
         <div className="welcome-text">
           <span className="hero-kicker">STUDY RESOURCES</span>
@@ -189,7 +225,13 @@ export default function Materials() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                   <span className="badge badge-success">{material.materialType}</span>
                   <span className="badge badge-warning">{material.sourceLabel}</span>
+                  {material.attachmentCount > 0 && (
+                    <span className="badge badge-muted">
+                      {material.attachmentCount} attachment{material.attachmentCount === 1 ? '' : 's'}
+                    </span>
+                  )}
                 </div>
+                <AttachmentList attachments={material.attachments} compact />
               </div>
             </div>
           )) : null}
