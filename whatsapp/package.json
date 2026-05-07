@@ -11,14 +11,14 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
-    "axios": "^1.15.2",
-    "baileys-antiban": "^3.8.1",
-    "dotenv": "^16.4.7",
-    "pino": "^9.5.0",
-	"pg": "^8.11.5",
-    "qrcode-terminal": "^0.12.0"
-  },
+  "@whiskeysockets/baileys": "^6.7.18",
+  "axios": "^1.15.2",
+  "baileys-antiban": "^3.8.1",
+  "dotenv": "^16.4.7",
+  "pg": "^8.11.5",
+  "pino": "^9.5.0",
+  "qrcode-terminal": "^0.12.0"
+},
   "devDependencies": {
     "nodemon": "^3.1.14"
   }
