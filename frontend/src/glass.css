@@ -1176,6 +1176,19 @@ body {
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
+.modal-body select,
+.integration-field select,
+.modal-select {
+  color-scheme: dark;
+}
+
+.modal-body select option,
+.integration-field select option,
+.modal-select option {
+  background: #161922;
+  color: var(--text);
+}
+
 .modal-body input:focus,
 .modal-body select:focus,
 .modal-body textarea:focus,

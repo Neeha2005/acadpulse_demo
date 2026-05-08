@@ -5,15 +5,16 @@ const DEADLINE_REQUIRED = new Set(['assignment', 'quiz', 'exam_schedule']);
 
 export default function AddTaskModal({ onClose }) {
   const { createManualTask, apiFetch, authUser } = useAppContext();
-  const [courses, setCourses] = useState([]);
-  const [formData, setFormData] = useState({
+  const initialFormData = {
     title: '',
     course: '',
     dueDate: '',
     dueTime: '',
     content: '',
     type: 'assignment',
-  });
+  };
+  const [courses, setCourses] = useState([]);
+  const [formData, setFormData] = useState(initialFormData);
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -26,6 +27,12 @@ export default function AddTaskModal({ onClose }) {
   }, [apiFetch, authUser?.id]);
 
   const needsDeadline = DEADLINE_REQUIRED.has(formData.type);
+
+  const handleReset = () => {
+    setFormData(initialFormData);
+    setErrorMsg('');
+    setStatus('idle');
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -87,13 +94,18 @@ export default function AddTaskModal({ onClose }) {
               <label style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6, display: 'block' }}>
                 Type
               </label>
-              <select value={formData.type} onChange={e => setFormData({ ...formData, type: e.target.value })} style={inputStyle}>
-                <option value="assignment">Assignment</option>
-                <option value="quiz">Quiz</option>
-                <option value="announcement">Announcement</option>
-                <option value="material">Material</option>
-                <option value="event">Event</option>
-                <option value="exam_schedule">Exam Schedule</option>
+              <select
+                value={formData.type}
+                onChange={e => setFormData({ ...formData, type: e.target.value })}
+                style={inputStyle}
+                className="modal-select"
+              >
+                <option value="assignment" style={{ background: '#1e1e1e', color: '#fff' }}>Assignment</option>
+                <option value="quiz" style={{ background: '#1e1e1e', color: '#fff' }}>Quiz</option>
+                <option value="announcement" style={{ background: '#1e1e1e', color: '#fff' }}>Announcement</option>
+                <option value="material" style={{ background: '#1e1e1e', color: '#fff' }}>Material</option>
+                <option value="event" style={{ background: '#1e1e1e', color: '#fff' }}>Event</option>
+                <option value="exam_schedule" style={{ background: '#1e1e1e', color: '#fff' }}>Exam Schedule</option>
               </select>
             </div>
 
@@ -116,10 +128,19 @@ export default function AddTaskModal({ onClose }) {
                 Course
               </label>
               {courses.length > 0 ? (
-                <select value={formData.course} onChange={e => setFormData({ ...formData, course: e.target.value })} style={inputStyle}>
-                  <option value="">No course selected</option>
+                <select
+                  value={formData.course}
+                  onChange={e => setFormData({ ...formData, course: e.target.value })}
+                  style={inputStyle}
+                  className="modal-select"
+                >
+                  <option value="" style={{ background: '#1e1e1e', color: '#fff' }}>No course selected</option>
                   {courses.map(c => (
-                    <option key={c.id} value={c.course_code || c.course_name}>
+                    <option
+                      key={c.id}
+                      value={c.course_code || c.course_name}
+                      style={{ background: '#1e1e1e', color: '#fff' }}
+                    >
                       {c.course_code} — {c.course_name}
                     </option>
                   ))}
@@ -183,6 +204,9 @@ export default function AddTaskModal({ onClose }) {
           </div>
 
           <div className="modal-footer">
+            <button type="button" className="btn btn-outline" onClick={handleReset}>
+              Reset
+            </button>
             <button type="button" className="btn btn-outline" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={status === 'saving' || !formData.title.trim()}>
               {status === 'saving'
