@@ -20,7 +20,12 @@ import path from "node:path";
 import { sendToFastAPI } from "./sender.js";
 
 const { Pool } = pg;
-const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+const dbPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 const SESSION_ROOT = process.env.WHATSAPP_SESSION_PATH || "./sessions";
 const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "";
