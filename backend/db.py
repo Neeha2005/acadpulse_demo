@@ -72,6 +72,99 @@ def insert_notification(
         conn.close()
 
 
+def get_whatsapp_session_data(user_id):
+    """Load all session keys for a user on startup."""
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            """
+            SELECT session_key, session_data
+            FROM whatsapp_sessions
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        result = {}
+        for row in rows:
+            result[row["session_key"]] = row["session_data"]
+        return result
+    finally:
+        cur.close()
+        conn.close()
+
+
+def save_whatsapp_session_key(user_id, session_key, session_data):
+    """Upsert one session key for a user."""
+    from psycopg2.extras import Json
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, session_key) DO UPDATE
+            SET session_data = EXCLUDED.session_data,
+                updated_at = NOW()
+            """,
+            (user_id, session_key, Json(session_data)),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Failed to save WhatsApp session key: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_whatsapp_sessions(user_id):
+    """Delete all session rows for a user."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            DELETE FROM whatsapp_sessions WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Failed to delete WhatsApp sessions: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_whatsapp_session_users():
+    """Return list of user_ids that have active sessions stored."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT user_id::text FROM whatsapp_sessions
+            """
+        )
+        rows = cur.fetchall()
+        return [row[0] for row in rows]
+    except Exception as e:
+        print(f"Failed to list WhatsApp session users: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
 def update_notification_deadline(notification_id, deadline_datetime):
     """Set the deadline for an existing notification. Returns True if updated."""
     if not notification_id or not deadline_datetime:
@@ -1387,6 +1480,7 @@ def create_user_account(full_name, email, password_hash, phone=None, university=
             (full_name, email, phone, university, password_hash),
         )
         user_id = cur.fetchone()[0]
+        
         conn.commit()
         
         return user_id
