@@ -2,6 +2,14 @@
 
 Read-only WhatsApp listener for AcadPulse. Each user links their own WhatsApp number through WhatsApp Web; the service listens for new group messages and forwards them to FastAPI at `/messages/incoming`.
 
+## Deploy
+
+- Install: `npm install`
+- Start: `npm start`
+- Runtime: Node.js 20+
+
+This service must be deployed separately from the backend and frontend.
+
 ## Safety Rules
 
 - Keep `syncFullHistory: false`.

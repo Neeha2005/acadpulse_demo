@@ -91,11 +91,50 @@ export default function WhatsAppIntegration() {
     }
   }, [apiFetch, userId, withUserQuery]);
 
+  const loadQrCode = useCallback(async () => {
+    setQrState({ loading: true, value: '', error: '' });
+    try {
+      const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
+      const rawQr = payload?.qr || '';
+      const qrImage = rawQr
+        ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
+        : '';
+      setQrState({
+        loading: false,
+        value: qrImage,
+        error: qrImage ? '' : (payload?.message || 'QR code not available yet. Start the WhatsApp bridge and wait a few seconds.'),
+      });
+    } catch {
+      setQrState({ loading: false, value: '', error: 'QR code not available. Start the WhatsApp bridge and wait a few seconds.' });
+    }
+  }, [apiFetch, withUserQuery]);
+
   useEffect(() => {
     loadWaStatus();
     loadMappingData();
     loadDetectedGroups();
   }, [loadWaStatus, loadMappingData, loadDetectedGroups]);
+
+  useEffect(() => {
+    if (!showQrPanel || isConnected || !userId) return undefined;
+    loadQrCode();
+    const statusPoll = window.setInterval(loadWaStatus, 3000);
+    const qrPoll = window.setInterval(() => {
+      loadQrCode();
+    }, 5000);
+
+    return () => {
+      window.clearInterval(statusPoll);
+      window.clearInterval(qrPoll);
+    };
+  }, [isConnected, loadQrCode, loadWaStatus, showQrPanel, userId]);
+
+  useEffect(() => {
+    if (isConnected) {
+      setShowQrPanel(false);
+      setQrState({ loading: false, value: '', error: '' });
+    }
+  }, [isConnected]);
 
   const toggleDetectedGroup = (groupId) => {
     setSelectedDetectedGroupIds(current => {
@@ -123,24 +162,6 @@ export default function WhatsAppIntegration() {
       setMappingError(error.message || 'Unable to save WhatsApp group selection.');
     } finally {
       setSavingGroupSelection(false);
-    }
-  };
-
-  const loadQrCode = async () => {
-    setQrState({ loading: true, value: '', error: '' });
-    try {
-      const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
-      const rawQr = payload?.qr || '';
-      const qrImage = rawQr
-        ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
-        : '';
-      setQrState({
-        loading: false,
-        value: qrImage,
-        error: qrImage ? '' : (payload?.message || 'QR code not available yet. Make sure WhatsApp bridge is running.'),
-      });
-    } catch {
-      setQrState({ loading: false, value: '', error: 'QR code not available. Make sure the WhatsApp Bridge workflow is running.' });
     }
   };
 
@@ -269,7 +290,7 @@ export default function WhatsAppIntegration() {
                 <li>Scan this QR code</li>
               </ol>
               <p style={{ margin: 0, fontSize: 12, color: 'var(--text-faint)' }}>
-                QR codes expire every 60 seconds. Make sure the <strong>WhatsApp Bridge</strong> workflow is running in the Replit console.
+                QR codes expire every 60 seconds. Keep this panel open while AcadPulse requests a fresh code from the WhatsApp bridge.
               </p>
               <button className="btn btn-outline" style={{ alignSelf: 'flex-start' }} onClick={loadQrCode}>
                 <i className="fa-solid fa-rotate"></i> Refresh QR Code

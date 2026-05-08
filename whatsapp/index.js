@@ -3,7 +3,9 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   downloadMediaMessage,
+  initAuthCreds,
 } from "@whiskeysockets/baileys";
+import pg from "pg";
 import {
   getStealthSocketConfig,
   rampPresenceAfterConnect,
@@ -16,6 +18,9 @@ import pino from "pino";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { sendToFastAPI } from "./sender.js";
+
+const { Pool } = pg;
+const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const SESSION_ROOT = process.env.WHATSAPP_SESSION_PATH || "./sessions";
 const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "";
@@ -92,26 +97,110 @@ async function pingFastApiHealth() {
 
 async function clearSession(sessionPath, userId, reason) {
   logger.warn({ userId, sessionPath, reason }, "Clearing WhatsApp session credentials");
-  await rm(sessionPath, { recursive: true, force: true });
+  await new Promise((resolve, reject) => {
+    dbPool.query("DELETE FROM whatsapp_sessions WHERE user_id = $1", [userId], (err) => {
+      err ? reject(err) : resolve();
+    });
+  });
 }
 
 async function validateSessionFiles(sessionPath, userId) {
-  try {
-    const files = await readdir(sessionPath);
-    const jsonFiles = files.filter((file) => file.endsWith(".json"));
+  // Sessions are now stored in Supabase — no filesystem validation needed.
+  return;
+}
 
-    for (const file of jsonFiles) {
-      const content = await readFile(path.join(sessionPath, file), "utf8");
-      JSON.parse(content);
-    }
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return;
-    }
+async function useSupabaseAuthState(userId) {
+  // Load all existing session rows for this user from DB
+  const loadResult = await dbPool.query(
+    "SELECT session_key, session_data FROM whatsapp_sessions WHERE user_id = $1",
+    [userId]
+  );
 
-    logger.warn({ userId, error: error.message }, "WhatsApp session is corrupted; QR scan required");
-    await clearSession(sessionPath, userId, "corrupted_credentials");
+  // In-memory key cache so keys.get works without extra DB round-trips
+  const keyCache = {};
+
+  // Reconstruct creds — start with fresh defaults then overwrite from DB
+  let creds = initAuthCreds();
+  for (const row of loadResult.rows) {
+    if (row.session_key === "creds") {
+      try {
+        creds = typeof row.session_data === "object"
+          ? row.session_data
+          : JSON.parse(row.session_data);
+      } catch {
+        logger.warn({ userId }, "Could not parse stored creds, starting fresh");
+      }
+    } else {
+      // All other rows are sync keys stored as "type-id"
+      try {
+        const [type, ...rest] = row.session_key.split("-");
+        const id = rest.join("-");
+        if (!keyCache[type]) keyCache[type] = {};
+        keyCache[type][id] = typeof row.session_data === "object"
+          ? row.session_data
+          : JSON.parse(row.session_data);
+      } catch {
+        logger.warn({ userId, key: row.session_key }, "Could not parse stored sync key");
+      }
+    }
   }
+
+  // saveCreds: persists Baileys auth credentials on creds.update event
+  const saveCreds = async () => {
+    try {
+      await dbPool.query(
+        `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
+         VALUES ($1, 'creds', $2::jsonb)
+         ON CONFLICT (user_id, session_key) DO UPDATE
+         SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+        [userId, JSON.stringify(creds)]
+      );
+    } catch (err) {
+      logger.error({ userId, error: err.message }, "Failed to persist WhatsApp creds to DB");
+    }
+  };
+
+  const state = {
+    creds,
+    keys: {
+      // get: called by Baileys to read back sync keys
+      get: async (type, ids) => {
+        const result = {};
+        for (const id of ids) {
+          result[id] = keyCache[type]?.[id] ?? null;
+        }
+        return result;
+      },
+      // set: called by Baileys to persist new/updated sync keys
+      set: async (data) => {
+        for (const [type, typeData] of Object.entries(data || {})) {
+          for (const [id, value] of Object.entries(typeData || {})) {
+            const sessionKey = `${type}-${id}`;
+            // Update in-memory cache first
+            if (!keyCache[type]) keyCache[type] = {};
+            keyCache[type][id] = value;
+            // Persist to DB
+            try {
+              await dbPool.query(
+                `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
+                 VALUES ($1, $2, $3::jsonb)
+                 ON CONFLICT (user_id, session_key) DO UPDATE
+                 SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+                [userId, sessionKey, JSON.stringify(value)]
+              );
+            } catch (err) {
+              logger.error(
+                { userId, sessionKey, error: err.message },
+                "Failed to persist WhatsApp sync key to DB"
+              );
+            }
+          }
+        }
+      },
+    },
+  };
+
+  return { state, saveCreds };
 }
 
 async function startSession(userId) {
@@ -119,7 +208,7 @@ async function startSession(userId) {
   await mkdir(sessionPath, { recursive: true });
   await validateSessionFiles(sessionPath, userId);
 
-  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+  const { state, saveCreds } = await useSupabaseAuthState(userId);
   const { version } = await fetchLatestBaileysVersion();
   const presenceController = new AbortController();
 
@@ -137,7 +226,6 @@ async function startSession(userId) {
 
   const sock = wrapSocket(rawSock, {
     preset: "conservative",
-    persist: path.join(sessionPath, "antiban-state.json"),
     logging: true,
   });
 

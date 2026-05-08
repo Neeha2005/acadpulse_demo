@@ -47,7 +47,7 @@ function SkeletonRows() {
 }
 
 export default function ClassroomIntegration() {
-  const { apiFetch, authUser, user, authReady, authToken, refreshNotifications } = useAppContext();
+  const { API_BASE_URL, apiFetch, authUser, user, authReady, authToken, refreshNotifications } = useAppContext();
   const location = useLocation();
   const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || '';
   const [googleStatus, setGoogleStatus] = useState({ connected: false });
@@ -204,7 +204,9 @@ export default function ClassroomIntegration() {
   };
 
   const handleConnect = () => {
-    window.location.href = `/auth/google?user_id=${encodeURIComponent(userId)}&next_path=integrations/classroom`;
+    const params = new URLSearchParams({ next_path: 'integrations/classroom', integration: 'classroom' });
+    if (userId) params.set('user_id', userId);
+    window.location.href = `${API_BASE_URL}/auth/google?${params.toString()}`;
   };
 
   return (
