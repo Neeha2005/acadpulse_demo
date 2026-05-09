@@ -372,7 +372,8 @@ async function startSessionWithMonitor(userId) {
     return activeSessions.get(normalizedUserId) || null;
   }
   const existing = activeSessions.get(normalizedUserId);
-  if (existing && existing.ws?.readyState === 1) {
+  const readyState = existing?.ws?.readyState;
+  if (existing && (readyState === 0 || readyState === 1)) {
     return existing;
   }
   startingSessions.add(normalizedUserId);

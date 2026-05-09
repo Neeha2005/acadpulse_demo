@@ -19,8 +19,14 @@ import Signup from './pages/Signup'
 import SignupGoogle from './pages/SignupGoogle'
 import SignupWhatsApp from './pages/SignupWhatsApp'
 
+const PREVIEW_BYPASS_AUTH = true
+
 function RequireAuth({ children }) {
   const { authReady, isAuthenticated } = useAppContext()
+
+  if (PREVIEW_BYPASS_AUTH) {
+    return children
+  }
 
   if (!authReady) {
     return <div className="dashboard-scroll"></div>
@@ -37,6 +43,10 @@ function DashboardGate({ children }) {
   const { apiFetch, authReady, isAuthenticated, authUser } = useAppContext()
   const [status, setStatus] = useState('checking')
   const [completed, setCompleted] = useState(false)
+
+  if (PREVIEW_BYPASS_AUTH) {
+    return children
+  }
 
   useEffect(() => {
     if (!authReady || !isAuthenticated) {

@@ -5,6 +5,20 @@ import PageSkeleton from '../components/PageSkeleton';
 const SOURCE_FILTERS = ['All', 'WhatsApp', 'Classroom', 'Gmail', 'Manual'];
 const DATE_FILTERS = ['All', 'Today', 'This Week', 'With Deadline'];
 
+function getSourceMeta(notification) {
+  const source = (notification.source || '').toLowerCase();
+  if (source === 'whatsapp') {
+    return { iconFamily: 'fa-brands', icon: 'fa-whatsapp', tone: 'whatsapp', label: notification.sourceLabel || 'WhatsApp' };
+  }
+  if (source === 'classroom') {
+    return { iconFamily: 'fa-brands', icon: 'fa-google', tone: 'classroom', label: notification.sourceLabel || 'Classroom' };
+  }
+  if (source === 'gmail') {
+    return { iconFamily: 'fa-solid', icon: 'fa-envelope', tone: 'gmail', label: notification.sourceLabel || 'Gmail' };
+  }
+  return { iconFamily: notification.iconFamily || 'fa-solid', icon: notification.icon || 'fa-bell', tone: 'manual', label: notification.sourceLabel || 'Manual' };
+}
+
 function getTime(value) {
   if (!value) return 0;
   const parsed = new Date(value);
@@ -74,6 +88,7 @@ export default function Announcements() {
   const classroomCount = announcements.filter((item) => item.source === 'classroom').length;
   const gmailCount = announcements.filter((item) => item.source === 'gmail').length;
   const deadlineCount = announcements.filter((item) => item.deadline).length;
+  const withDeadlinesCount = deadlineCount;
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -88,130 +103,230 @@ export default function Announcements() {
 
   return (
     <div className="dashboard-scroll announcements-page">
-      <section className="hero-stats glass-banner">
-        <div className="welcome-text">
+      <section className="announcements-hero glass-banner">
+        <div className="announcements-hero-copy">
           <span className="hero-kicker">ACADEMIC BROADCASTS</span>
           <h1 className="hero-title">Announcements</h1>
-          <p>
-            Review notices, reminders, course updates, room changes, and instructor broadcasts from all connected sources.
+          <p className="announcements-hero-text">
+            Review notices, reminders, course updates, and instructor broadcasts from every source.
           </p>
+          <div className="announcements-hero-signals">
+            <span className="announcements-hero-signal"><i className="fa-solid fa-bolt"></i> Live Updates</span>
+            <span className="announcements-hero-signal"><i className="fa-solid fa-chalkboard"></i> Classroom Notices</span>
+            <span className="announcements-hero-signal"><i className="fa-solid fa-broadcast-tower"></i> Instructor Broadcasts</span>
+          </div>
         </div>
-        <div className="hero-pill-group">
-          <div className="hero-pill hero-pill-critical">
-            <span className="hero-pill-label">Deadline Notes</span>
-            <strong>{deadlineCount}</strong>
+
+        <div className="announcements-hero-visual">
+          <div className="announcements-visual-ambient ambient-magenta"></div>
+          <div className="announcements-visual-ambient ambient-amber"></div>
+          <div className="announcements-broadcast-ring ring-one"></div>
+          <div className="announcements-broadcast-ring ring-two"></div>
+          <div className="announcements-wave-line wave-top"></div>
+          <div className="announcements-wave-line wave-bottom"></div>
+
+          <div className="announcements-megaphone-shell">
+            <div className="announcements-megaphone-core">
+              <i className="fa-solid fa-bullhorn"></i>
+            </div>
           </div>
-          <div className="hero-pill hero-pill-pending">
-            <span className="hero-pill-label">Classroom</span>
-            <strong>{classroomCount}</strong>
+
+          <div className="announcements-feed-card feed-top">
+            <div className="announcements-feed-card-icon instructor">
+              <i className="fa-solid fa-user-tie"></i>
+            </div>
+            <div className="announcements-feed-card-copy">
+              <strong>Instructor</strong>
+              <span>New announcement</span>
+            </div>
+            <em>Now</em>
           </div>
-          <div className="hero-pill hero-pill-messages">
-            <span className="hero-pill-label">Gmail</span>
-            <strong>{gmailCount}</strong>
+
+          <div className="announcements-feed-card feed-mid">
+            <div className="announcements-feed-card-icon classroom">
+              <i className="fa-brands fa-google"></i>
+            </div>
+            <div className="announcements-feed-card-copy">
+              <strong>Classroom</strong>
+              <span>New update posted</span>
+            </div>
+            <em>10m</em>
+          </div>
+
+          <div className="announcements-feed-card feed-bottom">
+            <div className="announcements-feed-card-icon gmail">
+              <i className="fa-solid fa-envelope"></i>
+            </div>
+            <div className="announcements-feed-card-copy">
+              <strong>Gmail</strong>
+              <span>Important notice</span>
+            </div>
+            <em>30m</em>
+          </div>
+
+          <div className="announcements-pulse pulse-left"></div>
+          <div className="announcements-pulse pulse-right"></div>
+        </div>
+
+        <div className="announcements-hero-rail">
+          <div className="announcements-hero-rail-card deadlines">
+            <div className="announcements-hero-rail-icon"><i className="fa-regular fa-bell"></i></div>
+            <div className="announcements-hero-rail-copy">
+              <strong>Deadline Notes</strong>
+              <span>Pending reminders</span>
+            </div>
+            <div className="announcements-hero-rail-value">{deadlineCount}</div>
+          </div>
+          <div className="announcements-hero-rail-card classroom">
+            <div className="announcements-hero-rail-icon"><i className="fa-brands fa-google"></i></div>
+            <div className="announcements-hero-rail-copy">
+              <strong>Classroom</strong>
+              <span>New updates</span>
+            </div>
+            <div className="announcements-hero-rail-value">{classroomCount}</div>
+          </div>
+          <div className="announcements-hero-rail-card gmail">
+            <div className="announcements-hero-rail-icon"><i className="fa-solid fa-envelope"></i></div>
+            <div className="announcements-hero-rail-copy">
+              <strong>Gmail</strong>
+              <span>New messages</span>
+            </div>
+            <div className="announcements-hero-rail-value">{gmailCount}</div>
           </div>
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-bullhorn"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">total feed</div>
+      <section className="announcements-stats-grid">
+        <article className="announcements-stat-card total glass-card">
+          <div className="announcements-stat-top">
+            <div className="announcements-stat-icon"><i className="fa-solid fa-bullhorn"></i></div>
+            <span className="announcements-stat-badge">Total feed</span>
           </div>
-          <div className="stat-value stat-value-pending">{announcements.length}</div>
-          <div className="stat-label">Announcements</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-brands fa-google"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">class stream</div>
-          </div>
-          <div className="stat-value stat-value-messages">{classroomCount}</div>
-          <div className="stat-label">Classroom Notices</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-clock"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">needs attention</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{deadlineCount}</div>
-          <div className="stat-label">With Deadlines</div>
-        </div>
-      </div>
+          <strong>{announcements.length}</strong>
+          <div className="announcements-stat-title">Announcements</div>
+        </article>
 
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-        <div className="panel-header" style={{ alignItems: 'flex-start', gap: 16 }}>
-          <div>
-            <h2 className="panel-title"><i className="fa-solid fa-bullhorn text-primary"></i> Announcement Feed</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              {visibleAnnouncements.length} of {announcements.length} items visible
-            </p>
+        <article className="announcements-stat-card classroom glass-card">
+          <div className="announcements-stat-top">
+            <div className="announcements-stat-icon"><i className="fa-brands fa-google"></i></div>
+            <span className="announcements-stat-badge">Class stream</span>
           </div>
-          <button className="btn btn-outline" onClick={handleRefresh} disabled={isRefreshing}>
+          <strong>{classroomCount}</strong>
+          <div className="announcements-stat-title">Classroom Notices</div>
+        </article>
+
+        <article className="announcements-stat-card deadlines glass-card">
+          <div className="announcements-stat-top">
+            <div className="announcements-stat-icon"><i className="fa-regular fa-calendar-check"></i></div>
+            <span className="announcements-stat-badge">Needs attention</span>
+          </div>
+          <strong>{withDeadlinesCount}</strong>
+          <div className="announcements-stat-title">With Deadlines</div>
+        </article>
+      </section>
+
+      <section className="announcements-feed-shell glass-panel panel-accent">
+        <div className="announcements-feed-ambient ambient-left"></div>
+        <div className="announcements-feed-ambient ambient-right"></div>
+        <div className="announcements-feed-header">
+          <div className="announcements-feed-title-wrap">
+            <div className="announcements-feed-title-icon">
+              <i className="fa-solid fa-bullhorn"></i>
+            </div>
+            <div>
+              <h2 className="announcements-feed-title">Announcement Feed</h2>
+              <p className="announcements-feed-count">{visibleAnnouncements.length} of {announcements.length} items visible</p>
+            </div>
+          </div>
+          <button className="btn btn-outline announcements-feed-refresh" onClick={handleRefresh} disabled={isRefreshing}>
             {isRefreshing ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Syncing</> : <><i className="fa-solid fa-rotate"></i> Refresh</>}
           </button>
         </div>
 
-        <div className="list-filter-grid">
-          <div className="filters glass-pill-group list-filter-group">
-            {SOURCE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+        <div className="announcements-feed-divider"></div>
+
+        <div className="announcements-filter-grid">
+          <div className="announcements-filter-group glass-pill-group">
+            <span className="announcements-filter-label">Source</span>
+            <div className="announcements-filter-controls">
+              {SOURCE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
-          <select className="list-filter-select" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
-            {courseOptions.map((course) => (
-              <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
-            ))}
-          </select>
-          <div className="filters glass-pill-group list-filter-group">
-            {DATE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+
+          <div className="announcements-filter-group announcements-filter-select-wrap">
+            <span className="announcements-filter-label">Course</span>
+            <select className="announcements-filter-select" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)}>
+              {courseOptions.map((course) => (
+                <option key={course} value={course}>{course === 'All' ? 'All courses' : course}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="announcements-filter-group glass-pill-group">
+            <span className="announcements-filter-label">Timeline</span>
+            <div className="announcements-filter-controls">
+              {DATE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="notification-stream" style={{ padding: '8px 24px 24px' }}>
+        <div className="announcements-feed-list">
           {visibleAnnouncements.length === 0 && (
-            <div className="empty-state glass-empty-state" style={{ margin: '0 0 16px' }}>
-              <div className="empty-state-icon"><i className="fa-solid fa-inbox"></i></div>
-              <p style={{ margin: '8px 0 4px' }}>
-                {announcements.length === 0 ? 'No announcements yet' : 'No items match your filters'}
-              </p>
-              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                {announcements.length === 0
-                  ? 'Announcements from WhatsApp groups, Gmail, and Google Classroom will appear here once connected.'
-                  : 'Try adjusting the source, course, or date filter above.'}
-              </span>
+            <div className="announcements-empty-state">
+              <div className="announcements-empty-particles particle-a"></div>
+              <div className="announcements-empty-particles particle-b"></div>
+              <div className="announcements-empty-icon">
+                <i className="fa-solid fa-inbox"></i>
+              </div>
+              <div className="announcements-empty-copy">
+                <h3>{announcements.length === 0 ? 'No announcements yet' : 'No items match your filters'}</h3>
+                <p>
+                  {announcements.length === 0
+                    ? 'Updates from WhatsApp, Gmail, and Classroom will appear here.'
+                    : 'Try adjusting the source, course, or timeline filters.'}
+                </p>
+              </div>
             </div>
           )}
-          {visibleAnnouncements.length > 0 ? visibleAnnouncements.map((announcement) => (
-            <div className="notif-item" key={announcement.id}>
-              <div className={`notif-icon-wrap ${announcement.source}`}>
-                <i className={`${announcement.iconFamily || 'fa-solid'} ${announcement.icon}`}></i>
-              </div>
-              <div className="notif-content">
-                <div className="notif-header">
-                  <span className="notif-sender">{announcement.sender}</span>
-                  <span className="notif-time">{announcement.time}</span>
+
+          {visibleAnnouncements.length > 0 ? visibleAnnouncements.map((announcement) => {
+            const sourceMeta = getSourceMeta(announcement);
+            return (
+              <article className={`announcements-feed-card-row ${sourceMeta.tone}`} key={announcement.id}>
+                <div className="announcements-feed-card-accent"></div>
+                <div className={`announcements-feed-card-source ${sourceMeta.tone}`}>
+                  <i className={`${sourceMeta.iconFamily} ${sourceMeta.icon}`}></i>
                 </div>
-                <h4 className="notif-title">{announcement.title}</h4>
-                <p className="notif-preview">{announcement.preview}</p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  <span className={`badge ${getAnnouncementTone(announcement)}`}>{announcement.sourceLabel}</span>
-                  {announcement.deadline && <span className="badge badge-warning">Deadline linked</span>}
-                  {announcement.urgencyLabel && announcement.urgencyLabel !== 'none' && (
-                    <span className="badge badge-warning">{announcement.urgencyLabel}</span>
-                  )}
+                <div className="announcements-feed-card-body">
+                  <div className="announcements-feed-card-head">
+                    <div className="announcements-feed-card-meta">
+                      <strong>{announcement.sender}</strong>
+                      <span>{announcement.time}</span>
+                    </div>
+                    <div className="announcements-feed-card-chips">
+                      <span className={`badge ${getAnnouncementTone(announcement)}`}>{sourceMeta.label}</span>
+                      {announcement.deadline && <span className="badge badge-warning">Deadline linked</span>}
+                      {announcement.urgencyLabel && announcement.urgencyLabel !== 'none' && (
+                        <span className="badge badge-warning">{announcement.urgencyLabel}</span>
+                      )}
+                    </div>
+                  </div>
+                  <h4 className="announcements-feed-card-title">{announcement.title}</h4>
+                  <p className="announcements-feed-card-preview">{announcement.preview}</p>
                 </div>
-              </div>
-            </div>
-          )) : null}
+              </article>
+            );
+          }) : null}
         </div>
-      </div>
+      </section>
     </div>
   );
 }
