@@ -373,7 +373,10 @@ async function startSessionWithMonitor(userId) {
   }
   const existing = activeSessions.get(normalizedUserId);
   const readyState = existing?.ws?.readyState;
-  if (existing && (readyState === 0 || readyState === 1)) {
+  // Only reuse a fully open socket. A stuck CONNECTING socket can block QR
+  // generation indefinitely because the control endpoint thinks the session
+  // already exists and never asks Baileys for a fresh login attempt.
+  if (existing && readyState === 1) {
     return existing;
   }
   startingSessions.add(normalizedUserId);

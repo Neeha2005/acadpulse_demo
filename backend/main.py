@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 import bcrypt
 from fastapi import FastAPI, HTTPException, Query, Depends, status
@@ -219,6 +219,13 @@ def get_unique_pending_whatsapp_user_id() -> Optional[str]:
     if len(unique_pending) == 1:
         return unique_pending[0]
     return None
+
+def is_whatsapp_session_connected(user_id: Optional[str]) -> bool:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return False
+    session_state = get_whatsapp_session_state(normalized_user_id)
+    return str(session_state.get("status") or "").strip().lower() in {"connected", "open"}
 
 def ensure_whatsapp_bridge_session(user_id: str) -> None:
     if not user_id:
@@ -477,9 +484,13 @@ def normalize_frontend_origin(origin: Optional[str]) -> Optional[str]:
     candidate = str(origin or "").strip().rstrip("/")
     if not candidate:
         return None
-    if not re.match(r"^https?://[^\s]+$", candidate):
+    try:
+        parsed = urlsplit(candidate)
+    except Exception:
         return None
-    return candidate
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 def get_frontend_redirect_base(frontend_origin: Optional[str] = None) -> str:
     return normalize_frontend_origin(frontend_origin) or FRONTEND_URL.rstrip("/")
@@ -3199,6 +3210,13 @@ def get_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
             "groups": [],
         }
     resolved_user_id = resolve_mapping_user_id(user_id)
+    if not is_whatsapp_session_connected(resolved_user_id):
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "count": 0,
+            "groups": [],
+        }
     try:
         rows = list_whatsapp_groups(user_id=resolved_user_id)
     except Exception as exc:
@@ -3222,6 +3240,13 @@ def get_detected_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
             "groups": [],
         }
     resolved_user_id = resolve_mapping_user_id(user_id)
+    if not is_whatsapp_session_connected(resolved_user_id):
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "count": 0,
+            "groups": [],
+        }
     try:
         rows = list_detected_whatsapp_groups(resolved_user_id)
     except Exception as exc:
@@ -3335,10 +3360,18 @@ def get_course_source_mappings(
     source_type: str = Query(default="whatsapp"),
 ):
     resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    normalized_source_type = str(source_type or "whatsapp").strip().lower()
+    if normalized_source_type == "whatsapp" and resolved_user_id and not is_whatsapp_session_connected(resolved_user_id):
+        return {
+            "status": "success",
+            "user_id": resolved_user_id,
+            "count": 0,
+            "mappings": [],
+        }
     try:
         rows = list_course_source_mappings(
             user_id=resolved_user_id,
-            source_type=source_type,
+            source_type=normalized_source_type,
         )
     except Exception as exc:
         logger.exception("Failed to fetch course source mappings")
