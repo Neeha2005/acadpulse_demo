@@ -24,18 +24,33 @@ function getTodayStart() {
 }
 
 function EventItem({ task }) {
+  const sourceTone = (task.source || '').toLowerCase();
+  const deadlineKnown = Number.isFinite(getEventTime(task));
+
   return (
-    <div className="notif-item" style={{ alignItems: 'flex-start' }}>
-      <div className={`notif-icon-wrap ${task.source}`}>
-        <i className={`${task.iconFamily || 'fa-solid'} ${task.icon}`}></i>
-      </div>
-      <div className="notif-content">
-        <div className="notif-header">
-          <span className="notif-sender">{task.course}</span>
-          <span className="badge badge-warning">Event</span>
-          <span className="notif-time">{task.due}</span>
+    <div className={`event-queue-card ${deadlineKnown ? 'dated' : 'missing-date'} ${sourceTone}`}>
+      <div className="event-queue-accent"></div>
+      <div className="event-queue-icon-shell">
+        <div className={`event-queue-icon ${task.source}`}>
+          <i className={`${task.iconFamily || 'fa-solid'} ${task.icon}`}></i>
         </div>
-        <p className="notif-preview">{task.rawText || task.content || task.title}</p>
+      </div>
+      <div className="event-queue-content">
+        <div className="event-queue-topline">
+          <div className="event-queue-chips">
+            <span className="event-queue-course">{task.course || 'General event stream'}</span>
+            <span className="event-queue-tag">Event</span>
+            <span className={`event-queue-source-badge ${sourceTone}`}>
+              <i className={`${task.iconFamily || 'fa-solid'} ${task.icon}`}></i>
+              {task.sourceLabel}
+            </span>
+          </div>
+          <span className={`event-queue-deadline ${deadlineKnown ? 'known' : 'unknown'}`}>{task.due}</span>
+        </div>
+        <p className="event-queue-copy">{task.rawText || task.content || task.title}</p>
+      </div>
+      <div className="event-queue-arrow">
+        <i className="fa-solid fa-arrow-right"></i>
       </div>
     </div>
   );
@@ -84,88 +99,200 @@ export default function Events() {
 
   return (
     <div className="dashboard-scroll events-page">
-      <section className="hero-stats glass-banner">
-        <div className="welcome-text">
-          <span className="hero-kicker">SCHEDULE SIGNALS</span>
+      <section className="events-hero glass-banner">
+        <div className="events-hero-copy">
+          <span className="hero-kicker">Schedule Signals</span>
           <h1 className="hero-title">Events</h1>
-          <p>
-            Monitor workshops, class sessions, seminars, and exam schedules captured from every integration.
+          <p className="events-hero-text">
+            Track workshops, sessions, seminars, and exam dates from every integration.
           </p>
+
+          <div className="events-hero-signal-row">
+            <span className="events-hero-signal"><i className="fa-solid fa-satellite-dish"></i> Updated</span>
+            <span className="events-hero-signal"><i className="fa-solid fa-bell"></i> Alerts</span>
+            <span className="events-hero-signal"><i className="fa-solid fa-diagram-project"></i> Integrated</span>
+          </div>
         </div>
-        <div className="hero-pill-group">
-          <div className="hero-pill hero-pill-critical">
-            <span className="hero-pill-label">Upcoming</span>
-            <strong>{upcomingEvents.length}</strong>
+
+        <div className="events-hero-visual">
+          <div className="events-orbit events-orbit-primary"></div>
+          <div className="events-orbit events-orbit-secondary"></div>
+          <div className="events-orbit-ring ring-one"></div>
+          <div className="events-orbit-ring ring-two"></div>
+
+          <div className="events-visual-core">
+            <div className="events-core-halo"></div>
+            <div className="events-visual-connector connector-one"></div>
+            <div className="events-visual-connector connector-two"></div>
+            <div className="events-signal-node node-cyan"></div>
+            <div className="events-signal-node node-violet"></div>
+            <div className="events-signal-node node-gold"></div>
+
+            <div className="events-flow-card main">
+              <div className="events-flow-card-head">
+                <span className="events-visual-pill">
+                  <i className="fa-solid fa-wave-square"></i> Event Workflow
+                </span>
+              </div>
+              <div className="events-flow-row">
+                <span className="events-flow-icon success"><i className="fa-solid fa-check"></i></span>
+                <div className="events-flow-lines">
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+              <div className="events-flow-row">
+                <span className="events-flow-icon sync"><i className="fa-solid fa-rotate-right"></i></span>
+                <div className="events-flow-lines alt">
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+              <div className="events-flow-row">
+                <span className="events-flow-icon alert"><i className="fa-solid fa-bell"></i></span>
+                <div className="events-flow-lines faint">
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+            </div>
+
+            <div className="events-floating-widget widget-a">
+              <strong>{upcomingEvents.length}</strong>
+              <span>Upcoming</span>
+            </div>
+            <div className="events-floating-widget widget-b">
+              <strong>{datedEvents.length}</strong>
+              <span>Dated</span>
+            </div>
+            <div className="events-floating-widget widget-c">
+              <strong>{noDateEvents.length}</strong>
+              <span>Missing</span>
+            </div>
           </div>
-          <div className="hero-pill hero-pill-pending">
-            <span className="hero-pill-label">Dated</span>
-            <strong>{datedEvents.length}</strong>
+        </div>
+
+        <div className="events-overview-panel">
+          <div className="events-overview-head">
+            <span className="events-overview-kicker">Quick Overview</span>
           </div>
-          <div className="hero-pill hero-pill-messages">
-            <span className="hero-pill-label">Exams</span>
-            <strong>{examEvents.length}</strong>
+
+          <div className="events-overview-item upcoming">
+            <div className="events-overview-icon">
+              <i className="fa-regular fa-clock"></i>
+            </div>
+            <div className="events-overview-copy">
+              <strong>Upcoming</strong>
+            </div>
+            <div className="events-overview-value">{upcomingEvents.length}</div>
+          </div>
+
+          <div className="events-overview-item dated">
+            <div className="events-overview-icon">
+              <i className="fa-regular fa-calendar-check"></i>
+            </div>
+            <div className="events-overview-copy">
+              <strong>Dated</strong>
+            </div>
+            <div className="events-overview-value">{datedEvents.length}</div>
+          </div>
+
+          <div className="events-overview-item missing">
+            <div className="events-overview-icon">
+              <i className="fa-solid fa-location-crosshairs"></i>
+            </div>
+            <div className="events-overview-copy">
+              <strong>Missing</strong>
+            </div>
+            <div className="events-overview-value">{noDateEvents.length}</div>
           </div>
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-calendar-day"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">from today</div>
+      <section className="events-stats-grid">
+        <article className="events-stat-card glass-card">
+          <div className="events-stat-ring upcoming">
+            <div className="events-stat-ring-core">
+              <i className="fa-regular fa-clock"></i>
+            </div>
           </div>
-          <div className="stat-value stat-value-pending">{upcomingEvents.length}</div>
-          <div className="stat-label">Upcoming Events</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-solid fa-calendar-check"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">scheduled</div>
+          <div className="events-stat-copy">
+            <span className="events-stat-kicker">From today</span>
+            <strong>{upcomingEvents.length}</strong>
+            <div className="events-stat-title">Upcoming Events</div>
           </div>
-          <div className="stat-value stat-value-messages">{datedEvents.length}</div>
-          <div className="stat-label">Events With Dates</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-triangle-exclamation"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">needs review</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{noDateEvents.length}</div>
-          <div className="stat-label">Missing Dates</div>
-        </div>
-      </div>
+        </article>
 
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-        <div className="panel-header" style={{ alignItems: 'flex-start', gap: 16 }}>
-          <div>
-            <h2 className="panel-title"><i className="fa-solid fa-calendar-days text-primary"></i> Event Queue</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              {visibleEvents.length} of {eventTasks.length} items visible
-            </p>
+        <article className="events-stat-card glass-card">
+          <div className="events-stat-ring dated">
+            <div className="events-stat-ring-core">
+              <i className="fa-regular fa-calendar-check"></i>
+            </div>
           </div>
-          <button className="btn btn-outline" onClick={handleRefresh} disabled={isRefreshing}>
+          <div className="events-stat-copy">
+            <span className="events-stat-kicker">Scheduled</span>
+            <strong>{datedEvents.length}</strong>
+            <div className="events-stat-title">Events With Dates</div>
+          </div>
+        </article>
+
+        <article className="events-stat-card glass-card">
+          <div className="events-stat-ring missing">
+            <div className="events-stat-ring-core">
+              <i className="fa-solid fa-triangle-exclamation"></i>
+            </div>
+          </div>
+          <div className="events-stat-copy">
+            <span className="events-stat-kicker">Needs review</span>
+            <strong>{noDateEvents.length}</strong>
+            <div className="events-stat-title">Missing Dates</div>
+          </div>
+        </article>
+      </section>
+
+      <section className="events-queue-shell glass-panel panel-accent">
+        <div className="events-queue-header">
+          <div className="events-queue-title-wrap">
+            <div className="events-queue-title-icon">
+              <i className="fa-solid fa-calendar-days"></i>
+            </div>
+            <div>
+              <h2 className="events-queue-title">Event Queue</h2>
+              <p className="events-queue-count">{visibleEvents.length} of {eventTasks.length} items visible</p>
+            </div>
+          </div>
+          <button className="btn btn-outline events-queue-refresh" onClick={handleRefresh} disabled={isRefreshing}>
             {isRefreshing ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Syncing</> : <><i className="fa-solid fa-rotate"></i> Refresh</>}
           </button>
         </div>
 
-        <div className="list-filter-grid">
-          <div className="filters glass-pill-group list-filter-group">
-            {SOURCE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+        <div className="events-queue-divider"></div>
+
+        <div className="events-filter-bar">
+          <div className="events-filter-group glass-pill-group">
+            <span className="events-filter-label">Source</span>
+            <div className="events-filter-controls">
+              {SOURCE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="filters glass-pill-group list-filter-group">
-            {DATE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+
+          <div className="events-filter-group glass-pill-group">
+            <span className="events-filter-label">Date State</span>
+            <div className="events-filter-controls">
+              {DATE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${dateFilter === filter ? 'active' : ''}`} onClick={() => setDateFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="tasks-list" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+        <div className="events-queue-list">
           {visibleEvents.length > 0 ? (
             visibleEvents.map((task) => (
               (task.category || '').toLowerCase() === 'event'
@@ -173,7 +300,7 @@ export default function Events() {
                 : <TaskCard key={task.id} task={task} />
             ))
           ) : (
-            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1' }}>
+            <div className="empty-state glass-empty-state events-empty-state">
               <div className="empty-state-icon"><i className="fa-solid fa-calendar-xmark"></i></div>
               <p style={{ margin: '8px 0 4px' }}>
                 {eventTasks.length === 0 ? 'No events or exam schedules found' : 'No items match your filters'}
@@ -186,7 +313,7 @@ export default function Events() {
             </div>
           )}
         </div>
-      </div>
+      </section>
     </div>
   );
 }
