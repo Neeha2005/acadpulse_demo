@@ -206,6 +206,7 @@ export default function ClassroomIntegration() {
   const handleConnect = () => {
     const params = new URLSearchParams({ next_path: 'integrations/classroom', integration: 'classroom' });
     if (userId) params.set('user_id', userId);
+    params.set('frontend_origin', window.location.origin);
     window.location.href = `${API_BASE_URL}/auth/google?${params.toString()}`;
   };
 

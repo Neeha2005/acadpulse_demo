@@ -890,6 +890,7 @@ export default function Onboarding() {
     const params = new URLSearchParams({ next_path: 'onboarding' })
     if (userId) params.set('user_id', userId)
     if (integration) params.set('integration', integration)
+    params.set('frontend_origin', window.location.origin)
     return `${API_BASE_URL}/auth/google?${params.toString()}`
   }, [API_BASE_URL, userId])
 

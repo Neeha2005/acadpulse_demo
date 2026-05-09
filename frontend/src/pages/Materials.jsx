@@ -76,6 +76,20 @@ function getMaterialIcon(type) {
   }
 }
 
+function getSourceMeta(material) {
+  const source = (material.source || '').toLowerCase();
+  if (source === 'whatsapp') {
+    return { iconFamily: 'fa-brands', icon: 'fa-whatsapp', tone: 'whatsapp', label: material.sourceLabel || 'WhatsApp' };
+  }
+  if (source === 'classroom') {
+    return { iconFamily: 'fa-brands', icon: 'fa-google', tone: 'classroom', label: material.sourceLabel || 'Classroom' };
+  }
+  if (source === 'gmail') {
+    return { iconFamily: 'fa-solid', icon: 'fa-envelope', tone: 'gmail', label: material.sourceLabel || 'Gmail' };
+  }
+  return { iconFamily: material.iconFamily || 'fa-solid', icon: material.icon || 'fa-thumbtack', tone: 'manual', label: material.sourceLabel || 'Manual' };
+}
+
 export default function Materials() {
   const { notifications, refreshNotifications, dataLoading } = useAppContext();
   const [sourceFilter, setSourceFilter] = useState('All');
@@ -115,128 +129,248 @@ export default function Materials() {
 
   return (
     <div className="dashboard-scroll materials-page">
-      <section className="hero-stats glass-banner">
-        <div className="welcome-text">
+      <section className="materials-hero glass-banner">
+        <div className="materials-hero-copy">
           <span className="hero-kicker">STUDY RESOURCES</span>
           <h1 className="hero-title">Materials</h1>
-          <p>
-            Browse notes, PDFs, slides, videos, readings, and reference links collected from connected academic channels.
+          <p className="materials-hero-text">
+            Browse notes, PDFs, slides, videos, readings, and reference links from connected academic channels.
           </p>
+          <div className="materials-hero-signals">
+            <span className="materials-hero-signal"><i className="fa-solid fa-folder-tree"></i> Organized Resources</span>
+            <span className="materials-hero-signal"><i className="fa-solid fa-magnifying-glass"></i> Smart Search</span>
+            <span className="materials-hero-signal"><i className="fa-solid fa-circle-nodes"></i> Connected Libraries</span>
+          </div>
         </div>
-        <div className="hero-pill-group">
-          <div className="hero-pill hero-pill-critical">
-            <span className="hero-pill-label">PDFs</span>
-            <strong>{pdfCount}</strong>
+
+        <div className="materials-hero-visual">
+          <div className="materials-visual-ambient ambient-emerald"></div>
+          <div className="materials-visual-ambient ambient-cyan"></div>
+          <div className="materials-grid-pattern"></div>
+          <div className="materials-network-line line-one"></div>
+          <div className="materials-network-line line-two"></div>
+          <div className="materials-network-node node-left"></div>
+          <div className="materials-network-node node-right"></div>
+          <div className="materials-network-node node-bottom"></div>
+
+          <div className="materials-folder-stack">
+            <div className="materials-folder-card back"></div>
+            <div className="materials-folder-card middle"></div>
+            <div className="materials-folder-card front">
+              <div className="materials-folder-glow"></div>
+              <i className="fa-solid fa-folder-open"></i>
+            </div>
           </div>
-          <div className="hero-pill hero-pill-pending">
-            <span className="hero-pill-label">Classroom</span>
-            <strong>{classroomCount}</strong>
+
+          <div className="materials-float-card pdf">
+            <div className="materials-float-icon"><i className="fa-solid fa-file-pdf"></i></div>
+            <div className="materials-float-copy">
+              <strong>PDF</strong>
+              <span>Resource bundle</span>
+            </div>
           </div>
-          <div className="hero-pill hero-pill-messages">
-            <span className="hero-pill-label">Links</span>
-            <strong>{linkCount}</strong>
+
+          <div className="materials-float-card slides">
+            <div className="materials-float-icon"><i className="fa-solid fa-file-powerpoint"></i></div>
+            <div className="materials-float-copy">
+              <strong>Slides</strong>
+              <span>Lecture deck</span>
+            </div>
+          </div>
+
+          <div className="materials-float-card notes">
+            <div className="materials-float-icon"><i className="fa-solid fa-file-lines"></i></div>
+            <div className="materials-float-copy">
+              <strong>Notes</strong>
+              <span>Study sheet</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="materials-hero-rail">
+          <div className="materials-hero-rail-card pdfs">
+            <div className="materials-hero-rail-icon"><i className="fa-solid fa-file-pdf"></i></div>
+            <div className="materials-hero-rail-copy">
+              <strong>PDFs</strong>
+              <span>Total PDFs</span>
+            </div>
+            <div className="materials-hero-rail-value">{pdfCount}</div>
+          </div>
+          <div className="materials-hero-rail-card classroom">
+            <div className="materials-hero-rail-icon"><i className="fa-brands fa-google"></i></div>
+            <div className="materials-hero-rail-copy">
+              <strong>Classroom</strong>
+              <span>From Classroom</span>
+            </div>
+            <div className="materials-hero-rail-value">{classroomCount}</div>
+          </div>
+          <div className="materials-hero-rail-card links">
+            <div className="materials-hero-rail-icon"><i className="fa-solid fa-link"></i></div>
+            <div className="materials-hero-rail-copy">
+              <strong>Links</strong>
+              <span>Links & Videos</span>
+            </div>
+            <div className="materials-hero-rail-value">{linkCount}</div>
           </div>
         </div>
       </section>
 
-      <div className="stats-grid">
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-pending"><i className="fa-solid fa-folder-open"></i></div>
-            <div className="stat-trend trend-pill trend-pill-pending">resource feed</div>
+      <section className="materials-stats-grid">
+        <article className="materials-stat-card total glass-card">
+          <div className="materials-stat-top">
+            <div className="materials-stat-ring total">
+              <div className="materials-stat-ring-core"><i className="fa-solid fa-folder-open"></i></div>
+            </div>
+            <span className="materials-stat-badge">Resource feed</span>
           </div>
-          <div className="stat-value stat-value-pending">{materials.length}</div>
-          <div className="stat-label">Total Materials</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-messages"><i className="fa-solid fa-file-pdf"></i></div>
-            <div className="stat-trend trend-pill trend-pill-messages">documents</div>
-          </div>
-          <div className="stat-value stat-value-messages">{pdfCount}</div>
-          <div className="stat-label">PDF Resources</div>
-        </div>
-        <div className="stat-card glass-card">
-          <div className="stat-header">
-            <div className="stat-icon stat-icon-urgent"><i className="fa-solid fa-link"></i></div>
-            <div className="stat-trend trend-pill trend-pill-urgent">external</div>
-          </div>
-          <div className="stat-value stat-value-urgent">{linkCount}</div>
-          <div className="stat-label">Links & Videos</div>
-        </div>
-      </div>
+          <strong>{materials.length}</strong>
+          <div className="materials-stat-title">Total Materials</div>
+        </article>
 
-      <div className="panel glass-panel panel-accent" style={{ marginTop: 24 }}>
-        <div className="panel-header" style={{ alignItems: 'flex-start', gap: 16 }}>
-          <div>
-            <h2 className="panel-title"><i className="fa-solid fa-book-open-reader text-primary"></i> Resource Library</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              {visibleMaterials.length} of {materials.length} items visible
-            </p>
+        <article className="materials-stat-card pdf glass-card">
+          <div className="materials-stat-top">
+            <div className="materials-stat-ring pdf">
+              <div className="materials-stat-ring-core"><i className="fa-solid fa-file-pdf"></i></div>
+            </div>
+            <span className="materials-stat-badge">Documents</span>
           </div>
-          <button className="btn btn-outline" onClick={handleRefresh} disabled={isRefreshing}>
+          <strong>{pdfCount}</strong>
+          <div className="materials-stat-title">PDF Resources</div>
+        </article>
+
+        <article className="materials-stat-card link glass-card">
+          <div className="materials-stat-top">
+            <div className="materials-stat-ring link">
+              <div className="materials-stat-ring-core"><i className="fa-solid fa-link"></i></div>
+            </div>
+            <span className="materials-stat-badge">External</span>
+          </div>
+          <strong>{linkCount}</strong>
+          <div className="materials-stat-title">Links & Videos</div>
+        </article>
+      </section>
+
+      <section className="materials-library-shell glass-panel panel-accent">
+        <div className="materials-library-ambient ambient-left"></div>
+        <div className="materials-library-ambient ambient-right"></div>
+        <div className="materials-library-header">
+          <div className="materials-library-title-wrap">
+            <div className="materials-library-title-icon">
+              <i className="fa-solid fa-book-open-reader"></i>
+            </div>
+            <div>
+              <h2 className="materials-library-title">Resource Library</h2>
+              <p className="materials-library-count">{visibleMaterials.length} of {materials.length} items visible</p>
+            </div>
+          </div>
+          <button className="btn btn-outline materials-library-refresh" onClick={handleRefresh} disabled={isRefreshing}>
             {isRefreshing ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Syncing</> : <><i className="fa-solid fa-rotate"></i> Refresh</>}
           </button>
         </div>
 
-        <div className="list-filter-grid">
-          <div className="filters glass-pill-group list-filter-group">
-            {SOURCE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+        <div className="materials-library-divider"></div>
+
+        <div className="materials-filter-grid">
+          <div className="materials-filter-group glass-pill-group">
+            <span className="materials-filter-label">Source</span>
+            <div className="materials-filter-controls">
+              {SOURCE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${sourceFilter === filter ? 'active' : ''}`} onClick={() => setSourceFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="filters glass-pill-group list-filter-group">
-            {TYPE_FILTERS.map((filter) => (
-              <button key={filter} className={`filter-btn glass-filter-pill ${typeFilter === filter ? 'active' : ''}`} onClick={() => setTypeFilter(filter)}>
-                {filter}
-              </button>
-            ))}
+
+          <div className="materials-filter-group glass-pill-group">
+            <span className="materials-filter-label">Resource Type</span>
+            <div className="materials-filter-controls">
+              {TYPE_FILTERS.map((filter) => (
+                <button key={filter} className={`filter-btn glass-filter-pill ${typeFilter === filter ? 'active' : ''}`} onClick={() => setTypeFilter(filter)}>
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="notification-stream" style={{ padding: '8px 24px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+        <div className="materials-library-grid">
           {visibleMaterials.length === 0 && (
-            <div className="empty-state glass-empty-state" style={{ gridColumn: '1 / -1', margin: '0 0 16px' }}>
-              <div className="empty-state-icon"><i className="fa-solid fa-folder-open"></i></div>
-              <p style={{ margin: '8px 0 4px' }}>
-                {materials.length === 0 ? 'No materials found' : 'No items match your filters'}
-              </p>
-              <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                {materials.length === 0
-                  ? 'Lecture notes, PDFs, slides, and links shared in WhatsApp groups or Google Classroom will appear here.'
-                  : 'Try adjusting the source or type filter above.'}
-              </span>
+            <div className="materials-empty-state">
+              <div className="materials-empty-particle particle-a"></div>
+              <div className="materials-empty-particle particle-b"></div>
+              <div className="materials-empty-visual">
+                <div className="materials-empty-paper layer-back"></div>
+                <div className="materials-empty-paper layer-mid"></div>
+                <div className="materials-empty-paper layer-front"><i className="fa-solid fa-folder-open"></i></div>
+              </div>
+              <div className="materials-empty-copy">
+                <h3>{materials.length === 0 ? 'No materials found' : 'No items match your filters'}</h3>
+                <p>
+                  {materials.length === 0
+                    ? 'Lecture notes, PDFs, slides, and study resources will appear here once connected.'
+                    : 'Try adjusting the source or resource type filters.'}
+                </p>
+              </div>
             </div>
           )}
-          {visibleMaterials.length > 0 ? visibleMaterials.map((material) => (
-            <div className="notif-item" key={material.id} style={{ alignItems: 'flex-start' }}>
-              <div className={`notif-icon-wrap ${material.source}`}>
-                <i className={`fa-solid ${getMaterialIcon(material.materialType)}`}></i>
-              </div>
-              <div className="notif-content">
-                <div className="notif-header">
-                  <span className="notif-sender">{material.sender}</span>
-                  <span className="notif-time">{material.time}</span>
+
+          {visibleMaterials.length > 0 ? visibleMaterials.map((material) => {
+            const sourceMeta = getSourceMeta(material);
+            const materialTone = material.materialType.toLowerCase();
+            return (
+              <article className={`materials-resource-card ${materialTone}`} key={material.id}>
+                <div className="materials-resource-accent"></div>
+                <div className="materials-resource-preview">
+                  <div className={`materials-resource-thumbnail ${materialTone}`}>
+                    <div className="materials-resource-stack stack-back"></div>
+                    <div className="materials-resource-stack stack-mid"></div>
+                    <div className="materials-resource-stack stack-front">
+                      <i className={`fa-solid ${getMaterialIcon(material.materialType)}`}></i>
+                    </div>
+                  </div>
                 </div>
-                <h4 className="notif-title">{material.title}</h4>
-                <p className="notif-preview">{material.preview}</p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  <span className="badge badge-success">{material.materialType}</span>
-                  <span className="badge badge-warning">{material.sourceLabel}</span>
-                  {material.attachmentCount > 0 && (
-                    <span className="badge badge-muted">
-                      {material.attachmentCount} attachment{material.attachmentCount === 1 ? '' : 's'}
-                    </span>
-                  )}
+
+                <div className="materials-resource-body">
+                  <div className="materials-resource-head">
+                    <div className="materials-resource-meta">
+                      <span className={`materials-resource-type ${materialTone}`}>{material.materialType}</span>
+                      <span className={`materials-resource-source ${sourceMeta.tone}`}>
+                        <i className={`${sourceMeta.iconFamily} ${sourceMeta.icon}`}></i>
+                        {sourceMeta.label}
+                      </span>
+                      {material.course && <span className="materials-resource-course">{material.course}</span>}
+                    </div>
+                    <span className="materials-resource-time">{material.time}</span>
+                  </div>
+
+                  <h4 className="materials-resource-title">{material.title}</h4>
+                  <p className="materials-resource-preview-copy">{material.preview}</p>
+
+                  <div className="materials-resource-footer">
+                    <div className="materials-resource-tags">
+                      <span className="materials-resource-sender">{material.sender}</span>
+                      {material.attachmentCount > 0 && (
+                        <span className="materials-resource-attachments">
+                          {material.attachmentCount} attachment{material.attachmentCount === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="materials-resource-actions">
+                      <span className="materials-resource-action"><i className="fa-solid fa-eye"></i> Preview</span>
+                      <span className="materials-resource-action"><i className="fa-solid fa-arrow-up-right-from-square"></i> Open</span>
+                    </div>
+                  </div>
+
+                  <div className="materials-resource-attachments-list">
+                    <AttachmentList attachments={material.attachments} compact />
+                  </div>
                 </div>
-                <AttachmentList attachments={material.attachments} compact />
-              </div>
-            </div>
-          )) : null}
+              </article>
+            );
+          }) : null}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

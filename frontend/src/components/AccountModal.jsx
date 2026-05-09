@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
 export default function AccountModal({ onClose }) {
   const { user, updateUser } = useAppContext();
+  const navigate = useNavigate();
   const [formData, setFormData] = useState(user);
   const [status, setStatus] = useState('idle');
 
@@ -21,6 +23,11 @@ export default function AccountModal({ onClose }) {
       setStatus('idle');
       onClose();
     }, 1000);
+  };
+
+  const handleOpenSetup = () => {
+    onClose();
+    navigate('/onboarding');
   };
 
   return (
@@ -98,6 +105,19 @@ export default function AccountModal({ onClose }) {
                   />
                 </label>
               </div>
+            </section>
+
+            <section className="account-modal-card account-setup-card">
+              <div className="account-section-head">
+                <span className="account-section-kicker">Academic Setup</span>
+                <h3>Review onboarding details</h3>
+              </div>
+              <p className="account-setup-copy">
+                Revisit your initial academic setup to adjust courses, semester flow, and connected-study preferences.
+              </p>
+              <button type="button" className="btn btn-outline account-setup-action" onClick={handleOpenSetup}>
+                <i className="fa-solid fa-compass"></i> Open Academic Setup
+              </button>
             </section>
           </div>
 
