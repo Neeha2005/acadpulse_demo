@@ -148,6 +148,20 @@ export default function WhatsAppIntegration() {
     }
   }, [isConnected]);
 
+  useEffect(() => {
+    if (isConnected) {
+      loadMappingData();
+      loadDetectedGroups();
+      return;
+    }
+    setGroups([]);
+    setMappings([]);
+    setDetectedGroups([]);
+    setSelectedDetectedGroupIds(new Set());
+    setSelectedGroup('');
+    setMappingStatus('');
+  }, [isConnected, loadDetectedGroups, loadMappingData]);
+
   const toggleDetectedGroup = (groupId) => {
     setSelectedDetectedGroupIds(current => {
       const next = new Set(current);
