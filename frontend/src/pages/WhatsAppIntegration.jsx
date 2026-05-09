@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
+import { buildQrCodeDataUrl } from '../utils/qrCode';
 
 export default function WhatsAppIntegration() {
   const { notifications, apiFetch, authUser, user } = useAppContext();
@@ -96,9 +97,7 @@ export default function WhatsAppIntegration() {
     try {
       const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
       const rawQr = payload?.qr || '';
-      const qrImage = rawQr
-        ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
-        : '';
+      const qrImage = rawQr ? await buildQrCodeDataUrl(rawQr) : '';
       setQrState({
         loading: false,
         value: qrImage,

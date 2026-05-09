@@ -25,6 +25,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppContext } from '../context/AppContext'
+import { buildQrCodeDataUrl } from '../utils/qrCode'
 import '../onboarding.css'
 
 const TOTAL_STEPS = 8
@@ -940,7 +941,7 @@ export default function Onboarding() {
         setQr(payload.qr_image || payload.qr_url)
         setQrMessage('')
       } else if (raw) {
-        setQr(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(raw)}`)
+        setQr(await buildQrCodeDataUrl(raw))
         setQrMessage('')
       } else {
         setQr('')
