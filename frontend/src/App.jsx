@@ -19,7 +19,7 @@ import Signup from './pages/Signup'
 import SignupGoogle from './pages/SignupGoogle'
 import SignupWhatsApp from './pages/SignupWhatsApp'
 
-const PREVIEW_BYPASS_AUTH = true
+const PREVIEW_BYPASS_AUTH = false
 
 function RequireAuth({ children }) {
   const { authReady, isAuthenticated } = useAppContext()
