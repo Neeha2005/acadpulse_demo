@@ -20,12 +20,7 @@ import path from "node:path";
 import { sendToFastAPI } from "./sender.js";
 
 const { Pool } = pg;
-const dbPool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
+const dbPool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const SESSION_ROOT = process.env.WHATSAPP_SESSION_PATH || "./sessions";
 const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "";
@@ -377,7 +372,11 @@ async function startSessionWithMonitor(userId) {
     return activeSessions.get(normalizedUserId) || null;
   }
   const existing = activeSessions.get(normalizedUserId);
-  if (existing && existing.ws?.readyState === 1) {
+  const readyState = existing?.ws?.readyState;
+  // Only reuse a fully open socket. A stuck CONNECTING socket can block QR
+  // generation indefinitely because the control endpoint thinks the session
+  // already exists and never asks Baileys for a fresh login attempt.
+  if (existing && readyState === 1) {
     return existing;
   }
   startingSessions.add(normalizedUserId);
