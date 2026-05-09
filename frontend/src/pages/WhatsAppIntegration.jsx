@@ -109,6 +109,18 @@ export default function WhatsAppIntegration() {
     }
   }, [apiFetch, withUserQuery]);
 
+  const isConnected = waStatus.status === 'connected' || waStatus.status === 'open';
+
+  const statusColor = isConnected ? 'var(--success)'
+    : waStatus.status === 'qr_required' ? 'var(--warning)'
+    : waStatus.status === 'disconnected' ? 'var(--urgent)'
+    : 'var(--text-muted)';
+
+  const statusLabel = isConnected ? 'Connected'
+    : waStatus.status === 'qr_required' ? 'Waiting for QR scan'
+    : waStatus.status === 'disconnected' ? 'Disconnected'
+    : 'Unknown';
+
   useEffect(() => {
     loadWaStatus();
     loadMappingData();
@@ -213,18 +225,6 @@ export default function WhatsAppIntegration() {
       setSavingMapping(false);
     }
   };
-
-  const statusColor = waStatus.status === 'connected' || waStatus.status === 'open' ? 'var(--success)'
-    : waStatus.status === 'qr_required' ? 'var(--warning)'
-    : waStatus.status === 'disconnected' ? 'var(--urgent)'
-    : 'var(--text-muted)';
-
-  const statusLabel = waStatus.status === 'connected' || waStatus.status === 'open' ? 'Connected'
-    : waStatus.status === 'qr_required' ? 'Waiting for QR scan'
-    : waStatus.status === 'disconnected' ? 'Disconnected'
-    : 'Unknown';
-
-  const isConnected = waStatus.status === 'connected' || waStatus.status === 'open';
 
   return (
     <div className="dashboard-scroll integration-page">
