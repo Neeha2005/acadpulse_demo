@@ -44,7 +44,8 @@ export default function Login() {
         const params = new URLSearchParams()
         if (googleConnected) params.set('google_connected', '1')
         if (googleIntegration) params.set('google_integration', googleIntegration)
-        navigate(`/${returnTo}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true })
+        const normalizedReturnTo = returnTo.startsWith('/') ? returnTo : `/${returnTo}`
+        navigate(`${normalizedReturnTo}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true })
       } else {
         navigate('/onboarding', { replace: true })
       }
