@@ -111,102 +111,174 @@ export default function Timetable() {
   const monthCells = buildMonthCells(today, scheduledTasks)
   const upcomingCount = scheduledTasks.filter((task) => task.deadlineDate >= today).length
   const todayCount = scheduledTasks.filter((task) => sameDay(task.deadlineDate, today)).length
+  const weekScheduledCount = weekMapping.reduce((count, day) => count + day.items.length, 0)
+  const activeWeekdays = weekMapping.filter((day) => day.items.length > 0).length
 
   return (
     <div className="dashboard-scroll timetable-page">
-      <section className="hero-stats glass-banner">
-        <div className="welcome-text">
+      <section className="timetable-hero glass-banner">
+        <div className="timetable-hero-copy">
           <span className="hero-kicker">TIMETABLE</span>
-          <h1 className="hero-title">Schedule</h1>
-          <p>Classes and dated academic items in one clean view.</p>
+          <h1 className="hero-title">Class Schedule</h1>
+          <p className="timetable-hero-text">Manage weekly classes and stay on top of your academic timeline.</p>
+          <div className="timetable-hero-signals">
+            <span className="timetable-hero-signal"><i className="fa-solid fa-calendar-week"></i> Weekly Overview</span>
+            <span className="timetable-hero-signal"><i className="fa-solid fa-bell"></i> Smart Scheduling</span>
+            <span className="timetable-hero-signal"><i className="fa-solid fa-user-group"></i> Live Overview</span>
+          </div>
         </div>
-        <div className="hero-pill-group">
-          <div className="hero-pill hero-pill-critical">
-            <span className="hero-pill-label">Today</span>
-            <strong>{todayCount}</strong>
+
+        <div className="timetable-hero-visual">
+          <div className="timetable-visual-ambient ambient-violet"></div>
+          <div className="timetable-visual-ambient ambient-cyan"></div>
+          <div className="timetable-orbit orbit-one"></div>
+          <div className="timetable-orbit orbit-two"></div>
+          <div className="timetable-node node-left"></div>
+          <div className="timetable-node node-right"></div>
+          <div className="timetable-node node-bottom"></div>
+
+          <div className="timetable-board">
+            <div className="timetable-board-rings">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div className="timetable-board-grid">
+              {Array.from({ length: 12 }, (_, index) => (
+                <span key={`tt-cell-${index}`} className={`timetable-board-cell ${index === 2 || index === 7 || index === 10 ? 'active' : ''}`}></span>
+              ))}
+            </div>
           </div>
-          <div className="hero-pill hero-pill-pending">
-            <span className="hero-pill-label">Upcoming</span>
-            <strong>{upcomingCount}</strong>
+
+          <div className="timetable-float-card top">
+            <div className="timetable-float-icon"><i className="fa-regular fa-bell"></i></div>
+            <div>
+              <strong>{todayCount} today</strong>
+              <span>{todayCount} items today</span>
+            </div>
           </div>
-          <div className="hero-pill hero-pill-messages">
-            <span className="hero-pill-label">Unscheduled</span>
-            <strong>{unscheduledTasks.length}</strong>
+
+          <div className="timetable-float-card side">
+            <div className="timetable-float-icon"><i className="fa-regular fa-calendar-check"></i></div>
+            <div>
+              <strong>{upcomingCount} upcoming</strong>
+              <span>{upcomingCount} next 7 days</span>
+            </div>
+          </div>
+
+          <div className="timetable-float-card bottom">
+            <div className="timetable-float-icon"><i className="fa-regular fa-calendar-xmark"></i></div>
+            <div>
+              <strong>{unscheduledTasks.length} unscheduled</strong>
+              <span>{unscheduledTasks.length} not scheduled</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="timetable-hero-rail">
+          <div className="timetable-hero-rail-card today">
+            <div className="timetable-hero-rail-icon"><i className="fa-regular fa-calendar-day"></i></div>
+            <div className="timetable-hero-rail-copy">
+              <strong>Today</strong>
+              <span>Items today</span>
+            </div>
+            <div className="timetable-hero-rail-value">{todayCount}</div>
+          </div>
+          <div className="timetable-hero-rail-card upcoming">
+            <div className="timetable-hero-rail-icon"><i className="fa-regular fa-clock"></i></div>
+            <div className="timetable-hero-rail-copy">
+              <strong>Upcoming</strong>
+              <span>Next 7 days</span>
+            </div>
+            <div className="timetable-hero-rail-value">{upcomingCount}</div>
+          </div>
+          <div className="timetable-hero-rail-card unscheduled">
+            <div className="timetable-hero-rail-icon"><i className="fa-regular fa-calendar-xmark"></i></div>
+            <div className="timetable-hero-rail-copy">
+              <strong>Unscheduled</strong>
+              <span>Not scheduled</span>
+            </div>
+            <div className="timetable-hero-rail-value">{unscheduledTasks.length}</div>
           </div>
         </div>
       </section>
 
-      <div className="panel glass-panel panel-accent timetable-panel">
-        <div className="panel-header" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-          <div>
-            <h2 className="panel-title"><i className="fa-regular fa-calendar text-primary"></i> {view === 'week' ? 'This Week' : formatMonthLabel(today)}</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              {scheduledTasks.length} dated items from your integration pipeline
-            </p>
+      <section className="timetable-week-shell glass-panel panel-accent timetable-panel">
+        <div className="timetable-week-header">
+          <div className="timetable-week-title-wrap">
+            <div className="timetable-week-title-icon">
+              <i className="fa-regular fa-calendar"></i>
+            </div>
+            <div>
+              <h2 className="timetable-week-title">{view === 'week' ? 'This Week' : formatMonthLabel(today)}</h2>
+              <p className="timetable-week-count">{scheduledTasks.length} dated items from your integration pipeline</p>
+            </div>
           </div>
-          <div className="filters glass-pill-group">
-            <button className={`filter-btn glass-filter-pill ${view === 'week' ? 'active' : ''}`} onClick={() => setView('week')}>Week</button>
-            <button className={`filter-btn glass-filter-pill ${view === 'month' ? 'active' : ''}`} onClick={() => setView('month')}>Month</button>
+          <div className="timetable-week-actions">
+            <div className="timetable-view-switch glass-pill-group">
+              <button className={`filter-btn glass-filter-pill ${view === 'week' ? 'active' : ''}`} onClick={() => setView('week')}>Week</button>
+              <button className={`filter-btn glass-filter-pill ${view === 'month' ? 'active' : ''}`} onClick={() => setView('month')}>Month</button>
+            </div>
           </div>
         </div>
 
-        <div className="modal-body" style={{ minHeight: 420, padding: '24px' }}>
+        <div className="timetable-week-summary">
+          <div className="timetable-week-summary-card">
+            <span>Week items</span>
+            <strong>{weekScheduledCount}</strong>
+          </div>
+          <div className="timetable-week-summary-card">
+            <span>Active days</span>
+            <strong>{activeWeekdays}</strong>
+          </div>
+          <div className="timetable-week-summary-card">
+            <span>View</span>
+            <strong>{view === 'week' ? 'Week' : 'Month'}</strong>
+          </div>
+        </div>
+
+        <div className="timetable-week-body">
           {view === 'week' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
+            <div className="timetable-week-grid">
               {weekMapping.map((dayBlock) => (
                 <div
                   key={dayBlock.date.toISOString()}
-                  style={{
-                    minHeight: 260,
-                    borderTop: dayBlock.items.length > 0 ? '3px solid var(--primary)' : '3px solid var(--border)',
-                    background: dayBlock.items.length > 0 ? 'var(--surface-hover)' : 'transparent',
-                    borderRadius: '8px 8px 0 0',
-                    padding: 12,
-                  }}
+                  className={`timetable-day-card ${dayBlock.items.length > 0 ? 'has-items' : ''} ${sameDay(dayBlock.date, today) ? 'is-today' : ''}`}
                 >
-                  <h3 style={{ fontSize: 13, color: sameDay(dayBlock.date, today) ? 'var(--warning)' : 'var(--text-muted)', textAlign: 'center', margin: '0 0 16px', textTransform: 'uppercase' }}>
+                  <h3 className="timetable-day-label">
                     {formatDayLabel(dayBlock.date)}
                   </h3>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div className="timetable-day-items">
                     {dayBlock.items.length > 0 ? (
                       dayBlock.items.map((task) => <ScheduleItem key={task.id} task={task} onOpen={setActiveTaskModal} />)
                     ) : (
-                      <div style={{ fontSize: 12, color: 'var(--text-faint)', textAlign: 'center', paddingTop: 30 }}>No scheduled items</div>
+                      <div className="timetable-day-empty">No scheduled items</div>
                     )}
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(96px, 1fr))', gap: 10, overflowX: 'auto' }}>
+            <div className="timetable-month-grid">
               {WEEKDAYS.map((day) => (
-                <div key={day} style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', paddingBottom: 8, textTransform: 'uppercase', fontWeight: 700 }}>{day}</div>
+                <div key={day} className="timetable-month-head">{day}</div>
               ))}
               {monthCells.map((block) => {
                 const activeDay = sameDay(block.date, today)
                 return (
                   <div
                     key={block.date.toISOString()}
-                    style={{
-                      minHeight: 116,
-                      background: block.items.length > 0 ? 'var(--primary-subtle)' : 'var(--surface-hover)',
-                      border: activeDay ? '1px solid var(--warning)' : block.items.length > 0 ? '1px solid var(--primary)' : '1px solid var(--border)',
-                      borderRadius: 8,
-                      padding: 10,
-                      opacity: block.isCurrentMonth ? 1 : 0.45,
-                      display: 'flex',
-                      flexDirection: 'column',
-                    }}
+                    className={`timetable-month-cell ${activeDay ? 'is-today' : ''} ${block.items.length > 0 ? 'has-items' : ''} ${block.isCurrentMonth ? '' : 'is-muted'}`}
                   >
-                    <span style={{ fontSize: 13, color: activeDay ? 'var(--warning)' : block.items.length > 0 ? 'var(--primary)' : 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>
+                    <span className="timetable-month-date">
                       {block.date.getDate()}
                     </span>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                    <div className="timetable-month-items">
                       {block.items.slice(0, 3).map((task) => (
                         <ScheduleItem key={task.id} task={task} compact onOpen={setActiveTaskModal} />
                       ))}
                       {block.items.length > 3 && (
-                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{block.items.length - 3} more</span>
+                        <span className="timetable-month-more">+{block.items.length - 3} more</span>
                       )}
                     </div>
                   </div>
@@ -215,9 +287,9 @@ export default function Timetable() {
             </div>
           )}
         </div>
-      </div>
+      </section>
 
-      <ClassScheduleSection apiFetch={apiFetch} userId={userId} />
+      <ClassScheduleSection apiFetch={apiFetch} userId={userId} title="Class Schedule" marginTop={24} />
     </div>
   )
 }

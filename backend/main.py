@@ -16,6 +16,7 @@ from urllib.parse import quote_plus
 import bcrypt
 from fastapi import FastAPI, HTTPException, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import Request
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from googleapiclient.discovery import build
@@ -471,6 +472,25 @@ def normalize_auth_email(email: str) -> str:
 
 def normalize_phone_number(phone: Optional[str]) -> str:
     return re.sub(r"\D+", "", phone or "")
+
+def normalize_frontend_origin(origin: Optional[str]) -> Optional[str]:
+    candidate = str(origin or "").strip().rstrip("/")
+    if not candidate:
+        return None
+    if not re.match(r"^https?://[^\s]+$", candidate):
+        return None
+    return candidate
+
+def get_frontend_redirect_base(frontend_origin: Optional[str] = None) -> str:
+    return normalize_frontend_origin(frontend_origin) or FRONTEND_URL.rstrip("/")
+
+def normalize_frontend_path(next_path: Optional[str]) -> Optional[str]:
+    candidate = str(next_path or "").strip()
+    if not candidate:
+        return None
+    if re.match(r"^[a-z][a-z0-9+.-]*://", candidate, flags=re.IGNORECASE):
+        return None
+    return candidate if candidate.startswith("/") else f"/{candidate}"
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -2715,29 +2735,39 @@ def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_us
 
 @app.get("/auth/google")
 def login_with_google(
+    request: Request,
     user_id: Optional[str] = Query(default=None),
     next_path: Optional[str] = Query(default=None),
     integration: Optional[str] = Query(default=None),
+    frontend_origin: Optional[str] = Query(default=None),
 ):
     """Initiate Google OAuth — redirects browser to Google's consent screen."""
+    redirect_base = get_frontend_redirect_base(
+        frontend_origin
+        or request.headers.get("origin")
+        or request.headers.get("referer")
+    )
     if not is_google_configured():
         error_msg = (
             "Google OAuth is not configured. "
             "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to backend/.env, "
             "then set the redirect URI in Google Cloud Console."
         )
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(error_msg)}"
+        redirect_url = f"{redirect_base}/login?oauth_error={quote_plus(error_msg)}"
         return RedirectResponse(redirect_url)
 
     try:
         redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8000/auth/google/callback")
         flow = create_oauth_flow(redirect_uri)
-        # Encode user_id|next_path in state so callback can redirect back correctly
+        normalized_next_path = normalize_frontend_path(next_path)
+        normalized_frontend_origin = normalize_frontend_origin(frontend_origin) or redirect_base
         state_parts = [user_id or "new"]
-        if next_path:
-            state_parts.append(next_path)
+        if normalized_next_path:
+            state_parts.append(normalized_next_path)
         if integration:
             state_parts.append(integration)
+        if normalized_frontend_origin:
+            state_parts.append(normalized_frontend_origin)
         state = "|".join(state_parts)
         auth_url, _ = flow.authorization_url(
             access_type="offline",
@@ -2750,7 +2780,7 @@ def login_with_google(
         return RedirectResponse(auth_url)
     except Exception as exc:
         logger.exception("Failed to initiate Google OAuth")
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed')}"
+        redirect_url = f"{redirect_base}/login?oauth_error={quote_plus('Google sign-in failed')}"
         return RedirectResponse(redirect_url)
 
 
@@ -2761,16 +2791,18 @@ def google_oauth_callback(
     error: Optional[str] = Query(default=None),
 ):
     """Handle the OAuth callback from Google — exchange code for tokens."""
+    state_parts = (state or "new").split("|")
+    frontend_origin = state_parts[3] if len(state_parts) > 3 else None
+    redirect_base = get_frontend_redirect_base(frontend_origin)
     if error:
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus(error)}"
+        redirect_url = f"{redirect_base}/login?oauth_error={quote_plus(error)}"
         return RedirectResponse(redirect_url)
 
     if not code:
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Missing OAuth code')}"
+        redirect_url = f"{redirect_base}/login?oauth_error={quote_plus('Missing OAuth code')}"
         return RedirectResponse(redirect_url)
 
-    # Decode state: format is "user_id|next_path|integration" or just "user_id"
-    state_parts = (state or "new").split("|")
+    # Decode state: format is "user_id|next_path|integration|frontend_origin" or just "user_id"
     user_id_from_state = state_parts[0] if state_parts else "new"
     next_path = state_parts[1] if len(state_parts) > 1 else None
     integration = state_parts[2] if len(state_parts) > 2 else None
@@ -2822,7 +2854,7 @@ def google_oauth_callback(
             set_user_connected_flags(str(user["id"]), gmail=True, classroom=True)
 
         token = create_access_token(user)
-        base_redirect = f"{FRONTEND_URL}/login"
+        base_redirect = f"{redirect_base}/login"
         params = (
             f"?oauth_token={quote_plus(token)}"
             f"&oauth_name={quote_plus(_user_name(user))}"
@@ -2831,12 +2863,13 @@ def google_oauth_callback(
         )
         if integration:
             params += f"&google_integration={quote_plus(integration)}"
-        if next_path:
-            params += f"&return_to={quote_plus(next_path)}"
+        normalized_next_path = normalize_frontend_path(next_path)
+        if normalized_next_path:
+            params += f"&return_to={quote_plus(normalized_next_path)}"
         return RedirectResponse(base_redirect + params)
     except Exception as exc:
         logger.exception("Google OAuth callback failed")
-        redirect_url = f"{FRONTEND_URL}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
+        redirect_url = f"{redirect_base}/login?oauth_error={quote_plus('Google sign-in failed. Try again.')}"
         return RedirectResponse(redirect_url)
 
 
