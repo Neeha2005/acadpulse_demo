@@ -615,78 +615,81 @@ def list_attachments_for_notifications(notification_ids):
         conn.close()
 
 def list_courses(user_id=None):
-    """Fetch courses available to a user, including aliases where present."""
+    """Fetch courses for a specific user only. No cross-user leakage."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        params = []
-        user_filter = ""
         if user_id:
-            user_filter = "WHERE uc.user_id = %s OR uc.user_id IS NULL"
-            params.append(user_id)
-
-        cur.execute(
-            f"""
-            SELECT
-                c.id,
-                c.course_code,
-                c.short_name,
-                c.course_name,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT ca.alias)
-                    FILTER (WHERE ca.alias IS NOT NULL),
-                    ARRAY[]::TEXT[]
-                ) AS aliases
-            FROM courses c
-            LEFT JOIN course_aliases ca ON ca.course_id = c.id
-            LEFT JOIN user_courses uc ON uc.course_id = c.id
-            {user_filter}
-            GROUP BY c.id, c.course_code, c.short_name, c.course_name
-            ORDER BY c.course_code, c.course_name;
-            """,
-            params,
-        )
+            # STRICT: only return courses explicitly linked to this user
+            cur.execute(
+                """
+                SELECT
+                    c.id,
+                    c.course_code,
+                    c.short_name,
+                    c.course_name,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT ca.alias)
+                        FILTER (WHERE ca.alias IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS aliases
+                FROM courses c
+                JOIN user_courses uc ON uc.course_id = c.id
+                LEFT JOIN course_aliases ca ON ca.course_id = c.id
+                WHERE uc.user_id = %s
+                GROUP BY c.id, c.course_code, c.short_name, c.course_name
+                ORDER BY c.course_code, c.course_name;
+                """,
+                (user_id,),
+            )
+        else:
+            # No user_id — return empty list instead of everything
+            return []
         return cur.fetchall()
     finally:
         cur.close()
         conn.close()
 
 def get_course_by_id(course_id, user_id=None):
-    """Fetch one course with aliases."""
-    if not course_id:
-        return None
-
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        params = [course_id]
-        user_filter = ""
         if user_id:
-            user_filter = "AND (uc.user_id = %s OR uc.user_id IS NULL)"
-            params.append(user_id)
-
-        cur.execute(
-            f"""
-            SELECT
-                c.id,
-                c.course_code,
-                c.short_name,
-                c.course_name,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT ca.alias)
-                    FILTER (WHERE ca.alias IS NOT NULL),
-                    ARRAY[]::TEXT[]
-                ) AS aliases
-            FROM courses c
-            LEFT JOIN course_aliases ca ON ca.course_id = c.id
-            LEFT JOIN user_courses uc ON uc.course_id = c.id
-            WHERE c.id = %s
-              {user_filter}
-            GROUP BY c.id, c.course_code, c.short_name, c.course_name
-            LIMIT 1;
-            """,
-            params,
-        )
+            cur.execute(
+                """
+                SELECT
+                    c.id,
+                    c.course_code,
+                    c.short_name,
+                    c.course_name,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT ca.alias)
+                        FILTER (WHERE ca.alias IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS aliases
+                FROM courses c
+                JOIN user_courses uc ON uc.course_id = c.id   -- INNER JOIN
+                LEFT JOIN course_aliases ca ON ca.course_id = c.id
+                WHERE c.id = %s AND uc.user_id = %s           -- no IS NULL fallback
+                GROUP BY c.id, c.course_code, c.short_name, c.course_name
+                LIMIT 1;
+                """,
+                (course_id, user_id),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT c.id, c.course_code, c.short_name, c.course_name,
+                    COALESCE(ARRAY_AGG(DISTINCT ca.alias)
+                    FILTER (WHERE ca.alias IS NOT NULL), ARRAY[]::TEXT[]) AS aliases
+                FROM courses c
+                LEFT JOIN course_aliases ca ON ca.course_id = c.id
+                WHERE c.id = %s
+                GROUP BY c.id, c.course_code, c.short_name, c.course_name
+                LIMIT 1;
+                """,
+                (course_id,),
+            )
         return cur.fetchone()
     finally:
         cur.close()

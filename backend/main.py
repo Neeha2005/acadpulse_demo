@@ -72,6 +72,7 @@ from db import (
     list_detected_whatsapp_groups,
     save_user_whatsapp_group_selection,
     is_user_whatsapp_group_selected,
+    clear_user_whatsapp_groups,
     record_classroom_course,
     list_classroom_courses,
     get_course_mapping_course_id,
@@ -112,8 +113,6 @@ groq_status = {
     "last_error": None,
     "token_day": datetime.now(PAKISTAN_TZ).date().isoformat(),
 }
-_whatsapp_session_start_times: Dict[str, float] = {}
-WHATSAPP_SESSION_START_COOLDOWN_SECONDS = 60
 WHATSAPP_STATUS_STATE_FILE = Path(__file__).resolve().parent / "whatsapp_status_state.json"
 DEFAULT_WHATSAPP_STATUS_STATE = {
     "status": "unknown",
@@ -128,11 +127,13 @@ DEFAULT_WHATSAPP_STATUS_STATE = {
 
 try:
     from local_classifier import classify_with_local_model, local_classifier_available
+
 except ImportError:
-    def classify_with_local_model(_text):
+
+    def classify_with_local_model(text: str) -> Dict[str, object] | None:
         return None
 
-    def local_classifier_available():
+    def local_classifier_available() -> bool:
         return False
 
 
@@ -232,33 +233,15 @@ def is_whatsapp_session_connected(user_id: Optional[str]) -> bool:
 def ensure_whatsapp_bridge_session(user_id: str) -> None:
     if not user_id:
         return
-    now = time.time()
-    last_start = _whatsapp_session_start_times.get(user_id, 0)
-    if now - last_start < WHATSAPP_SESSION_START_COOLDOWN_SECONDS:
-        logger.debug(
-            "Skipping WhatsApp bridge session start for user_id=%s — cooldown active (%ss remaining)",
-            user_id,
-            int(WHATSAPP_SESSION_START_COOLDOWN_SECONDS - (now - last_start)),
-        )
-        return
-    _whatsapp_session_start_times[user_id] = now
     try:
         url = f"{WHATSAPP_CONTROL_URL.rstrip('/')}/sessions/{quote_plus(str(user_id))}/start"
         with httpx.Client(timeout=2.5) as client:
             response = client.post(url)
             if response.status_code >= 400:
-                logger.warning(
-                    "WhatsApp bridge session start failed: %s %s",
-                    response.status_code,
-                    response.text,
-                )
+                logger.warning("WhatsApp bridge session start failed: %s %s", response.status_code, response.text)
     except Exception as exc:
-        logger.warning(
-            "WhatsApp bridge control unavailable for user_id=%s: %s",
-            user_id,
-            exc,
-        )
-        
+        logger.warning("WhatsApp bridge control unavailable for user_id=%s: %s", user_id, exc)
+
 app = FastAPI(
     title="AcadPulse API",
     description="Backend API for AcadPulse academic notification system",
@@ -538,7 +521,7 @@ def _user_name(user_row: Dict[str, Any]) -> str:
     """Return display name, handling both full_name and name column aliases."""
     return user_row.get("full_name") or user_row.get("name") or ""
 
-def serialize_user(user_row: Dict[str, Any]) -> Dict[str, str]:
+def serialize_user(user_row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": str(user_row["id"]),
         "name": _user_name(user_row),
@@ -866,7 +849,10 @@ def execute_function_call(function_name: str, arguments: dict, user_id: str) -> 
             deadline = arguments.get("deadline")
             
             deadline_dt = parse_manual_deadline(deadline=deadline)
-            message_text = build_manual_message_text(title=text, course=course_name)
+            message_text = build_manual_message_text(
+    title=str(text or ""),
+    course=str(course_name or ""),
+)
             
             notif_id = insert_notification(
                 user_id=user_id,
@@ -1332,7 +1318,7 @@ def build_manual_message_text(title: str, course: Optional[str] = None, descript
     return "\n\n".join(part for part in parts if part)
 
 def summarize_notification_for_action(row: Dict[str, Any]) -> Dict[str, Any]:
-    return serialize_notification_row(row) if row else {}
+    return serialize_notification_row(row) or {}
 
 def get_onboarding_status_for_user(user_id: str) -> Dict[str, Any]:
     conn = get_db_connection()
@@ -1739,27 +1725,21 @@ def reset_semester_data(user_id: str) -> Dict[str, Any]:
 def resolve_default_student_user_id() -> str:
     return str(get_or_create_user("Default Student", "student@example.com"))
 
-def resolve_mapping_user_id(user_id: Optional[str] = None) -> str:
-    """Use a real DB user UUID for source mappings and WhatsApp ingestion."""
-    if user_id:
-        try:
-            parsed_user_id = str(uuid.UUID(str(user_id)))
-            if get_user_by_id(parsed_user_id):
-                return parsed_user_id
-        except (ValueError, TypeError):
-            logger.info("Replacing non-UUID user_id with default student: %s", user_id)
-    return resolve_default_student_user_id()
 
-def resolve_whatsapp_user_id(user_id: Optional[Any] = None) -> str:
-    """Resolve WhatsApp bridge placeholder IDs to the account waiting on QR scan."""
-    raw_user_id = str(user_id or "").strip()
-    pending_user_id = str(whatsapp_status_state.get("pending_user_id") or "").strip()
-    connected_user_id = str(whatsapp_status_state.get("user_id") or "").strip()
-    if pending_user_id and (not raw_user_id or raw_user_id in {"test-user", "acadpulse-demo-onboarding"}):
-        return resolve_mapping_user_id(pending_user_id)
-    if connected_user_id and (not raw_user_id or raw_user_id in {"test-user", "acadpulse-demo-onboarding"}):
-        return resolve_mapping_user_id(connected_user_id)
-    return resolve_mapping_user_id(raw_user_id)
+def resolve_mapping_user_id(user_id: Optional[str] = None) -> Optional[str]:
+    """
+    Resolve a user_id string to a valid UUID. Returns None if unresolvable
+    instead of falling back to the shared Default Student account.
+    """
+    if not user_id:
+        return None
+    try:
+        parsed = str(uuid.UUID(str(user_id)))
+        if get_user_by_id(parsed):
+            return parsed
+    except (ValueError, TypeError):
+        logger.warning("Invalid user_id format, ignoring: %s", user_id)
+    return None
 
 def ensure_timezone_aware(value):
     if value is None:
@@ -2200,40 +2180,35 @@ def extract_deadlines_from_text(text):
         return []
 
 def get_all_courses_from_db(user_id=None):
-    """Fetch course metadata used by the local matching pipeline."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        where_clause = "WHERE uc.user_id = %s" if user_id else ""
+        if not user_id:
+            return []   # <-- add this guard
         cur.execute(
-            f"""
+            """
             SELECT
                 c.id::text AS id,
                 c.course_code,
                 c.short_name,
                 c.course_name,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT ca.alias)
-                    FILTER (WHERE ca.alias IS NOT NULL),
-                    ARRAY[]::text[]
-                ) AS aliases,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT uc.professor_name)
+                COALESCE(ARRAY_AGG(DISTINCT ca.alias)
+                    FILTER (WHERE ca.alias IS NOT NULL), ARRAY[]::text[]) AS aliases,
+                COALESCE(ARRAY_AGG(DISTINCT uc.professor_name)
                     FILTER (WHERE uc.professor_name IS NOT NULL AND uc.professor_name <> ''),
-                    ARRAY[]::text[]
-                ) AS professor_names
+                    ARRAY[]::text[]) AS professor_names
             FROM courses c
+            JOIN user_courses uc ON uc.course_id = c.id   -- INNER JOIN, no IS NULL
             LEFT JOIN course_aliases ca ON ca.course_id = c.id
-            LEFT JOIN user_courses uc ON uc.course_id = c.id
-            {where_clause}
+            WHERE uc.user_id = %s
             GROUP BY c.id, c.course_code, c.short_name, c.course_name
             ORDER BY c.course_code, c.course_name
             """,
-            (user_id,) if user_id else None,
+            (user_id,),
         )
         return cur.fetchall()
     except Exception as e:
-        print(f"Error fetching courses: {e}")
+        logger.error("Error fetching courses: %s", e)
         return []
     finally:
         cur.close()
@@ -2596,19 +2571,12 @@ async def classify_with_fallback(text: str) -> str:
     """
     Classify academic text using Hugging Face Inference API first,
     then Groq (LLM) if HF confidence is low or HF is unavailable.
-
-    Args:
-        text: Cleaned academic email text.
-
-    Returns:
-        Final category label as one of: 'announcement', 'assignment', 'event', 'quiz', 'noise'
-
-    Example:
-        label = await classify_with_fallback(email_text)
     """
+
     local_classification = classify_with_local_model(text)
+
     if local_classification:
-        return local_classification["label"]
+        return str(local_classification["label"])
 
     hf_model = os.getenv("HF_MODEL_NAME")
     hf_token = os.getenv("HF_TOKEN")
@@ -2693,24 +2661,40 @@ def execute_google_api_call(request):
 def register_user(request: RegisterRequest):
     name = (request.name or "").strip()
     phone = normalize_phone_number(request.phone)
-    email = normalize_auth_email(request.email) or (f"{phone}@acadpulse.local" if phone else "")
+
+    email = normalize_auth_email(request.email or "") or (
+        f"{phone}@acadpulse.local" if phone else ""
+    )
+
     university = (request.university or "").strip()
     password = request.password or ""
 
     if not name:
         raise HTTPException(status_code=422, detail="Name is required")
+
     if not phone:
         raise HTTPException(status_code=422, detail="Phone number is required")
+
     if not validate_email_address(email):
         raise HTTPException(status_code=422, detail="Invalid email address")
+
     if len(password) < 8:
-        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+        raise HTTPException(
+            status_code=422,
+            detail="Password must be at least 8 characters",
+        )
+
     existing_user = get_user_by_login(phone) or get_user_by_login(email)
+
     if existing_user and existing_user.get("password_hash"):
-        raise HTTPException(status_code=400, detail="Account already exists. Please login with the same phone/email.")
+        raise HTTPException(
+            status_code=400,
+            detail="Account already exists. Please login with the same phone/email.",
+        )
 
     try:
         password_hash = hash_password(password)
+
         if existing_user:
             user_id = update_existing_user_account(
                 existing_user["id"],
@@ -2720,12 +2704,34 @@ def register_user(request: RegisterRequest):
                 phone=phone,
                 university=university,
             )
+
         else:
-            user_id = create_user_account(name, email, password_hash, phone=phone, university=university)
+            user_id = create_user_account(
+                name,
+                email,
+                password_hash,
+                phone=phone,
+                university=university,
+            )
+
         user = get_user_by_email(email)
+
+        # SAFE TYPE + RUNTIME VALIDATION
+        if not user:
+            logger.error("User created but could not be retrieved: %s", email)
+
+            raise HTTPException(
+                status_code=500,
+                detail="Unable to load created account",
+            )
+
     except Exception as exc:
         logger.exception("Account registration failed for %s", email)
-        raise HTTPException(status_code=500, detail="Unable to create account") from exc
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create account",
+        ) from exc
 
     return {
         "status": "success",
@@ -3148,10 +3154,13 @@ def get_courses(
     user_id: Optional[str] = Query(default=None),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ):
-    effective_user_id = user_id or (str(current_user["id"]) if current_user else None)
-    resolved_user_id = resolve_mapping_user_id(effective_user_id) if effective_user_id else None
+    # Always prefer the authenticated user over the query param
+    effective_user_id = (str(current_user["id"]) if current_user else None) or user_id
+    if not effective_user_id:
+        return {"status": "success", "count": 0, "courses": []}
+    
     try:
-        rows = list_courses(user_id=resolved_user_id)
+        rows = list_courses(user_id=effective_user_id)
     except Exception as exc:
         logger.exception("Failed to fetch courses")
         raise HTTPException(status_code=500, detail="Unable to fetch courses") from exc
@@ -3221,31 +3230,35 @@ def update_course_aliases(
     }
 
 @app.get("/whatsapp/groups")
-def get_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
-    if not user_id:
+def get_whatsapp_groups(
+    user_id: Optional[str] = Query(default=None),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+):
+    # Always prefer the authenticated user over the query param
+    effective_user_id = (str(current_user["id"]) if current_user else None) or user_id
+    if not effective_user_id:
         return {
             "status": "success",
             "user_id": None,
             "count": 0,
             "groups": [],
         }
-    resolved_user_id = resolve_mapping_user_id(user_id)
-    if not is_whatsapp_session_connected(resolved_user_id):
+    if not is_whatsapp_session_connected(effective_user_id):
         return {
             "status": "success",
-            "user_id": resolved_user_id,
+            "user_id": effective_user_id,
             "count": 0,
             "groups": [],
         }
     try:
-        rows = list_whatsapp_groups(user_id=resolved_user_id)
+        rows = list_whatsapp_groups(user_id=effective_user_id)
     except Exception as exc:
         logger.exception("Failed to fetch WhatsApp groups")
         raise HTTPException(status_code=500, detail="Unable to fetch WhatsApp groups") from exc
 
     return {
         "status": "success",
-        "user_id": resolved_user_id,
+        "user_id": effective_user_id,
         "count": len(rows),
         "groups": [serialize_whatsapp_group_row(row) for row in rows],
     }
@@ -3325,8 +3338,27 @@ def save_whatsapp_group(request: WhatsAppGroupRequest):
 def get_classroom_courses(
     user_id: Optional[str] = Query(default=None),
     sync: bool = Query(default=False),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ):
-    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
+    # Always prefer the authenticated user over the query param
+    effective_user_id = (str(current_user["id"]) if current_user else None) or user_id
+    if not effective_user_id:
+        return {
+            "status": "success",
+            "user_id": None,
+            "count": 0,
+            "courses": [],
+        }
+
+    resolved_user_id = resolve_mapping_user_id(effective_user_id)
+    if not resolved_user_id:
+        return {
+            "status": "success",
+            "user_id": None,
+            "count": 0,
+            "courses": [],
+        }
+
     try:
         if sync and resolved_user_id:
             creds = get_google_credentials_safe(user_id=resolved_user_id)
@@ -3378,19 +3410,28 @@ def save_classroom_course(request: ClassroomCourseRequest):
 def get_course_source_mappings(
     user_id: Optional[str] = Query(default=None),
     source_type: str = Query(default="whatsapp"),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
 ):
-    resolved_user_id = resolve_mapping_user_id(user_id) if user_id else None
-    normalized_source_type = str(source_type or "whatsapp").strip().lower()
-    if normalized_source_type == "whatsapp" and resolved_user_id and not is_whatsapp_session_connected(resolved_user_id):
+    # Always prefer the authenticated user over the query param
+    effective_user_id = (str(current_user["id"]) if current_user else None) or user_id
+    if not effective_user_id:
         return {
             "status": "success",
-            "user_id": resolved_user_id,
+            "user_id": None,
+            "count": 0,
+            "mappings": [],
+        }
+    normalized_source_type = str(source_type or "whatsapp").strip().lower()
+    if normalized_source_type == "whatsapp" and effective_user_id and not is_whatsapp_session_connected(effective_user_id):
+        return {
+            "status": "success",
+            "user_id": effective_user_id,
             "count": 0,
             "mappings": [],
         }
     try:
         rows = list_course_source_mappings(
-            user_id=resolved_user_id,
+            user_id=effective_user_id,
             source_type=normalized_source_type,
         )
     except Exception as exc:
@@ -3399,7 +3440,7 @@ def get_course_source_mappings(
 
     return {
         "status": "success",
-        "user_id": resolved_user_id,
+        "user_id": effective_user_id,
         "count": len(rows),
         "mappings": [serialize_course_source_mapping_row(row) for row in rows],
     }
@@ -3574,6 +3615,7 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
                 set_user_connected_flags(normalized_user_id, whatsapp=True)
             elif status_update.status == "logged_out":
                 set_user_connected_flags(normalized_user_id, whatsapp=False)
+                clear_user_whatsapp_groups(normalized_user_id)
     except Exception:
         logger.exception("Failed to update WhatsApp connected flag")
     persist_whatsapp_status_state()
@@ -3641,10 +3683,17 @@ def get_whatsapp_qr(user_id: Optional[str] = Query(default=None)):
             "qr": None,
             "message": "WhatsApp QR requires the current user account.",
         }
+
     requested_user_id = resolve_mapping_user_id(user_id)
+
+    if not requested_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     ensure_whatsapp_bridge_session(requested_user_id)
+
     session_state = get_whatsapp_session_state(requested_user_id)
     session_state["pending_user_id"] = requested_user_id
+
     persist_whatsapp_status_state()
     qr_value = session_state.get("qr")
     if qr_value:
@@ -3882,54 +3931,105 @@ async def sync_everything():
 @app.get("/onboarding/status")
 def get_onboarding_status(user_id: Optional[str] = Query(default=None)):
     resolved_user_id = resolve_mapping_user_id(user_id)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     try:
         return get_onboarding_status_for_user(resolved_user_id)
+
     except Exception as exc:
         logger.exception("Failed to load onboarding status")
-        raise HTTPException(status_code=500, detail="Unable to load onboarding status") from exc
 
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load onboarding status",
+        ) from exc
 @app.post("/onboarding/progress")
 def save_onboarding_progress(request: OnboardingProgressRequest):
     resolved_user_id = resolve_mapping_user_id(request.user_id)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     try:
-        save_onboarding_progress_for_user(resolved_user_id, request.step, request.data)
+        save_onboarding_progress_for_user(
+            resolved_user_id,
+            request.step,
+            request.data,
+        )
+
         return {
             "status": "success",
             "user_id": resolved_user_id,
             "current_step": request.step,
         }
+
     except Exception as exc:
         logger.exception("Failed to save onboarding progress")
-        raise HTTPException(status_code=500, detail="Unable to save onboarding progress") from exc
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save onboarding progress",
+        ) from exc
+
 
 @app.post("/onboarding/integrations")
 def save_onboarding_integrations(request: OnboardingIntegrationsRequest):
     resolved_user_id = resolve_mapping_user_id(request.user_id)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     try:
-        save_user_integration_settings(resolved_user_id, request.platforms)
+        save_user_integration_settings(
+            resolved_user_id,
+            request.platforms,
+        )
+
         return {
             "status": "success",
             "user_id": resolved_user_id,
             "platforms": request.platforms,
         }
+
     except Exception as exc:
         logger.exception("Failed to save onboarding integrations")
-        raise HTTPException(status_code=500, detail="Unable to save onboarding integrations") from exc
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save onboarding integrations",
+        ) from exc
+
 
 @app.post("/onboarding/complete")
 def complete_onboarding(request: OnboardingCompleteRequest):
     resolved_user_id = resolve_mapping_user_id(request.user_id)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     try:
-        result = save_onboarding_complete_for_user(resolved_user_id, request.data)
+        result = save_onboarding_complete_for_user(
+            resolved_user_id,
+            request.data,
+        )
+
         return {
             "status": "success",
             "user_id": resolved_user_id,
             "completed": True,
             **result,
         }
+
     except Exception as exc:
         logger.exception("Failed to complete onboarding")
-        raise HTTPException(status_code=500, detail="Unable to complete onboarding") from exc
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to complete onboarding",
+        ) from exc
+
 
 @app.post("/semester/reset")
 def reset_semester(
@@ -3937,18 +4037,28 @@ def reset_semester(
     semester_label: Optional[str] = Query(default=None),
 ):
     resolved_user_id = resolve_mapping_user_id(user_id)
+
+    if not resolved_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user account")
+
     try:
         result = reset_semester_data(resolved_user_id)
+
         invalidate_chat_context(resolved_user_id)
+
         return {
             "status": "success",
             "user_id": resolved_user_id,
             **result,
         }
+
     except Exception as exc:
         logger.exception("Failed to reset semester")
-        raise HTTPException(status_code=500, detail="Unable to reset semester") from exc
 
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to reset semester",
+        ) from exc
 # --- Groq Chatbot & Deadline Extraction Endpoints ---
 
 @app.get("/chat/context")
@@ -4066,72 +4176,106 @@ def chat_with_bot(request: ChatRequest):
     """
     Chat with the AI assistant. Includes safety checking and multi-turn tool calling.
     """
+
     # Check for malicious content
     is_malicious = check_message_safety(request.prompt)
-    
+
     if is_malicious and not request.confirm_malicious:
         return ChatResponse(
             response="I cannot process this request as it may contain inappropriate content.",
             is_safe=False,
             warning="Content flagged as potentially malicious. Please confirm if you want to proceed."
         )
-    
-    # If confirmed or safe, proceed with chat
+
     try:
         user_id = resolve_mapping_user_id(request.user_id)
+
+        # SAFE VALIDATION
+        if not user_id:
+            raise HTTPException(status_code=400, detail="Invalid user account")
+
         context_json = build_user_context(user_id)
         db_context = json.loads(context_json)
 
-        deterministic_response = handle_deterministic_chat_action(request.prompt, user_id, db_context)
+        deterministic_response = handle_deterministic_chat_action(
+            request.prompt,
+            user_id,
+            db_context,
+        )
+
         if deterministic_response:
             return deterministic_response
 
         # 1. Start message history
         sanitized_history = []
+
         for entry in request.history[-10:]:
             role = entry.get("role")
             content = entry.get("content")
+
             if role in {"user", "assistant"} and content:
-                sanitized_history.append({"role": role, "content": str(content)})
+                sanitized_history.append(
+                    {
+                        "role": role,
+                        "content": str(content),
+                    }
+                )
 
         messages = [
             {
                 "role": "system",
                 "content": build_chatbot_system_prompt(db_context),
             },
-            {"role": "system", "content": f"academic_context JSON:\n{context_json}"},
+            {
+                "role": "system",
+                "content": f"academic_context JSON:\n{context_json}",
+            },
             *sanitized_history,
-            {"role": "user", "content": request.prompt}
+            {
+                "role": "user",
+                "content": request.prompt,
+            }
         ]
 
         # 2. Tool use loop (max 5 iterations)
         action_taken = None
         action_result = None
-        
+
         for _ in range(5):
-            response_msg = create_groq_chat(messages, tools=CHAT_TOOLS)
-            
+            response_msg = create_groq_chat(
+                messages,
+                tools=CHAT_TOOLS,
+            )
+
             # If no tool calls, we're done
             if not getattr(response_msg, "tool_calls", None):
                 break
-                
+
             # Add assistant's message to history
-            messages.append(serialize_groq_assistant_message(response_msg))
-            
+            messages.append(
+                serialize_groq_assistant_message(response_msg)
+            )
+
             # Process tool calls
             for tool_call in response_msg.tool_calls:
                 fn_name = tool_call.function.name
                 fn_args = json.loads(tool_call.function.arguments)
-                
-                logger.info(f"Chatbot executing tool: {fn_name} with args {fn_args}")
-                
+
+                logger.info(
+                    f"Chatbot executing tool: {fn_name} with args {fn_args}"
+                )
+
                 # Execute the action
-                result_str = execute_function_call(fn_name, fn_args, user_id)
-                
+                result_str = execute_function_call(
+                    fn_name,
+                    fn_args,
+                    user_id,
+                )
+
                 # Record the last action for the response metadata
                 action_taken = fn_name
                 action_result = {"message": result_str}
-                
+
                 # Add tool result to history
                 messages.append({
                     "tool_call_id": tool_call.id,
@@ -4139,13 +4283,10 @@ def chat_with_bot(request: ChatRequest):
                     "name": fn_name,
                     "content": result_str,
                 })
-                
-                # If we just did a DB operation, we might want to refresh context
-                # but for simplicity in one turn, we'll let the LLM know the success.
-        
+
         # Get final response text
         final_text = response_msg.content or ""
-        
+
         return ChatResponse(
             response=final_text,
             is_safe=True,
@@ -4158,10 +4299,14 @@ def chat_with_bot(request: ChatRequest):
 
     except HTTPException as e:
         raise e
+
     except Exception as e:
         logger.exception("Chat error")
-        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat error: {str(e)}",
+        )
 @app.post("/deadlines/extract", response_model=DeadlineResponse)
 def extract_deadlines(request: DeadlineRequest):
     """
@@ -4240,11 +4385,12 @@ def extract_deadlines_batch(texts: List[str], confirm_malicious: bool = False):
 @app.post("/classify", response_model=ClassificationResponse)
 async def classify_message(request: ClassificationRequest):
     local_classification = classify_with_local_model(request.text)
+
     if local_classification:
         return ClassificationResponse(
-            label=local_classification["label"],
+            label=str(local_classification["label"]),
             confidence=round(float(local_classification["score"]), 4),
-            source=local_classification["source"],
+            source=str(local_classification["source"]),
         )
 
     result = classifier_stub_with_confidence(request.text)
@@ -4555,7 +4701,9 @@ def add_class_slot(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Add a new class schedule slot."""
+
     user_id = str(current_user["id"])
+
     try:
         row = create_timetable_slot(
             user_id=user_id,
@@ -4565,12 +4713,28 @@ def add_class_slot(
             end_time=body.end_time,
             room_number=body.room_number,
         )
+
+        if not row:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create timetable slot",
+            )
+
         rows = get_timetable_slots(user_id)
-        return {"status": "success", "slot": _serialize_slot(row), "slots": [_serialize_slot(r) for r in rows]}
+
+        return {
+            "status": "success",
+            "slot": _serialize_slot(row),
+            "slots": [_serialize_slot(r) for r in rows],
+        }
+
     except Exception as exc:
         logger.exception("Failed to create timetable slot")
-        raise HTTPException(status_code=500, detail="Unable to create timetable slot") from exc
 
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create timetable slot",
+        ) from exc
 
 @app.put("/timetable/{slot_id}")
 def edit_class_slot(
