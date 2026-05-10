@@ -112,6 +112,8 @@ groq_status = {
     "last_error": None,
     "token_day": datetime.now(PAKISTAN_TZ).date().isoformat(),
 }
+_whatsapp_session_start_times: Dict[str, float] = {}
+WHATSAPP_SESSION_START_COOLDOWN_SECONDS = 60
 WHATSAPP_STATUS_STATE_FILE = Path(__file__).resolve().parent / "whatsapp_status_state.json"
 DEFAULT_WHATSAPP_STATUS_STATE = {
     "status": "unknown",
@@ -230,15 +232,33 @@ def is_whatsapp_session_connected(user_id: Optional[str]) -> bool:
 def ensure_whatsapp_bridge_session(user_id: str) -> None:
     if not user_id:
         return
+    now = time.time()
+    last_start = _whatsapp_session_start_times.get(user_id, 0)
+    if now - last_start < WHATSAPP_SESSION_START_COOLDOWN_SECONDS:
+        logger.debug(
+            "Skipping WhatsApp bridge session start for user_id=%s — cooldown active (%ss remaining)",
+            user_id,
+            int(WHATSAPP_SESSION_START_COOLDOWN_SECONDS - (now - last_start)),
+        )
+        return
+    _whatsapp_session_start_times[user_id] = now
     try:
         url = f"{WHATSAPP_CONTROL_URL.rstrip('/')}/sessions/{quote_plus(str(user_id))}/start"
         with httpx.Client(timeout=2.5) as client:
             response = client.post(url)
             if response.status_code >= 400:
-                logger.warning("WhatsApp bridge session start failed: %s %s", response.status_code, response.text)
+                logger.warning(
+                    "WhatsApp bridge session start failed: %s %s",
+                    response.status_code,
+                    response.text,
+                )
     except Exception as exc:
-        logger.warning("WhatsApp bridge control unavailable for user_id=%s: %s", user_id, exc)
-
+        logger.warning(
+            "WhatsApp bridge control unavailable for user_id=%s: %s",
+            user_id,
+            exc,
+        )
+        
 app = FastAPI(
     title="AcadPulse API",
     description="Backend API for AcadPulse academic notification system",
