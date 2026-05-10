@@ -7,7 +7,7 @@ import TaskCard from '../components/TaskCard';
 import PageSkeleton from '../components/PageSkeleton';
 
 export default function Dashboard() {
-  const { tasks, user, notifications, dataLoading, apiFetch, refreshNotifications, authToken } = useAppContext();
+  const { tasks, user, notifications, dataLoading, apiFetch, refreshNotifications, authToken, authUser } = useAppContext();
   const [activeFilter, setActiveFilter] = useState('All');
   const [isTasksExpanded, setIsTasksExpanded] = useState(false);
   const [seeding, setSeeding] = useState(false);
@@ -292,7 +292,7 @@ export default function Dashboard() {
       <div className="dashboard-timetable-shell">
         <ClassScheduleSection
           apiFetch={apiFetch}
-          userId={user.id || localStorage.getItem('acadpulse_user_id') || ''}
+          userId={authUser?.id || user?.id || ''}
           title="Dashboard Timetable"
           marginTop={24}
         />

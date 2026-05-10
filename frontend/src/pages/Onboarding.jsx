@@ -25,19 +25,12 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppContext } from '../context/AppContext'
+import { TIMETABLE_DAYS } from '../constants/timetable'
 import '../onboarding.css'
 
 const TOTAL_STEPS = 8
 const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
-const DAYS = [
-  [1, 'Monday'],
-  [2, 'Tuesday'],
-  [3, 'Wednesday'],
-  [4, 'Thursday'],
-  [5, 'Friday'],
-  [6, 'Saturday'],
-  [7, 'Sunday'],
-]
+const DAYS = TIMETABLE_DAYS.map(({ dow, label }) => [dow, label])
 const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
 
 const DEFAULT_DATA = {
@@ -421,6 +414,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
   const savedGroups = data.whatsappGroups || []
   const courseGroups = savedGroups.filter((group) => group.kind !== 'society')
   const societyGroups = savedGroups.filter((group) => group.kind === 'society')
+  const hasSavedSelection = savedGroups.length > 0
 
   const updateGroup = (groupId, key, value) => {
     setData((current) => ({
@@ -444,7 +438,9 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
         <div className="onb-setup-stack">
           <div className="onb-setup-section">
             <h3><MessageCircle size={18} /> Group selection</h3>
-            {detectedGroups.length ? (
+            {hasSavedSelection ? (
+              <div className="onb-banner success">Selected WhatsApp groups saved. Only these groups will be monitored.</div>
+            ) : detectedGroups.length ? (
               <>
                 <div className="onb-group-picker">
                   <div className="onb-group-picker-head">
@@ -987,18 +983,25 @@ export default function Onboarding() {
   }, [apiFetch, syncSelectedGroupsToData, userId])
 
   const loadDetectedGroups = useCallback(async () => {
-    if (!userId) return
-    try {
-      const payload = await apiFetch(`/whatsapp/groups/detected?user_id=${encodeURIComponent(userId)}`, {}, false)
-      const nextDetected = Array.isArray(payload?.groups) ? payload.groups : []
-      setDetectedGroups(nextDetected)
-      setSelectedDetectedGroupIds(new Set(nextDetected.filter((group) => group.is_selected).map((group) => group.group_id)))
-    } catch {
-      setDetectedGroups([])
-    } finally {
-      setDetectedGroupsLoaded(true)
-    }
-  }, [apiFetch, userId])
+      if (!userId) return
+      try {
+        if (connection.whatsapp) {
+          try {
+            await apiFetch(`/whatsapp/groups/resync?user_id=${encodeURIComponent(userId)}`, { method: 'POST' }, false)
+          } catch {
+            // Keep loading the cached detected groups even if live resync fails.
+          }
+        }
+        const payload = await apiFetch(`/whatsapp/groups/detected?user_id=${encodeURIComponent(userId)}`, {}, false)
+        const nextDetected = Array.isArray(payload?.groups) ? payload.groups : []
+        setDetectedGroups(nextDetected)
+        setSelectedDetectedGroupIds(new Set(nextDetected.filter((group) => group.is_selected).map((group) => group.group_id)))
+      } catch {
+        setDetectedGroups([])
+      } finally {
+        setDetectedGroupsLoaded(true)
+      }
+    }, [apiFetch, connection.whatsapp, userId])
 
   const toggleDetectedGroup = useCallback((groupId) => {
     setSelectedDetectedGroupIds((current) => {

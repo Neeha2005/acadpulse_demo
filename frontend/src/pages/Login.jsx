@@ -4,6 +4,8 @@ import { Check, Eye, EyeOff, Lock, Mail, TriangleAlert, WifiOff } from 'lucide-r
 import AuthShell from '../components/AuthShell'
 import { useAppContext } from '../context/AppContext'
 
+const POST_AUTH_RETURN_TO_STORAGE_KEY = 'acadpulse_post_auth_return_to'
+
 export default function Login() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -26,6 +28,41 @@ export default function Login() {
     [location.state],
   )
 
+  const resolveReturnTo = useMemo(() => {
+    const fromQuery = oauthParams.get('return_to') || ''
+    const fromSession = window.sessionStorage.getItem(POST_AUTH_RETURN_TO_STORAGE_KEY) || ''
+    const candidate = fromQuery || fromSession
+    if (!candidate || candidate === '/login') return ''
+    return candidate.startsWith('/') ? candidate : `/${candidate}`
+  }, [oauthParams])
+
+  const clearStoredReturnTo = () => {
+    window.sessionStorage.removeItem(POST_AUTH_RETURN_TO_STORAGE_KEY)
+  }
+
+  const buildRedirectUrl = (targetPath, extraParams) => {
+    const normalizedTarget = targetPath.startsWith('/') ? targetPath : `/${targetPath}`
+    const url = new URL(normalizedTarget, window.location.origin)
+    extraParams.forEach((value, key) => {
+      url.searchParams.set(key, value)
+    })
+    return `${url.pathname}${url.search}${url.hash}`
+  }
+
+  const navigateAfterLogin = async () => {
+    if (resolveReturnTo) {
+      clearStoredReturnTo()
+      navigate(resolveReturnTo, { replace: true })
+      return
+    }
+
+    const storedUserId = localStorage.getItem('acadpulse_user_id') || authUser?.id || ''
+    const query = storedUserId ? `?user_id=${encodeURIComponent(storedUserId)}` : ''
+    const payload = await apiFetch(`/onboarding/status${query}`, {}, false)
+    clearStoredReturnTo()
+    navigate(payload?.completed ? '/dashboard' : '/onboarding', { replace: true })
+  }
+
   useEffect(() => {
     const oauthToken = oauthParams.get('oauth_token')
 
@@ -40,16 +77,22 @@ export default function Login() {
         fullName: oauthName,
         email: oauthEmail,
       })
-      if (returnTo) {
-        const params = new URLSearchParams()
-        if (googleConnected) params.set('google_connected', '1')
-        if (googleIntegration) params.set('google_integration', googleIntegration)
-        navigate(`/${returnTo}${params.toString() ? `?${params.toString()}` : ''}`, { replace: true })
-      } else {
-        navigate('/onboarding', { replace: true })
+      const params = new URLSearchParams()
+      if (googleConnected) params.set('google_connected', '1')
+      if (googleIntegration) params.set('google_integration', googleIntegration)
+      const targetPath = returnTo || resolveReturnTo
+      if (targetPath) {
+        clearStoredReturnTo()
+        navigate(buildRedirectUrl(targetPath, params), { replace: true })
+        return
       }
+
+      navigateAfterLogin().catch(() => {
+        clearStoredReturnTo()
+        navigate('/onboarding', { replace: true })
+      })
     }
-  }, [completeLoginSession, navigate, oauthParams])
+  }, [completeLoginSession, navigate, navigateAfterLogin, oauthParams, resolveReturnTo])
 
   useEffect(() => {
     const syncStatus = () => {
@@ -96,12 +139,9 @@ export default function Login() {
     try {
       setLoading(true)
       await login(email.trim(), password)
-      const storedUserId = localStorage.getItem('acadpulse_user_id') || authUser?.id || ''
-      const query = storedUserId ? `?user_id=${encodeURIComponent(storedUserId)}` : ''
-      const payload = await apiFetch(`/onboarding/status${query}`, {}, false)
       setSuccess(true)
       await new Promise((resolve) => window.setTimeout(resolve, 750))
-      navigate(payload?.completed ? '/dashboard' : '/onboarding')
+      await navigateAfterLogin()
     } catch (error) {
       setFormError(error?.payload?.detail || error?.message || 'Unable to sign in')
       setFailedAttempts((prev) => prev + 1)

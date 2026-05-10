@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
 
@@ -23,11 +23,14 @@ export default function WhatsAppIntegration() {
   const [detectedGroups, setDetectedGroups] = useState([]);
   const [selectedDetectedGroupIds, setSelectedDetectedGroupIds] = useState(() => new Set());
   const [savingGroupSelection, setSavingGroupSelection] = useState(false);
+  const lastQrRef = useRef('');
+  const lastQrUpdatedAtRef = useRef('');
 
   const whatsappNotifs = notifications.filter(n => n.source === 'whatsapp');
   const mappedGroupIds = useMemo(() => new Set(mappings.map(m => m.source_reference_id)), [mappings]);
   const mappingByGroupId = useMemo(() => new Map(mappings.map(m => [m.source_reference_id, m])), [mappings]);
   const unmappedGroups = useMemo(() => groups.filter(g => !mappedGroupIds.has(g.group_id)), [groups, mappedGroupIds]);
+  const hasSavedDetectedSelection = useMemo(() => detectedGroups.some(group => group.is_selected), [detectedGroups]);
   const visibleGroups = useMemo(() => groups.filter(g => {
     if (groupFilter === 'Mapped') return mappedGroupIds.has(g.group_id);
     if (groupFilter === 'Unmapped') return !mappedGroupIds.has(g.group_id);
@@ -91,23 +94,42 @@ export default function WhatsAppIntegration() {
     }
   }, [apiFetch, userId, withUserQuery]);
 
-  const loadQrCode = useCallback(async () => {
-    setQrState({ loading: true, value: '', error: '' });
+  const triggerGroupResync = useCallback(async () => {
+    if (!userId) return false;
     try {
-      const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
-      const rawQr = payload?.qr || '';
-      const qrImage = rawQr
-        ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
-        : '';
-      setQrState({
-        loading: false,
-        value: qrImage,
-        error: qrImage ? '' : (payload?.message || 'QR code not available yet. Start the WhatsApp bridge and wait a few seconds.'),
-      });
+      await apiFetch(withUserQuery('/whatsapp/groups/resync'), { method: 'POST' }, false);
+      return true;
     } catch {
-      setQrState({ loading: false, value: '', error: 'QR code not available. Start the WhatsApp bridge and wait a few seconds.' });
+      return false;
     }
-  }, [apiFetch, withUserQuery]);
+  }, [apiFetch, userId, withUserQuery]);
+
+  const loadQrCode = useCallback(async () => {
+  setQrState(prev => ({ ...prev, loading: !prev.value }));
+  try {
+    const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
+    const rawQr = payload?.qr || '';
+    if (rawQr && rawQr !== lastQrRef.current) {
+      lastQrRef.current = rawQr;
+      const qrImage = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`;
+      setQrState({ loading: false, value: qrImage, error: '' });
+    } else if (!rawQr) {
+      if (payload?.status === 'connected') {
+        setQrState({ loading: false, value: '', error: '' });
+      } else {
+        setQrState(prev => ({
+          ...prev,
+          loading: false,
+          error: prev.value ? '' : (payload?.message || 'QR code not available yet. Start the WhatsApp bridge and wait a few seconds.'),
+        }));
+      }
+    } else {
+      setQrState(prev => ({ ...prev, loading: false }));
+    }
+  } catch {
+    setQrState(prev => ({ ...prev, loading: false, error: 'QR code not available. Start the WhatsApp bridge and wait a few seconds.' }));
+  }
+}, [apiFetch, withUserQuery]);
 
   const isConnected = waStatus.status === 'connected' || waStatus.status === 'open';
 
@@ -128,25 +150,62 @@ export default function WhatsAppIntegration() {
   }, [loadWaStatus, loadMappingData, loadDetectedGroups]);
 
   useEffect(() => {
-    if (!showQrPanel || isConnected || !userId) return undefined;
-    loadQrCode();
-    const statusPoll = window.setInterval(loadWaStatus, 3000);
-    const qrPoll = window.setInterval(() => {
-      loadQrCode();
-    }, 5000);
+  if (!showQrPanel || isConnected || !userId) return undefined;
 
-    return () => {
-      window.clearInterval(statusPoll);
-      window.clearInterval(qrPoll);
-    };
-  }, [isConnected, loadQrCode, loadWaStatus, showQrPanel, userId]);
+  loadQrCode();
 
+  const statusPoll = window.setInterval(async () => {
+    try {
+      const payload = await apiFetch(withUserQuery('/whatsapp/status'), {}, false);
+      const waData = payload?.whatsapp || {};
+      setWaStatus(waData);
+
+      if (
+        waData.status === 'qr_required' &&
+        waData.qr_updated_at &&
+        waData.qr_updated_at !== lastQrUpdatedAtRef.current
+      ) {
+        lastQrUpdatedAtRef.current = waData.qr_updated_at;
+        loadQrCode();
+      }
+    } catch {
+      // silent
+    }
+  }, 3000);
+
+  return () => window.clearInterval(statusPoll);
+}, [showQrPanel, isConnected, userId, apiFetch, withUserQuery, loadQrCode]);
+
+useEffect(() => {
+  if (!showQrPanel || isConnected) return undefined;
+  if (!qrState.value) return undefined;
+
+  const expiryTimer = window.setTimeout(() => {
+    setQrState(prev => ({ ...prev, loading: true }));
+  }, 20_000);
+
+  return () => window.clearTimeout(expiryTimer);
+}, [qrState.value, showQrPanel, isConnected]);
   useEffect(() => {
     if (isConnected) {
       setShowQrPanel(false);
       setQrState({ loading: false, value: '', error: '' });
     }
   }, [isConnected]);
+
+  useEffect(() => {
+    if (isConnected) {
+      loadMappingData();
+      loadDetectedGroups();
+      return;
+    }
+    setGroups([]);
+    setMappings([]);
+    setDetectedGroups([]);
+    setSelectedDetectedGroupIds(new Set());
+    setSelectedGroup('');
+    setMappingStatus('');
+  }, [isConnected, loadDetectedGroups, loadMappingData]);
 
   const toggleDetectedGroup = (groupId) => {
     setSelectedDetectedGroupIds(current => {
@@ -177,9 +236,23 @@ export default function WhatsAppIntegration() {
     }
   };
 
-  const handleForceSync = () => {
+  const handleForceSync = async () => {
     setIsSyncing(true);
-    setTimeout(() => setIsSyncing(false), 1500);
+    setMappingError('');
+    setMappingStatus('');
+    try {
+      const triggered = await triggerGroupResync();
+      if (!triggered) {
+        throw new Error('Unable to trigger WhatsApp group sync.');
+      }
+      await loadDetectedGroups();
+      await loadMappingData();
+      setMappingStatus('WhatsApp groups refreshed from the connected account.');
+    } catch (error) {
+      setMappingError(error.message || 'Unable to refresh WhatsApp groups.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleSaveManualGroup = async (event) => {
@@ -307,24 +380,39 @@ export default function WhatsAppIntegration() {
             <span className="badge badge-success">{selectedDetectedGroupIds.size} selected</span>
           </div>
           <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'grid', gap: 10, maxHeight: 300, overflow: 'auto' }}>
-              {detectedGroups.map(group => (
-                <label key={group.group_id} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 10, alignItems: 'center', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedDetectedGroupIds.has(group.group_id)}
-                    onChange={() => toggleDetectedGroup(group.group_id)}
-                  />
-                  <span style={{ minWidth: 0 }}>
-                    <strong style={{ display: 'block', fontSize: 14 }}>{group.group_name || group.group_id}</strong>
-                    <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <button className="btn btn-primary" type="button" onClick={saveDetectedGroupSelection} disabled={savingGroupSelection}>
-              {savingGroupSelection ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Save Selected Groups</>}
-            </button>
+            {hasSavedDetectedSelection ? (
+              <>
+                <div style={{ color: 'var(--success)', padding: 12, background: 'var(--success-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--success)', fontSize: 13 }}>
+                  <i className="fa-solid fa-check"></i> Group selection saved. Only selected groups are kept and monitored.
+                </div>
+                <div className="onb-course-pills">
+                  {detectedGroups.map((group) => (
+                    <span key={group.group_id}>{group.group_name || group.group_id}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gap: 10, maxHeight: 300, overflow: 'auto' }}>
+                  {detectedGroups.map(group => (
+                    <label key={group.group_id} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 10, alignItems: 'center', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedDetectedGroupIds.has(group.group_id)}
+                        onChange={() => toggleDetectedGroup(group.group_id)}
+                      />
+                      <span style={{ minWidth: 0 }}>
+                        <strong style={{ display: 'block', fontSize: 14 }}>{group.group_name || group.group_id}</strong>
+                        <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <button className="btn btn-primary" type="button" onClick={saveDetectedGroupSelection} disabled={savingGroupSelection}>
+                  {savingGroupSelection ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Save Selected Groups</>}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
