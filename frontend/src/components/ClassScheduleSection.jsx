@@ -11,6 +11,7 @@ const CLASS_DAYS = [
   { dow: 3, label: 'Wednesday' },
   { dow: 4, label: 'Thursday' },
   { dow: 5, label: 'Friday' },
+  { dow: 6, label: 'Saturday' },
 ]
 
 const EMPTY_FORM = { course_id: '', day_of_week: 1, start_time: '08:00', end_time: '09:30', room_number: '' }
@@ -147,7 +148,7 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
         <div>
           <h2 className="panel-title"><i className="fa-solid fa-chalkboard-user text-primary"></i> {title}</h2>
           <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-            Your weekly class timetable from Monday to Friday
+            Your weekly class timetable from Monday to Saturday
           </p>
         </div>
         <div className="class-schedule-toolbar">

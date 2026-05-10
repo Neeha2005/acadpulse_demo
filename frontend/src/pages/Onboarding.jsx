@@ -25,6 +25,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppContext } from '../context/AppContext'
+import { buildQrCodeDataUrl } from '../utils/qrCode'
 import '../onboarding.css'
 
 const TOTAL_STEPS = 8
@@ -40,12 +41,39 @@ const DAYS = [
 ]
 const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
 
+function readStorage(key, fallback = '') {
+  if (typeof window === 'undefined') return fallback
+  try {
+    return window.localStorage.getItem(key) || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeStorage(key, value) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function removeStorage(key) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // ignore storage removal failures
+  }
+}
+
 const DEFAULT_DATA = {
   profile: {
-    university: localStorage.getItem('acadpulse_university') || '',
-    degree: localStorage.getItem('acadpulse_degree') || '',
-    semester: localStorage.getItem('acadpulse_semester') || '',
-    section: localStorage.getItem('acadpulse_section') || '',
+    university: readStorage('acadpulse_university'),
+    degree: readStorage('acadpulse_degree'),
+    semester: readStorage('acadpulse_semester'),
+    section: readStorage('acadpulse_section'),
   },
   platforms: { whatsapp: false, gmail: false, classroom: false },
   preferences: {
@@ -69,7 +97,7 @@ const DEFAULT_DATA = {
 
 function readDraft() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+    const parsed = JSON.parse(readStorage(STORAGE_KEY, '{}'))
     return {
       ...DEFAULT_DATA,
       ...parsed,
@@ -419,7 +447,8 @@ function getCourseLabel(course) {
 
 function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGroupIds, toggleDetectedGroup, saveDetectedGroups, groupSelectionSaving, connection }) {
   const savedGroups = data.whatsappGroups || []
-  const courseGroups = savedGroups.filter((group) => group.kind !== 'society')
+  const courseGroups = savedGroups.filter((group) => group.kind === 'course')
+  const generalGroups = savedGroups.filter((group) => group.kind === 'general')
   const societyGroups = savedGroups.filter((group) => group.kind === 'society')
 
   const updateGroup = (groupId, key, value) => {
@@ -436,7 +465,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
       <StepBadge>WhatsApp Groups</StepBadge>
       <div className="onb-heading">
         <h1>Choose the groups to monitor</h1>
-        <p>Select only the WhatsApp groups AcadPulse should watch, then split them into subject groups and society groups.</p>
+        <p>Select only the WhatsApp groups AcadPulse should watch, then classify them as subject, general, or society groups.</p>
       </div>
       {!data.platforms.whatsapp && <div className="onb-banner">WhatsApp was not selected. Continue to subject mapping.</div>}
       {data.platforms.whatsapp && !connection.whatsapp && <div className="onb-banner danger">Connect WhatsApp in the previous step first.</div>}
@@ -478,7 +507,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                 </div>
                 {savedGroups.length > 0 && (
                   <div className="onb-map-section">
-                    <h3><Users size={16} /> Subject vs society</h3>
+                    <h3><Users size={16} /> Group type</h3>
                     <div className="onb-map-list">
                       {savedGroups.map((group) => (
                         <div className="onb-map-row" key={group.group_id}>
@@ -490,6 +519,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                           <span>-&gt;</span>
                           <select value={group.kind || 'course'} onChange={(e) => updateGroup(group.group_id, 'kind', e.target.value)}>
                             <option value="course">Subject / Course group</option>
+                            <option value="general">General class group</option>
                             <option value="society">Society / Community group</option>
                           </select>
                           <small style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</small>
@@ -510,6 +540,11 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                 {courseGroups.length ? courseGroups.map((group) => (
                   <span key={`course-${group.group_id}`}>{group.group_name || group.group_id}</span>
                 )) : <em>No course groups selected yet.</em>}
+              </div>
+              <div className="onb-course-pills" style={{ marginTop: 12 }}>
+                {generalGroups.length ? generalGroups.map((group) => (
+                  <span key={`general-${group.group_id}`}>{group.group_name || group.group_id}</span>
+                )) : <em>No general groups marked yet.</em>}
               </div>
               <div className="onb-course-pills" style={{ marginTop: 12 }}>
                 {societyGroups.length ? societyGroups.map((group) => (
@@ -721,7 +756,7 @@ function MappingStep({ data, setData, connection, groups }) {
         <h1>Map groups and classrooms to subjects</h1>
         <p>Link each selected WhatsApp group and Classroom course to the right subject name.</p>
       </div>
-      <div className="onb-explain">Only course groups appear here. Society and community groups stay out of subject mapping.</div>
+      <div className="onb-explain">Course groups and general class groups appear here. Society and community groups stay out of subject mapping.</div>
       {!courseOptions.length && <div className="onb-banner danger">Add at least one course above before saving mappings.</div>}
       {data.platforms.whatsapp && (
         <div className="onb-map-section">
@@ -834,14 +869,14 @@ export default function Onboarding() {
   const [connection, setConnection] = useState({
     whatsapp: false,
     google: false,
-    gmail: localStorage.getItem('acadpulse_gmail_connected') === 'true',
-    classroom: localStorage.getItem('acadpulse_classroom_connected') === 'true',
+    gmail: readStorage('acadpulse_gmail_connected') === 'true',
+    classroom: readStorage('acadpulse_classroom_connected') === 'true',
     gmailEmail: '',
     classroomCourses: [],
   })
 
-  const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || ''
-  const displayName = (localStorage.getItem('acadpulse_user') || user?.fullName || 'Scholar').split(' ')[0]
+  const userId = authUser?.id || user?.id || readStorage('acadpulse_user_id') || ''
+  const displayName = (readStorage('acadpulse_user') || user?.fullName || 'Scholar').split(' ')[0]
   const selectedCount = Object.values(data.platforms).filter(Boolean).length
   const progress = Math.round((step / TOTAL_STEPS) * 100)
   const mappedCount = [
@@ -860,7 +895,7 @@ export default function Onboarding() {
     const normalized = (items || []).map((item) => ({
       group_id: item.group_id || item.group_name || item.name || '',
       group_name: item.group_name || item.group_id || item.name || '',
-      kind: item.is_general ? 'society' : 'course',
+      kind: item.is_general ? 'general' : 'course',
     })).filter((item) => item.group_id)
 
     setGroups(normalized)
@@ -916,7 +951,7 @@ export default function Onboarding() {
   }, [apiFetch, showToast, userId])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    writeStorage(STORAGE_KEY, JSON.stringify(data))
   }, [data])
 
   useEffect(() => {
@@ -940,7 +975,7 @@ export default function Onboarding() {
         setQr(payload.qr_image || payload.qr_url)
         setQrMessage('')
       } else if (raw) {
-        setQr(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(raw)}`)
+        setQr(await buildQrCodeDataUrl(raw))
         setQrMessage('')
       } else {
         setQr('')
@@ -972,8 +1007,8 @@ export default function Onboarding() {
         google: google.status === 'fulfilled' ? Boolean(google.value?.connected) : current.google,
         gmailEmail: google.status === 'fulfilled' ? (google.value?.email || current.gmailEmail) : current.gmailEmail,
         whatsapp: whatsapp.status === 'fulfilled' ? whatsapp.value?.whatsapp?.status === 'connected' : current.whatsapp,
-        gmail: current.gmail || localStorage.getItem('acadpulse_gmail_connected') === 'true',
-        classroom: current.classroom || localStorage.getItem('acadpulse_classroom_connected') === 'true',
+        gmail: current.gmail || readStorage('acadpulse_gmail_connected') === 'true',
+        classroom: current.classroom || readStorage('acadpulse_classroom_connected') === 'true',
         classroomCourses: classroom.status === 'fulfilled' && Array.isArray(classroom.value?.courses) ? classroom.value.courses : current.classroomCourses,
       }))
     } catch {
@@ -1107,10 +1142,10 @@ export default function Onboarding() {
     const params = new URLSearchParams(location.search)
     if (params.get('google_connected') !== '1') return undefined
 
-    const storedEmail = localStorage.getItem('acadpulse_user_email') || user?.email || authUser?.email || ''
+    const storedEmail = readStorage('acadpulse_user_email') || user?.email || authUser?.email || ''
     const integration = params.get('google_integration')
-    if (integration === 'gmail') localStorage.setItem('acadpulse_gmail_connected', 'true')
-    if (integration === 'classroom') localStorage.setItem('acadpulse_classroom_connected', 'true')
+    if (integration === 'gmail') writeStorage('acadpulse_gmail_connected', 'true')
+    if (integration === 'classroom') writeStorage('acadpulse_classroom_connected', 'true')
     const nextPlatforms = {
       ...data.platforms,
       ...(integration === 'gmail' ? { gmail: true } : {}),
@@ -1228,10 +1263,10 @@ export default function Onboarding() {
   }
 
   const persistProfileLocally = () => {
-    localStorage.setItem('acadpulse_university', data.profile.university)
-    localStorage.setItem('acadpulse_degree', data.profile.degree)
-    localStorage.setItem('acadpulse_semester', data.profile.semester)
-    localStorage.setItem('acadpulse_section', data.profile.section)
+    writeStorage('acadpulse_university', data.profile.university)
+    writeStorage('acadpulse_degree', data.profile.degree)
+    writeStorage('acadpulse_semester', data.profile.semester)
+    writeStorage('acadpulse_section', data.profile.section)
   }
 
   const saveMappings = async (coursesOverride = data.courses) => {
@@ -1364,7 +1399,7 @@ export default function Onboarding() {
 
   const finish = async () => {
     setFinishing(true)
-    localStorage.setItem('acadpulse_onboarding_complete', 'true')
+    writeStorage('acadpulse_onboarding_complete', 'true')
     try {
       persistProfileLocally()
       const savedCourses = await saveCourses()
@@ -1374,7 +1409,7 @@ export default function Onboarding() {
         method: 'POST',
         body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), data: onboardingData }),
       }, false)
-      localStorage.removeItem(STORAGE_KEY)
+      removeStorage(STORAGE_KEY)
     } catch {
       showToast('Could not save final state, opening dashboard anyway', 'error')
     } finally {
