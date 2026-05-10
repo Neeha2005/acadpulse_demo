@@ -141,7 +141,6 @@ export default function WhatsAppIntegration() {
   useEffect(() => {
   if (!showQrPanel || isConnected || !userId) return undefined;
 
-  // Trigger session start and fetch initial QR once immediately
   loadQrCode();
 
   const statusPoll = window.setInterval(async () => {
@@ -149,7 +148,7 @@ export default function WhatsAppIntegration() {
       const payload = await apiFetch(withUserQuery('/whatsapp/status'), {}, false);
       const waData = payload?.whatsapp || {};
       setWaStatus(waData);
-      // Only reload QR image when the bridge has actually posted a new one
+
       if (
         waData.status === 'qr_required' &&
         waData.qr_updated_at &&
@@ -159,13 +158,23 @@ export default function WhatsAppIntegration() {
         loadQrCode();
       }
     } catch {
-      // silent — do not update status on error
+      // silent
     }
   }, 3000);
 
   return () => window.clearInterval(statusPoll);
-}, [isConnected, loadQrCode, loadWaStatus, showQrPanel, userId, apiFetch, withUserQuery]);
+}, [showQrPanel, isConnected, userId, apiFetch, withUserQuery, loadQrCode]);
 
+useEffect(() => {
+  if (!showQrPanel || isConnected) return undefined;
+  if (!qrState.value) return undefined;
+
+  const expiryTimer = window.setTimeout(() => {
+    setQrState(prev => ({ ...prev, loading: true }));
+  }, 20_000);
+
+  return () => window.clearTimeout(expiryTimer);
+}, [qrState.value, showQrPanel, isConnected]);
   useEffect(() => {
     if (isConnected) {
       setShowQrPanel(false);
