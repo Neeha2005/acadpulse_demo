@@ -242,6 +242,21 @@ def ensure_whatsapp_bridge_session(user_id: str) -> None:
     except Exception as exc:
         logger.warning("WhatsApp bridge control unavailable for user_id=%s: %s", user_id, exc)
 
+def trigger_whatsapp_group_resync(user_id: str) -> bool:
+    if not user_id:
+        return False
+    try:
+        url = f"{WHATSAPP_CONTROL_URL.rstrip('/')}/sessions/{quote_plus(str(user_id))}/sync-groups"
+        with httpx.Client(timeout=8.0) as client:
+            response = client.post(url)
+            if response.status_code >= 400:
+                logger.warning("WhatsApp group sync failed: %s %s", response.status_code, response.text)
+                return False
+        return True
+    except Exception as exc:
+        logger.warning("WhatsApp group sync unavailable for user_id=%s: %s", user_id, exc)
+        return False
+
 app = FastAPI(
     title="AcadPulse API",
     description="Backend API for AcadPulse academic notification system",
@@ -3290,6 +3305,21 @@ def get_detected_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
         "user_id": resolved_user_id,
         "count": len(rows),
         "groups": [serialize_whatsapp_group_row(row) for row in rows],
+    }
+
+@app.post("/whatsapp/groups/resync")
+def resync_detected_whatsapp_groups(user_id: Optional[str] = Query(default=None)):
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    resolved_user_id = resolve_mapping_user_id(user_id)
+    ensure_whatsapp_bridge_session(resolved_user_id)
+    triggered = trigger_whatsapp_group_resync(resolved_user_id)
+    if not triggered:
+        raise HTTPException(status_code=503, detail="Unable to trigger WhatsApp group sync")
+    return {
+        "status": "success",
+        "user_id": resolved_user_id,
+        "message": "WhatsApp group sync triggered",
     }
 
 @app.post("/whatsapp/groups/selection")

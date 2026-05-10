@@ -30,6 +30,7 @@ export default function WhatsAppIntegration() {
   const mappedGroupIds = useMemo(() => new Set(mappings.map(m => m.source_reference_id)), [mappings]);
   const mappingByGroupId = useMemo(() => new Map(mappings.map(m => [m.source_reference_id, m])), [mappings]);
   const unmappedGroups = useMemo(() => groups.filter(g => !mappedGroupIds.has(g.group_id)), [groups, mappedGroupIds]);
+  const hasSavedDetectedSelection = useMemo(() => detectedGroups.some(group => group.is_selected), [detectedGroups]);
   const visibleGroups = useMemo(() => groups.filter(g => {
     if (groupFilter === 'Mapped') return mappedGroupIds.has(g.group_id);
     if (groupFilter === 'Unmapped') return !mappedGroupIds.has(g.group_id);
@@ -90,6 +91,16 @@ export default function WhatsAppIntegration() {
       setSelectedDetectedGroupIds(new Set(nextGroups.filter(group => group.is_selected).map(group => group.group_id)));
     } catch {
       setDetectedGroups([]);
+    }
+  }, [apiFetch, userId, withUserQuery]);
+
+  const triggerGroupResync = useCallback(async () => {
+    if (!userId) return false;
+    try {
+      await apiFetch(withUserQuery('/whatsapp/groups/resync'), { method: 'POST' }, false);
+      return true;
+    } catch {
+      return false;
     }
   }, [apiFetch, userId, withUserQuery]);
 
@@ -225,9 +236,23 @@ useEffect(() => {
     }
   };
 
-  const handleForceSync = () => {
+  const handleForceSync = async () => {
     setIsSyncing(true);
-    setTimeout(() => setIsSyncing(false), 1500);
+    setMappingError('');
+    setMappingStatus('');
+    try {
+      const triggered = await triggerGroupResync();
+      if (!triggered) {
+        throw new Error('Unable to trigger WhatsApp group sync.');
+      }
+      await loadDetectedGroups();
+      await loadMappingData();
+      setMappingStatus('WhatsApp groups refreshed from the connected account.');
+    } catch (error) {
+      setMappingError(error.message || 'Unable to refresh WhatsApp groups.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleSaveManualGroup = async (event) => {
@@ -355,24 +380,39 @@ useEffect(() => {
             <span className="badge badge-success">{selectedDetectedGroupIds.size} selected</span>
           </div>
           <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'grid', gap: 10, maxHeight: 300, overflow: 'auto' }}>
-              {detectedGroups.map(group => (
-                <label key={group.group_id} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 10, alignItems: 'center', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedDetectedGroupIds.has(group.group_id)}
-                    onChange={() => toggleDetectedGroup(group.group_id)}
-                  />
-                  <span style={{ minWidth: 0 }}>
-                    <strong style={{ display: 'block', fontSize: 14 }}>{group.group_name || group.group_id}</strong>
-                    <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <button className="btn btn-primary" type="button" onClick={saveDetectedGroupSelection} disabled={savingGroupSelection}>
-              {savingGroupSelection ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Save Selected Groups</>}
-            </button>
+            {hasSavedDetectedSelection ? (
+              <>
+                <div style={{ color: 'var(--success)', padding: 12, background: 'var(--success-subtle)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--success)', fontSize: 13 }}>
+                  <i className="fa-solid fa-check"></i> Group selection saved. Only selected groups are kept and monitored.
+                </div>
+                <div className="onb-course-pills">
+                  {detectedGroups.map((group) => (
+                    <span key={group.group_id}>{group.group_name || group.group_id}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gap: 10, maxHeight: 300, overflow: 'auto' }}>
+                  {detectedGroups.map(group => (
+                    <label key={group.group_id} style={{ display: 'grid', gridTemplateColumns: '18px minmax(0, 1fr)', gap: 10, alignItems: 'center', padding: 12, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--surface-hover)' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedDetectedGroupIds.has(group.group_id)}
+                        onChange={() => toggleDetectedGroup(group.group_id)}
+                      />
+                      <span style={{ minWidth: 0 }}>
+                        <strong style={{ display: 'block', fontSize: 14 }}>{group.group_name || group.group_id}</strong>
+                        <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <button className="btn btn-primary" type="button" onClick={saveDetectedGroupSelection} disabled={savingGroupSelection}>
+                  {savingGroupSelection ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</> : <><i className="fa-solid fa-check"></i> Save Selected Groups</>}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

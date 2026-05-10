@@ -619,6 +619,29 @@ function startControlServer() {
       return;
     }
 
+    const syncGroupsMatch = url.pathname.match(/^\/sessions\/([^/]+)\/sync-groups$/);
+    if (request.method === "POST" && syncGroupsMatch) {
+      const userId = cleanUserId(decodeURIComponent(syncGroupsMatch[1]));
+      const sock = activeSessions.get(userId);
+      if (!sock || sock?.ws?.readyState !== 1) {
+        sendJson(response, 409, {
+          status: "not_connected",
+          user_id: userId,
+          detail: "WhatsApp session is not connected",
+        });
+        return;
+      }
+      syncGroups(sock, userId)
+        .then(() => {
+          sendJson(response, 202, { status: "syncing", user_id: userId });
+        })
+        .catch((error) => {
+          logger.error({ userId, error }, "Could not sync WhatsApp groups on demand");
+          sendJson(response, 500, { status: "error", user_id: userId, detail: error.message });
+        });
+      return;
+    }
+
     sendJson(response, 404, { status: "not_found" });
   });
 

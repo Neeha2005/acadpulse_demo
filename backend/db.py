@@ -960,7 +960,7 @@ def list_whatsapp_groups(user_id=None, selected_only=True):
 
 
 def list_detected_whatsapp_groups(user_id):
-    """Return all non-ignored WhatsApp groups detected for a specific user."""
+    """Return all WhatsApp groups detected for a specific user."""
     if not user_id:
         return []
     conn = get_db_connection()
@@ -981,7 +981,6 @@ def list_detected_whatsapp_groups(user_id):
             FROM user_whatsapp_groups uwg
             JOIN whatsapp_groups wg ON wg.id = uwg.whatsapp_group_id
             WHERE uwg.user_id = %s
-              AND uwg.is_ignored = FALSE
             ORDER BY uwg.is_selected DESC, wg.group_name ASC;
             """,
             (user_id,),
@@ -993,7 +992,7 @@ def list_detected_whatsapp_groups(user_id):
 
 
 def save_user_whatsapp_group_selection(user_id, group_ids):
-    """Mark selected groups for a user and ignore all other detected groups."""
+    """Keep only selected WhatsApp groups for a user and delete all others."""
     selected_ids = [str(group_id).strip() for group_id in (group_ids or []) if str(group_id or "").strip()]
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -1003,7 +1002,7 @@ def save_user_whatsapp_group_selection(user_id, group_ids):
             """
             UPDATE user_whatsapp_groups
             SET is_selected = FALSE,
-                is_ignored = TRUE,
+                is_ignored = FALSE,
                 updated_at = NOW()
             WHERE user_id = %s;
             """,
@@ -1025,14 +1024,26 @@ def save_user_whatsapp_group_selection(user_id, group_ids):
             )
         cur.execute(
             """
+            DELETE FROM user_whatsapp_groups
+            WHERE user_id = %s
+              AND COALESCE(is_selected, FALSE) = FALSE;
+            """,
+            (user_id,),
+        )
+        cur.execute(
+            """
             DELETE FROM course_source_mappings csm
             USING whatsapp_groups wg
-            JOIN user_whatsapp_groups uwg ON uwg.whatsapp_group_id = wg.id
             WHERE csm.user_id = %s
-              AND uwg.user_id = %s
               AND csm.source_type = 'whatsapp'
               AND csm.source_reference_id = wg.whatsapp_group_id
-              AND uwg.is_ignored = TRUE;
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM user_whatsapp_groups uwg
+                  WHERE uwg.user_id = %s
+                    AND uwg.whatsapp_group_id = wg.id
+                    AND COALESCE(uwg.is_selected, FALSE) = TRUE
+              );
             """,
             (user_id, user_id),
         )
