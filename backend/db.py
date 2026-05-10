@@ -1066,6 +1066,45 @@ def is_user_whatsapp_group_selected(user_id, group_id):
         cur.close()
         conn.close()
 
+def clear_user_whatsapp_groups(user_id):
+    """Delete all detected/selected WhatsApp groups and WhatsApp mappings for a user."""
+    if not user_id:
+        return {"deleted_groups": 0, "deleted_mappings": 0}
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        ensure_whatsapp_group_selection_schema(cur)
+        cur.execute(
+            """
+            DELETE FROM course_source_mappings
+            WHERE user_id = %s
+              AND source_type = 'whatsapp';
+            """,
+            (user_id,),
+        )
+        deleted_mappings = cur.rowcount
+
+        cur.execute(
+            """
+            DELETE FROM user_whatsapp_groups
+            WHERE user_id = %s;
+            """,
+            (user_id,),
+        )
+        deleted_groups = cur.rowcount
+        conn.commit()
+        return {
+            "deleted_groups": deleted_groups,
+            "deleted_mappings": deleted_mappings,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
 def record_classroom_course(classroom_id, classroom_name=None, user_id=None):
     """Store a Google Classroom course seen during sync and optionally attach it to a user."""
     if not classroom_id:
