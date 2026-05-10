@@ -2725,6 +2725,7 @@ h4,
 .notif-preview {
   display: -webkit-box;
   overflow: hidden;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   text-overflow: ellipsis;
@@ -7741,7 +7742,6 @@ h4,
   font-size: 0.72rem;
   font-weight: 700;
 }
-
 .announcements-page .announcements-pulse {
   position: absolute;
   width: 12px;

@@ -25,12 +25,19 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppContext } from '../context/AppContext'
-import { TIMETABLE_DAYS } from '../constants/timetable'
 import '../onboarding.css'
 
 const TOTAL_STEPS = 8
 const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
-const DAYS = TIMETABLE_DAYS.map(({ dow, label }) => [dow, label])
+const DAYS = [
+  [1, 'Monday'],
+  [2, 'Tuesday'],
+  [3, 'Wednesday'],
+  [4, 'Thursday'],
+  [5, 'Friday'],
+  [6, 'Saturday'],
+  [7, 'Sunday'],
+]
 const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
 
 const DEFAULT_DATA = {
@@ -1305,7 +1312,6 @@ export default function Onboarding() {
   const saveTimetable = async () => {
     const rows = (data.timetable || []).filter((slot) => slot.course_id && slot.start_time && slot.end_time)
     if (!rows.length) return
-    let createdAny = false
     for (const slot of rows) {
       if (!String(slot.id || '').startsWith('slot-')) continue
       try {
@@ -1319,31 +1325,9 @@ export default function Onboarding() {
             room_number: slot.room_number?.trim() || undefined,
           }),
         })
-        createdAny = true
       } catch {
         showToast('One timetable slot could not be saved', 'error')
       }
-    }
-
-    if (!createdAny) return
-
-    try {
-      const payload = await apiFetch('/timetable')
-      if (Array.isArray(payload?.slots)) {
-        setData((current) => ({
-          ...current,
-          timetable: payload.slots.map((slot) => ({
-            id: String(slot.id || `slot-${Date.now()}`),
-            course_id: String(slot.course_id || ''),
-            day_of_week: Number(slot.day_of_week || 1),
-            start_time: slot.start_time || '09:00',
-            end_time: slot.end_time || '10:00',
-            room_number: slot.room_number || '',
-          })),
-        }))
-      }
-    } catch {
-      showToast('Timetable saved but local refresh failed', 'error')
     }
   }
 

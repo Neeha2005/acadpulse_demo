@@ -1136,14 +1136,18 @@
 
 .onb-confetti span {
   position: absolute;
-  left: calc((var(--i) * 37) % 100 * 1%);
+  left: calc(var(--i) * 1%);
   top: -20px;
-  width: calc(6px + (var(--i) % 5) * 1px);
-  height: calc(6px + (var(--i) % 4) * 1px);
-  border-radius: calc((var(--i) % 2) * 50%);
+
+  width: 8px;
+  height: 8px;
+
+  border-radius: 50%;
+
   background: hsl(calc(var(--i) * 48), 84%, 62%);
-  animation: confettiFall calc(2.5s + (var(--i) % 6) * 0.25s) ease-in forwards;
-  animation-delay: calc((var(--i) % 9) * 0.16s);
+
+  animation: confettiFall 3s ease-in forwards;
+  animation-delay: calc(var(--i) * 0.1s);
 }
 
 @keyframes confettiFall {

@@ -5,70 +5,11 @@ import makeWASocket, {
 } from "baileys";
 import qrcode from "qrcode-terminal";
 import { flushPendingMessages, sendIncomingMessage } from "./bridge.js";
-import { config } from "./config.js";
 import { logger } from "./logger.js";
 import { normalizeIncomingMessage } from "./message-normalizer.js";
 
 const AUTH_DIR = "auth";
 const QUEUE_FLUSH_INTERVAL_MS = 30_000;
-const DEFAULT_USER_ID = process.env.WHATSAPP_USER_ID || "";
-
-async function postWhatsAppGroup(userId, groupData) {
-  if (!userId) {
-    return;
-  }
-
-  try {
-    await fetch(new URL("/whatsapp/groups", config.fastApiBaseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...groupData,
-        user_id: userId,
-      }),
-    });
-  } catch (error) {
-    logger.warn(
-      { userId, groupId: groupData?.group_id, error: error.message },
-      "Could not seed WhatsApp group into FastAPI",
-    );
-  }
-}
-
-async function syncGroups(sock, userId) {
-  if (!userId) {
-    logger.warn("Skipping WhatsApp group roster sync because WHATSAPP_USER_ID is missing");
-    return;
-  }
-
-  try {
-    const groups = await sock.groupFetchAllParticipating();
-    const groupEntries = Object.values(groups || {});
-
-    logger.info(
-      { userId, count: groupEntries.length },
-      "Syncing full WhatsApp group roster to FastAPI",
-    );
-
-    await Promise.all(
-      groupEntries.map((group) =>
-        postWhatsAppGroup(userId, {
-          group_id: cleanJid(group.id),
-          group_name: group.subject || cleanJid(group.id),
-          is_general: false,
-          selected: false,
-        }),
-      ),
-    );
-  } catch (error) {
-    logger.warn(
-      { userId, error: error.message },
-      "Could not sync full WhatsApp group roster",
-    );
-  }
-}
 
 async function startWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -99,9 +40,6 @@ async function startWhatsApp() {
 
     if (connection === "open") {
       logger.info("WhatsApp connection established");
-      syncGroups(sock, DEFAULT_USER_ID).catch((error) => {
-        logger.warn({ error: error.message }, "Initial WhatsApp group roster sync failed");
-      });
     }
 
     if (connection === "close") {
@@ -153,10 +91,6 @@ async function startWhatsApp() {
       logger.warn({ error: error.message }, "Could not flush WhatsApp retry queue");
     });
   }, QUEUE_FLUSH_INTERVAL_MS).unref();
-}
-
-function cleanJid(jid) {
-  return String(jid || "").split("@")[0].split(":")[0];
 }
 
 startWhatsApp().catch((error) => {

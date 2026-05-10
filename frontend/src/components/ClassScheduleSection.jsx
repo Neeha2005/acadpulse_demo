@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { TIMETABLE_DAYS } from '../constants/timetable'
 
 const SLOT_COLORS = [
   '#6366f1', '#22c55e', '#f59e0b', '#ec4899', '#06b6d4',
   '#a855f7', '#ef4444', '#14b8a6', '#f97316', '#3b82f6',
 ]
 
-const CLASS_DAYS = TIMETABLE_DAYS
+const CLASS_DAYS = [
+  { dow: 1, label: 'Monday' },
+  { dow: 2, label: 'Tuesday' },
+  { dow: 3, label: 'Wednesday' },
+  { dow: 4, label: 'Thursday' },
+  { dow: 5, label: 'Friday' },
+]
 
 const EMPTY_FORM = { course_id: '', day_of_week: 1, start_time: '08:00', end_time: '09:30', room_number: '' }
 
@@ -142,7 +147,7 @@ export default function ClassScheduleSection({ apiFetch, userId, title = 'Class 
         <div>
           <h2 className="panel-title"><i className="fa-solid fa-chalkboard-user text-primary"></i> {title}</h2>
           <p style={{ margin: '8px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-            Your weekly class timetable across the full academic week
+            Your weekly class timetable from Monday to Friday
           </p>
         </div>
         <div className="class-schedule-toolbar">
