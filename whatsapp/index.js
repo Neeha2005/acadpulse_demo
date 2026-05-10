@@ -4,6 +4,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   downloadMediaMessage,
   initAuthCreds,
+  BufferJSON,
 } from "@whiskeysockets/baileys";
 import pg from "pg";
 import {
@@ -126,21 +127,22 @@ async function useSupabaseAuthState(userId) {
   for (const row of loadResult.rows) {
     if (row.session_key === "creds") {
       try {
-        creds = typeof row.session_data === "object"
-          ? row.session_data
-          : JSON.parse(row.session_data);
+        const raw = typeof row.session_data === "object"
+          ? JSON.stringify(row.session_data)
+          : row.session_data;
+        creds = JSON.parse(raw, BufferJSON.reviver);
       } catch {
         logger.warn({ userId }, "Could not parse stored creds, starting fresh");
       }
     } else {
-      // All other rows are sync keys stored as "type-id"
       try {
         const [type, ...rest] = row.session_key.split("-");
         const id = rest.join("-");
         if (!keyCache[type]) keyCache[type] = {};
-        keyCache[type][id] = typeof row.session_data === "object"
-          ? row.session_data
-          : JSON.parse(row.session_data);
+        const raw = typeof row.session_data === "object"
+          ? JSON.stringify(row.session_data)
+          : row.session_data;
+        keyCache[type][id] = JSON.parse(raw, BufferJSON.reviver);
       } catch {
         logger.warn({ userId, key: row.session_key }, "Could not parse stored sync key");
       }
@@ -155,7 +157,7 @@ async function useSupabaseAuthState(userId) {
          VALUES ($1, 'creds', $2::jsonb)
          ON CONFLICT (user_id, session_key) DO UPDATE
          SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
-        [userId, JSON.stringify(creds)]
+        [userId, JSON.stringify(creds, BufferJSON.replacer)]
       );
     } catch (err) {
       logger.error({ userId, error: err.message }, "Failed to persist WhatsApp creds to DB");
@@ -169,7 +171,18 @@ async function useSupabaseAuthState(userId) {
       get: async (type, ids) => {
         const result = {};
         for (const id of ids) {
-          result[id] = keyCache[type]?.[id] ?? null;
+          const cached = keyCache[type]?.[id] ?? null;
+          if (cached === null) {
+            result[id] = null;
+            continue;
+          }
+          // Re-parse through BufferJSON to ensure Buffer fields are
+          // proper Buffer instances not plain objects.
+          try {
+            result[id] = JSON.parse(JSON.stringify(cached, BufferJSON.replacer), BufferJSON.reviver);
+          } catch {
+            result[id] = cached;
+          }
         }
         return result;
       },
@@ -197,7 +210,7 @@ async function useSupabaseAuthState(userId) {
                VALUES ($1, $2, $3::jsonb)
                ON CONFLICT (user_id, session_key) DO UPDATE
                SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
-              [userId, sessionKey, JSON.stringify(value)]
+              [userId, sessionKey, JSON.stringify(value, BufferJSON.replacer)]
             );
           }
           await client.query('COMMIT');
