@@ -289,7 +289,7 @@ export default function Timetable() {
         </div>
       </section>
 
-      <ClassScheduleSection apiFetch={apiFetch} userId={userId} title="Class Schedule" marginTop={24} />
+      <ClassScheduleSection apiFetch={apiFetch} userId={authUser?.id || user?.id || ''} title="Class Schedule" marginTop={24} />
     </div>
   )
 }
