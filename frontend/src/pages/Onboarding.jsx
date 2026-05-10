@@ -210,7 +210,7 @@ function WelcomeStep({ name }) {
   )
 }
 
-function ProfileStep({ data, setData, errors, clearError }) {
+function ProfileStep({ data, setData, errors, clearError, onDeleteProfile, deletingProfile }) {
   const profile = data.profile
   const update = (key, value) => {
     setData((current) => ({ ...current, profile: { ...current.profile, [key]: value } }))
@@ -245,6 +245,19 @@ function ProfileStep({ data, setData, errors, clearError }) {
           <input value={profile.section} onChange={(e) => update('section', e.target.value)} placeholder="e.g. BCS-6A, BSCS-F22" />
         </Field>
       </div>
+      <div className="onb-banner danger" style={{ marginTop: 20 }}>
+        Delete profile will remove your AcadPulse account and saved onboarding data.
+      </div>
+      <button
+        type="button"
+        className="onb-ghost-btn"
+        onClick={onDeleteProfile}
+        disabled={deletingProfile}
+        style={{ marginTop: 12, borderColor: 'rgba(239, 68, 68, 0.35)', color: '#fca5a5' }}
+      >
+        {deletingProfile ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+        Delete profile
+      </button>
     </section>
   )
 }
@@ -541,15 +554,10 @@ function WhatsAppGroupsStep({
           {savedGroups.length > 0 && (
             <div className="onb-setup-section">
               <h3><School size={18} /> Current split</h3>
-              <div className="onb-course-pills">
-                {courseGroups.length ? courseGroups.map((group) => (
-                  <span key={`course-${group.group_id}`}>{group.group_name || group.group_id}</span>
-                )) : <em>No course groups selected yet.</em>}
-              </div>
-              <div className="onb-course-pills" style={{ marginTop: 12 }}>
-                {societyGroups.length ? societyGroups.map((group) => (
-                  <span key={`society-${group.group_id}`}>{group.group_name || group.group_id}</span>
-                )) : <em>No society groups marked yet.</em>}
+              <div className="onb-summary" style={{ marginTop: 0 }}>
+                <div><Check size={15} /><span>{savedGroups.length} selected WhatsApp groups</span></div>
+                <div><Check size={15} /><span>{courseGroups.length} course groups</span></div>
+                <div><Check size={15} /><span>{societyGroups.length} society groups</span></div>
               </div>
             </div>
           )}
@@ -847,7 +855,7 @@ function DoneStep({ name, data, connection, mappedCount }) {
 export default function Onboarding() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { API_BASE_URL, apiFetch, user, authUser } = useAppContext()
+  const { API_BASE_URL, apiFetch, user, authUser, logout } = useAppContext()
   const [step, setStep] = useState(1)
   const [direction, setDirection] = useState('forward')
   const [data, setData] = useState(readDraft)
@@ -856,6 +864,7 @@ export default function Onboarding() {
   const [resume, setResume] = useState(false)
   const [saving, setSaving] = useState(false)
   const [finishing, setFinishing] = useState(false)
+  const [deletingProfile, setDeletingProfile] = useState(false)
   const [platformError, setPlatformError] = useState('')
   const [setupUnlocked, setSetupUnlocked] = useState(false)
   const [groups, setGroups] = useState([])
@@ -950,6 +959,24 @@ export default function Onboarding() {
       showToast('Integration settings save failed - continuing locally', 'error')
     }
   }, [apiFetch, showToast, userId])
+
+  const deleteProfile = useCallback(async () => {
+    if (deletingProfile) return
+    const confirmed = window.confirm('Delete your AcadPulse profile and all saved onboarding data? This cannot be undone.')
+    if (!confirmed) return
+    setDeletingProfile(true)
+    try {
+      await apiFetch('/auth/profile', { method: 'DELETE' })
+      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem('acadpulse_onboarding_complete')
+      logout()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      showToast(error?.message || 'Could not delete profile', 'error')
+    } finally {
+      setDeletingProfile(false)
+    }
+  }, [apiFetch, deletingProfile, logout, navigate, showToast])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -1474,7 +1501,7 @@ export default function Onboarding() {
       {resume && <div className="onb-resume">Welcome back {displayName} - picking up where you left off.</div>}
       <div className={`onb-content ${direction} ${step === 6 ? 'wide' : ''}`} key={step}>
         {step === 1 && <WelcomeStep name={displayName} />}
-        {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} />}
+        {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} onDeleteProfile={deleteProfile} deletingProfile={deletingProfile} />}
         {step === 3 && <PlatformsStep data={data} setData={setData} platformError={platformError} />}
         {step === 4 && (
           <SetupStep

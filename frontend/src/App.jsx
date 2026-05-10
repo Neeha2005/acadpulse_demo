@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useAppContext } from './context/AppContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'

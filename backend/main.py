@@ -1989,6 +1989,56 @@ def reset_semester_data(user_id: str) -> Dict[str, Any]:
         cur.close()
         conn.close()
 
+
+def delete_user_profile_data(user_id: str) -> Dict[str, Any]:
+    """Delete a user's account and user-owned data."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            DELETE FROM attachments
+            WHERE notification_id IN (
+                SELECT id FROM notifications WHERE user_id = %s
+            );
+            """,
+            (user_id,),
+        )
+        deleted_attachments = cur.rowcount
+
+        cur.execute("DELETE FROM notifications WHERE user_id = %s;", (user_id,))
+        deleted_notifications = cur.rowcount
+
+        cur.execute("DELETE FROM timetable_entries WHERE user_id = %s;", (user_id,))
+        deleted_timetable_entries = cur.rowcount
+
+        cur.execute("DELETE FROM onboarding_progress WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM user_settings WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM user_classroom_courses WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM user_courses WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM course_source_mappings WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM user_whatsapp_groups WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM whatsapp_sessions WHERE user_id = %s;", (user_id,))
+        cur.execute("DELETE FROM users WHERE id = %s;", (user_id,))
+        deleted_users = cur.rowcount
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    delete_google_credentials(user_id)
+    invalidate_chat_context(user_id)
+    return {
+        "deleted_users": deleted_users,
+        "deleted_notifications": deleted_notifications,
+        "deleted_attachments": deleted_attachments,
+        "deleted_timetable_entries": deleted_timetable_entries,
+    }
+
 def resolve_default_student_user_id() -> str:
     return str(get_or_create_user("Default Student", "student@example.com"))
 
@@ -3083,6 +3133,17 @@ def get_authenticated_user(current_user: Dict[str, Any] = Depends(get_current_us
     return {
         "status": "success",
         "user": serialize_user(current_user),
+    }
+
+
+@app.delete("/auth/profile")
+def delete_authenticated_profile(current_user: Dict[str, Any] = Depends(get_current_user)):
+    user_id = str(current_user["id"])
+    result = delete_user_profile_data(user_id)
+    return {
+        "status": "success",
+        "message": "Profile deleted.",
+        **result,
     }
 
 @app.get("/auth/google")
