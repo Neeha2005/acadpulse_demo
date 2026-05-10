@@ -1305,6 +1305,7 @@ export default function Onboarding() {
   const saveTimetable = async () => {
     const rows = (data.timetable || []).filter((slot) => slot.course_id && slot.start_time && slot.end_time)
     if (!rows.length) return
+    let createdAny = false
     for (const slot of rows) {
       if (!String(slot.id || '').startsWith('slot-')) continue
       try {
@@ -1318,9 +1319,31 @@ export default function Onboarding() {
             room_number: slot.room_number?.trim() || undefined,
           }),
         })
+        createdAny = true
       } catch {
         showToast('One timetable slot could not be saved', 'error')
       }
+    }
+
+    if (!createdAny) return
+
+    try {
+      const payload = await apiFetch('/timetable')
+      if (Array.isArray(payload?.slots)) {
+        setData((current) => ({
+          ...current,
+          timetable: payload.slots.map((slot) => ({
+            id: String(slot.id || `slot-${Date.now()}`),
+            course_id: String(slot.course_id || ''),
+            day_of_week: Number(slot.day_of_week || 1),
+            start_time: slot.start_time || '09:00',
+            end_time: slot.end_time || '10:00',
+            room_number: slot.room_number || '',
+          })),
+        }))
+      }
+    } catch {
+      showToast('Timetable saved but local refresh failed', 'error')
     }
   }
 
