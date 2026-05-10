@@ -22,11 +22,54 @@ import SignupWhatsApp from './pages/SignupWhatsApp'
 const PREVIEW_BYPASS_AUTH = false
 const POST_AUTH_RETURN_TO_STORAGE_KEY = 'acadpulse_post_auth_return_to'
 
+function OAuthSessionBridge() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { completeLoginSession } = useAppContext()
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const oauthToken = params.get('oauth_token')
+    if (!oauthToken) {
+      return
+    }
+
+    completeLoginSession(oauthToken, {
+      name: params.get('oauth_name') || 'Google User',
+      fullName: params.get('oauth_name') || 'Google User',
+      email: params.get('oauth_email') || '',
+    })
+    if (params.get('google_connected') === '1') {
+      window.dispatchEvent(new Event('acadpulse:integration-status-refresh'))
+    }
+
+    if (location.pathname === '/login') {
+      const returnTo = params.get('return_to') || ''
+      const googleConnected = params.get('google_connected') === '1'
+      const googleIntegration = params.get('google_integration') || ''
+      if (returnTo) {
+        const target = returnTo.startsWith('/') ? returnTo : `/${returnTo}`
+        const nextParams = new URLSearchParams()
+        if (googleConnected) nextParams.set('google_connected', '1')
+        if (googleIntegration) nextParams.set('google_integration', googleIntegration)
+        navigate(`${target}${nextParams.toString() ? `?${nextParams.toString()}` : ''}`, { replace: true })
+      }
+    }
+  }, [completeLoginSession, location.pathname, location.search, navigate])
+
+  return null
+}
+
 function RequireAuth({ children }) {
   const { authReady, isAuthenticated } = useAppContext()
   const location = useLocation()
+  const hasOauthToken = new URLSearchParams(location.search).has('oauth_token')
 
   if (PREVIEW_BYPASS_AUTH) {
+    return children
+  }
+
+  if (hasOauthToken) {
     return children
   }
 
@@ -103,31 +146,34 @@ function DashboardGate({ children }) {
 
 function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/signup" element={<Signup />} />
-      <Route path="/signup/google" element={<SignupGoogle />} />
-      <Route path="/signup/whatsapp" element={<SignupWhatsApp />} />
-      <Route path="/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route path="/dashboard" element={<DashboardGate><Dashboard /></DashboardGate>} />
-        <Route path="/assignments" element={<RequireAuth><AssignmentsQuizzes /></RequireAuth>} />
-        <Route path="/events" element={<RequireAuth><Events /></RequireAuth>} />
-        <Route path="/announcements" element={<RequireAuth><Announcements /></RequireAuth>} />
-        <Route path="/materials" element={<RequireAuth><Materials /></RequireAuth>} />
-        <Route path="/timetable" element={<RequireAuth><Timetable /></RequireAuth>} />
-        <Route path="/courses" element={<RequireAuth><Courses /></RequireAuth>} />
-        <Route path="/chat" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/chatbot" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/integrations" element={<RequireAuth><Integrations /></RequireAuth>} />
-        <Route path="/integrations/whatsapp" element={<RequireAuth><WhatsAppIntegration /></RequireAuth>} />
-        <Route path="/integrations/classroom" element={<RequireAuth><ClassroomIntegration /></RequireAuth>} />
-        <Route path="/integrations/gmail" element={<RequireAuth><GmailIntegration /></RequireAuth>} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/login" replace />} />
-    </Routes>
+    <>
+      <OAuthSessionBridge />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/signup/google" element={<SignupGoogle />} />
+        <Route path="/signup/whatsapp" element={<SignupWhatsApp />} />
+        <Route path="/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route element={<RequireAuth><Layout /></RequireAuth>}>
+          <Route path="/dashboard" element={<DashboardGate><Dashboard /></DashboardGate>} />
+          <Route path="/assignments" element={<RequireAuth><AssignmentsQuizzes /></RequireAuth>} />
+          <Route path="/events" element={<RequireAuth><Events /></RequireAuth>} />
+          <Route path="/announcements" element={<RequireAuth><Announcements /></RequireAuth>} />
+          <Route path="/materials" element={<RequireAuth><Materials /></RequireAuth>} />
+          <Route path="/timetable" element={<RequireAuth><Timetable /></RequireAuth>} />
+          <Route path="/courses" element={<RequireAuth><Courses /></RequireAuth>} />
+          <Route path="/chat" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/chatbot" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/integrations" element={<RequireAuth><Integrations /></RequireAuth>} />
+          <Route path="/integrations/whatsapp" element={<RequireAuth><WhatsAppIntegration /></RequireAuth>} />
+          <Route path="/integrations/classroom" element={<RequireAuth><ClassroomIntegration /></RequireAuth>} />
+          <Route path="/integrations/gmail" element={<RequireAuth><GmailIntegration /></RequireAuth>} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    </>
   )
 }
 

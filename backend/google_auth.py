@@ -10,6 +10,7 @@ from google_auth_oauthlib.flow import Flow
 BASE_DIR = Path(__file__).resolve().parent
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"
 GOOGLE_TOKENS_DIR = BASE_DIR / "google_tokens"
+SUPPORTED_INTEGRATIONS = {"gmail", "classroom"}
 
 SCOPES = [
     "openid",
@@ -66,13 +67,20 @@ def create_oauth_flow(redirect_uri: str) -> Flow:
     return flow
 
 
-def _token_path(user_id: str) -> Path:
+def _normalize_integration(integration: Optional[str]) -> Optional[str]:
+    value = (integration or "").strip().lower()
+    return value if value in SUPPORTED_INTEGRATIONS else None
+
+
+def _token_path(user_id: str, integration: Optional[str] = None) -> Path:
     GOOGLE_TOKENS_DIR.mkdir(exist_ok=True)
     safe_id = str(user_id).replace("/", "_").replace("..", "_").replace(":", "_")
-    return GOOGLE_TOKENS_DIR / f"{safe_id}.json"
+    scope = _normalize_integration(integration)
+    suffix = f"__{scope}" if scope else ""
+    return GOOGLE_TOKENS_DIR / f"{safe_id}{suffix}.json"
 
 
-def save_google_credentials(user_id: str, credentials: Credentials) -> None:
+def save_google_credentials(user_id: str, credentials: Credentials, integration: Optional[str] = None) -> None:
     token_data = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
@@ -81,12 +89,12 @@ def save_google_credentials(user_id: str, credentials: Credentials) -> None:
         "client_secret": credentials.client_secret,
         "scopes": list(credentials.scopes or SCOPES),
     }
-    _token_path(user_id).write_text(json.dumps(token_data), encoding="utf-8")
+    _token_path(user_id, integration=integration).write_text(json.dumps(token_data), encoding="utf-8")
 
 
-def load_google_credentials(user_id: str) -> Optional[Credentials]:
+def load_google_credentials(user_id: str, integration: Optional[str] = None) -> Optional[Credentials]:
     """Load stored Google credentials for a user, refreshing if expired."""
-    path = _token_path(user_id)
+    path = _token_path(user_id, integration=integration)
     if not path.exists():
         return None
     try:
@@ -101,29 +109,44 @@ def load_google_credentials(user_id: str) -> Optional[Credentials]:
         )
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            save_google_credentials(user_id, creds)
+            save_google_credentials(user_id, creds, integration=integration)
         return creds
     except Exception:
         return None
 
 
-def google_connected_for_user(user_id: str) -> bool:
-    return _token_path(user_id).exists()
+def google_connected_for_user(user_id: str, integration: Optional[str] = None) -> bool:
+    normalized = _normalize_integration(integration)
+    if normalized:
+        return _token_path(user_id, integration=normalized).exists()
+    return any(_token_path(user_id, integration=item).exists() for item in SUPPORTED_INTEGRATIONS) or _token_path(user_id).exists()
 
 
-def delete_google_credentials(user_id: str) -> None:
+def delete_google_credentials(user_id: str, integration: Optional[str] = None) -> None:
     """Remove stored Google credentials for a user."""
-    path = _token_path(user_id)
-    if path.exists():
-        path.unlink()
+    normalized = _normalize_integration(integration)
+    if normalized:
+        path = _token_path(user_id, integration=normalized)
+        if path.exists():
+            path.unlink()
+        return
+
+    for path in [_token_path(user_id), *[_token_path(user_id, integration=item) for item in SUPPORTED_INTEGRATIONS]]:
+        if path.exists():
+            path.unlink()
 
 
-def get_google_credentials(user_id: Optional[str] = None) -> Credentials:
+def get_google_credentials(user_id: Optional[str] = None, integration: Optional[str] = None) -> Credentials:
     """
     Load Google credentials for a user.
     Falls back to legacy token.json for single-user backwards compat.
     """
     if user_id:
+        normalized = _normalize_integration(integration)
+        creds = load_google_credentials(user_id, integration=normalized) if normalized else None
+        if creds:
+            return creds
+
         creds = load_google_credentials(user_id)
         if creds:
             return creds

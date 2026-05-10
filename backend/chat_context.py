@@ -67,11 +67,24 @@ def build_user_context(user_id: str, force_refresh: bool = False) -> str:
             "student": data["student"],
             "summary": data["summary"],
             "courses": data["courses"],
+            "overdue_items": [],
             "urgent_items": [],
             "pending_items": [],
             "todays_announcements": [],
             "timetable_today": []
         }
+
+        for item in data.get("overdue_items") or []:
+            context["overdue_items"].append({
+                "id": str(item["id"]),
+                "category": item["category"],
+                "course": item["course"],
+                "text": _truncate_text(item["text"]),
+                "deadline": item["deadline"].strftime("%Y-%m-%d %H:%M") if item["deadline"] else None,
+                "urgency": item["urgency"],
+                "hours_remaining": _calculate_hours_remaining(item["deadline"]),
+                "source": item["source"]
+            })
 
         # Process urgent items
         for item in data["urgent_items"]:
@@ -131,6 +144,8 @@ def build_user_context(user_id: str, force_refresh: bool = False) -> str:
                 context["todays_announcements"].pop()
             elif context["pending_items"]:
                 context["pending_items"].pop()
+            elif context["overdue_items"]:
+                context["overdue_items"].pop()
             elif context["urgent_items"]:
                 # If even urgent items are too many, we just have to truncate more
                 context["urgent_items"].pop()

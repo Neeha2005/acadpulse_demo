@@ -114,6 +114,7 @@ groq_status = {
     "token_day": datetime.now(PAKISTAN_TZ).date().isoformat(),
 }
 WHATSAPP_STATUS_STATE_FILE = Path(__file__).resolve().parent / "whatsapp_status_state.json"
+GOOGLE_INTEGRATIONS = {"gmail", "classroom"}
 DEFAULT_WHATSAPP_STATUS_STATE = {
     "status": "unknown",
     "reason": None,
@@ -959,8 +960,11 @@ def check_message_safety(text):
         result = call_groq_with_retry([
             {"role": "system", "content": "You are a content safety checker. Analyze the following text and determine if it contains malicious, harmful, or inappropriate content. Respond with ONLY 'SAFE' or 'MALICIOUS'."},
             {"role": "user", "content": text}
-        ]).strip().upper()
-        return "MALICIOUS" in result
+        ])
+        verdict = _groq_message_content(result).strip().upper()
+        if not verdict:
+            return False
+        return "MALICIOUS" in verdict
     except Exception as e:
         logger.warning("Safety check error: %s", e)
         return False  # Default to safe if check fails
@@ -1055,14 +1059,19 @@ def _match_context_course(text: str, context: Optional[dict]) -> Optional[str]:
     courses = (context or {}).get("courses") or []
     text_lower = (text or "").lower()
     for course in courses:
-        candidates = [
-            course.get("course_code"),
-            course.get("course_name"),
-            *(course.get("aliases") or []),
-        ]
+        if isinstance(course, dict):
+            candidates = [
+                course.get("course_code"),
+                course.get("course_name"),
+                *(course.get("aliases") or []),
+            ]
+            preferred = course.get("course_code") or course.get("course_name")
+        else:
+            candidates = [str(course)]
+            preferred = str(course)
         for candidate in candidates:
             if candidate and re.search(rf"\b{re.escape(str(candidate).lower())}\b", text_lower):
-                return course.get("course_code") or course.get("course_name")
+                return preferred
     return None
 
 def detect_roman_urdu_chat_action(message: str, context: Optional[dict] = None) -> dict:
@@ -1127,13 +1136,38 @@ def _is_clear_deterministic_chat_action(message: str, action: dict) -> bool:
 
 
 def _format_chat_context_item(item: dict) -> str:
-    course = item.get("course_code") or item.get("course_name") or "General"
+    course = item.get("course_code") or item.get("course_name") or item.get("course") or "General"
     category = item.get("category") or "task"
-    text = (item.get("message_text") or item.get("expanded_text") or "").strip()
-    title = re.sub(r"\s+", " ", text)[:90] or "Untitled"
+    text = (item.get("message_text") or item.get("expanded_text") or item.get("text") or "").strip()
+    title = _summarize_chat_item_title(text)
     deadline = item.get("deadline")
     deadline_text = f" | deadline: {deadline}" if deadline else ""
-    return f"- {item.get('id')} | {course} | {category}: {title}{deadline_text}"
+    urgency = item.get("urgency") or item.get("urgency_level")
+    urgency_text = f" | urgency: {urgency}" if urgency and urgency != "none" else ""
+    return f"- {title} | {course} | {category}{deadline_text}{urgency_text} | id: {item.get('id')}"
+
+
+def _summarize_chat_item_title(text: str) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return "Untitled"
+    clean = re.sub(r"^Title:\s*", "", clean, flags=re.IGNORECASE)
+    first_line = clean.split("\n")[0].strip()
+    first_sentence = re.split(r"(?<=[.!?])\s+", first_line, maxsplit=1)[0].strip()
+    title = first_sentence or first_line
+    return title[:90] if len(title) <= 90 else f"{title[:87]}..."
+
+
+def _dedupe_chat_items(items: List[dict]) -> List[dict]:
+    seen_ids = set()
+    unique_items = []
+    for item in items:
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        unique_items.append(item)
+    return unique_items
 
 
 def _filter_context_tasks_for_prompt(prompt: str, items: List[dict]) -> List[dict]:
@@ -1146,25 +1180,243 @@ def _filter_context_tasks_for_prompt(prompt: str, items: List[dict]) -> List[dic
     return filtered[:10]
 
 
+def _is_urgent_chat_query(prompt: str) -> bool:
+    text_lower = (prompt or "").lower()
+    return any(
+        keyword in text_lower
+        for keyword in [
+            "urgent",
+            "overdue",
+            "late",
+            "deadline nikl",
+            "past due",
+        ]
+    )
+
+
+def _wants_count_only(prompt: str) -> bool:
+    text_lower = (prompt or "").lower()
+    return any(keyword in text_lower for keyword in ["kitne", "kitni", "how many", "count"])
+
+
+def _contains_detail_request(prompt: str) -> bool:
+    text_lower = (prompt or "").lower()
+    return any(keyword in text_lower for keyword in ["detail", "details", "konsa", "kon si", "which one", "which urgent"])
+
+
+def _extract_inline_function_call(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    match = re.search(r"<function=([a-zA-Z0-9_]+)>(\{.*?\})\s*</function>", text or "", re.DOTALL)
+    if not match:
+        return None
+    function_name = match.group(1).strip()
+    arguments_json = match.group(2).strip()
+    try:
+        arguments = json.loads(arguments_json)
+    except json.JSONDecodeError:
+        return None
+    return function_name, arguments
+
+
+def _extract_notification_ids_from_text(text: str) -> List[str]:
+    return re.findall(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        (text or "").lower(),
+    )
+
+
+def _build_recent_conversation_state(history: List[Dict[str, str]], prompt: str) -> Dict[str, Any]:
+    recent_entries = history[-6:] if history else []
+    recent_ids: List[str] = []
+    for entry in recent_entries:
+        for notification_id in _extract_notification_ids_from_text(entry.get("content") or ""):
+            if notification_id not in recent_ids:
+                recent_ids.append(notification_id)
+
+    prompt_lower = (prompt or "").lower()
+    has_direct_id = bool(_extract_notification_ids_from_text(prompt))
+    follow_up_cues = any(
+        cue in prompt_lower
+        for cue in [
+            "uski",
+            "us ka",
+            "uski deadline",
+            "iski",
+            "iski deadline",
+            "yeh task",
+            "that task",
+            "that one",
+            "this one",
+            "deadline kb",
+            "deadline kab",
+            "kab tk",
+            "detail",
+            "details",
+        ]
+    )
+    resolved_target = recent_ids[-1] if follow_up_cues and len(recent_ids) == 1 and not has_direct_id else None
+    return {
+        "recent_notification_ids": recent_ids,
+        "resolved_follow_up_notification_id": resolved_target,
+        "follow_up_cues_present": follow_up_cues,
+    }
+
+
+def _should_enable_chat_tools(prompt: str, history: List[Dict[str, str]], conversation_state: Optional[Dict[str, Any]] = None) -> bool:
+    text_lower = (prompt or "").lower()
+    if _extract_notification_ids_from_text(prompt):
+        return True
+
+    action_cues = [
+        "mark",
+        "done",
+        "complete",
+        "ho gaya",
+        "submitted",
+        "add",
+        "create",
+        "save",
+        "delete",
+        "remove",
+        "hata",
+        "extend",
+        "update",
+        "change deadline",
+        "map",
+        "connect group",
+    ]
+    if any(cue in text_lower for cue in action_cues):
+        return True
+
+    needs_specific_detail = any(
+        cue in text_lower
+        for cue in ["detail", "details", "full detail", "full info", "deadline kb", "deadline kab", "kab tk"]
+    )
+    resolved_target = (conversation_state or {}).get("resolved_follow_up_notification_id")
+    if needs_specific_detail and resolved_target:
+        return True
+
+    informational_cues = [
+        "all deadlines",
+        "sab deadlines",
+        "sab tasks",
+        "aaj due",
+        "today due",
+        "urgent tasks",
+        "urgent",
+        "overdue",
+        "pending",
+        "schedule",
+        "list",
+        "kitne",
+        "how many",
+        "what is due",
+        "deadlines",
+    ]
+    if any(cue in text_lower for cue in informational_cues):
+        return False
+
+    return True
+
+
+def _answer_from_notification_detail(detail_payload: str) -> Optional[str]:
+    try:
+        detail = json.loads(detail_payload)
+    except Exception:
+        return None
+
+    title = _summarize_chat_item_title(detail.get("message_text") or detail.get("expanded_text") or "")
+    course = detail.get("course_name") or detail.get("course_code") or "General"
+    category = detail.get("category") or "task"
+    deadline = detail.get("deadline") or "nahi hai"
+    urgency = detail.get("urgency_level") or "none"
+    return (
+        f"{title}\n"
+        f"- Course: {course}\n"
+        f"- Category: {category}\n"
+        f"- Deadline: {deadline}\n"
+        f"- Urgency: {urgency}\n"
+        f"- ID: {detail.get('id')}"
+    )
+
+
 def handle_deterministic_chat_action(prompt: str, user_id: str, db_context: dict) -> Optional[ChatResponse]:
+    overdue_items = _dedupe_chat_items(db_context.get("overdue_items") or [])
+    urgent_items = _dedupe_chat_items(db_context.get("urgent_items") or [])
+    pending_items = _dedupe_chat_items(db_context.get("pending_items") or [])
+    all_open_items = _dedupe_chat_items(overdue_items + urgent_items + pending_items)
+
+    if _is_urgent_chat_query(prompt):
+        visible_overdue = _filter_context_tasks_for_prompt(prompt, overdue_items)
+        visible_urgent = _filter_context_tasks_for_prompt(prompt, urgent_items)
+        visible_items = visible_overdue + [item for item in visible_urgent if str(item.get("id")) not in {str(row.get("id")) for row in visible_overdue}]
+
+        if _wants_count_only(prompt):
+            overdue_count = len(visible_overdue)
+            urgent_count = len(visible_items)
+            if not urgent_count:
+                response_text = "Koi urgent task nahi hai."
+            elif overdue_count:
+                response_text = f"{urgent_count} urgent item hain, jin mein se {overdue_count} overdue hain."
+            else:
+                response_text = f"{urgent_count} urgent task hain."
+            return ChatResponse(
+                response=response_text,
+                is_safe=True,
+                context_loaded=True,
+                context_counts=db_context.get("summary", {}),
+                action="urgent_summary",
+                action_result={"count": urgent_count, "overdue_count": overdue_count},
+            )
+
+        if not visible_items:
+            return ChatResponse(
+                response="Koi urgent task nahi hai.",
+                is_safe=True,
+                context_loaded=True,
+                context_counts=db_context.get("summary", {}),
+                action="urgent_summary",
+                action_result={"count": 0},
+            )
+
+        if _contains_detail_request(prompt) and len(visible_items) == 1:
+            response_text = "Yeh urgent item hai:\n" + _format_chat_context_item(visible_items[0])
+        else:
+            response_text = "Urgent items:\n" + "\n".join(_format_chat_context_item(item) for item in visible_items[:5])
+
+        return ChatResponse(
+            response=response_text,
+            is_safe=True,
+            context_loaded=True,
+            context_counts=db_context.get("summary", {}),
+            action="urgent_summary",
+            action_result={"count": len(visible_items)},
+        )
+
     action = detect_roman_urdu_chat_action(prompt, db_context)
     if not _is_clear_deterministic_chat_action(prompt, action):
+        detail_match = re.search(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", (prompt or "").lower())
+        if detail_match and _contains_detail_request(prompt):
+            detail_result = execute_function_call(
+                "get_notification_detail",
+                {"notification_id": detail_match.group(0)},
+                user_id,
+            )
+            natural_answer = _answer_from_notification_detail(detail_result) or detail_result
+            return ChatResponse(
+                response=natural_answer,
+                is_safe=True,
+                context_loaded=True,
+                context_counts=db_context.get("summary", {}),
+                action="get_notification_detail",
+                action_result={"message": detail_result},
+            )
         return None
 
     action_name = action["action"]
     args = action.get("arguments") or {}
 
     if action_name == "list_tasks":
-        items = (db_context.get("urgent_items") or []) + (db_context.get("pending_items") or [])
-        seen_ids = set()
-        unique_items = []
-        for item in items:
-            item_id = str(item.get("id"))
-            if item_id and item_id not in seen_ids:
-                seen_ids.add(item_id)
-                unique_items.append(item)
-
-        visible_items = _filter_context_tasks_for_prompt(prompt, unique_items)
+        visible_items = _filter_context_tasks_for_prompt(prompt, all_open_items)
         if not visible_items:
             return ChatResponse(
                 response="Koi pending task context mein nahi hai.",
@@ -2687,9 +2939,17 @@ async def classify_with_fallback(text: str) -> str:
 
 # --- Google Services Setup ---
 
-def get_google_credentials_safe(user_id: Optional[str] = None):
+def normalize_google_integration(integration: Optional[str]) -> Optional[str]:
+    value = (integration or "").strip().lower()
+    return value if value in GOOGLE_INTEGRATIONS else None
+
+
+def get_google_credentials_safe(user_id: Optional[str] = None, integration: Optional[str] = None):
     try:
-        return get_google_credentials(user_id=user_id)
+        return get_google_credentials(
+            user_id=user_id,
+            integration=normalize_google_integration(integration),
+        )
     except Exception as e:
         raise HTTPException(
             status_code=401,
@@ -2937,25 +3197,29 @@ def google_oauth_callback(
             user = get_user_by_id(new_id)
 
         # Persist Google credentials for this user (used by gmail/classroom fetch)
-        save_google_credentials(str(user["id"]), credentials)
-        if integration == "gmail":
+        normalized_integration = normalize_google_integration(integration)
+        if normalized_integration:
+            save_google_credentials(str(user["id"]), credentials, integration=normalized_integration)
+        else:
+            save_google_credentials(str(user["id"]), credentials)
+        if normalized_integration == "gmail":
             set_user_connected_flags(str(user["id"]), gmail=True)
-        elif integration == "classroom":
+        elif normalized_integration == "classroom":
             set_user_connected_flags(str(user["id"]), classroom=True)
         else:
             set_user_connected_flags(str(user["id"]), gmail=True, classroom=True)
 
         token = create_access_token(user)
-        base_redirect = f"{redirect_base}/login"
+        normalized_next_path = normalize_frontend_path(next_path)
+        base_redirect = f"{redirect_base}{normalized_next_path}" if normalized_next_path else f"{redirect_base}/login"
         params = (
             f"?oauth_token={quote_plus(token)}"
             f"&oauth_name={quote_plus(_user_name(user))}"
             f"&oauth_email={quote_plus(user['email'])}"
             f"&google_connected=1"
         )
-        if integration:
-            params += f"&google_integration={quote_plus(integration)}"
-        normalized_next_path = normalize_frontend_path(next_path)
+        if normalized_integration:
+            params += f"&google_integration={quote_plus(normalized_integration)}"
         if normalized_next_path:
             params += f"&return_to={quote_plus(normalized_next_path)}"
         return RedirectResponse(base_redirect + params)
@@ -2966,37 +3230,74 @@ def google_oauth_callback(
 
 
 @app.get("/google/status")
-def get_google_status(current_user: Dict[str, Any] = Depends(get_current_user)):
+def get_google_status(
+    integration: Optional[str] = Query(default=None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Check if Google credentials are saved for the current user."""
     user_id = str(current_user["id"])
+    normalized_integration = normalize_google_integration(integration)
     configured = is_google_configured()
-    connected = google_connected_for_user(user_id) if configured else False
-    email = None
-    if connected:
+    gmail_connected = google_connected_for_user(user_id, integration="gmail") if configured else False
+    classroom_connected = google_connected_for_user(user_id, integration="classroom") if configured else False
+    legacy_connected = bool(load_google_credentials(user_id)) if configured else False
+    connected = (
+        google_connected_for_user(user_id, integration=normalized_integration)
+        if configured and normalized_integration
+        else (gmail_connected or classroom_connected or legacy_connected)
+    )
+    gmail_email = None
+    classroom_email = None
+    if configured:
         try:
-            set_user_connected_flags(user_id, gmail=True, classroom=True)
-        except Exception:
-            logger.exception("Failed to reconcile Google connected flags")
-        try:
-            creds = load_google_credentials(user_id)
-            if creds and hasattr(creds, "client_id"):
-                # Try reading stored email from user profile
-                email = current_user.get("email", "")
+            gmail_creds = load_google_credentials(user_id, integration="gmail") or load_google_credentials(user_id)
+            if gmail_creds and hasattr(gmail_creds, "client_id"):
+                gmail_email = current_user.get("email", "")
         except Exception:
             pass
+        try:
+            classroom_creds = load_google_credentials(user_id, integration="classroom") or load_google_credentials(user_id)
+            if classroom_creds and hasattr(classroom_creds, "client_id"):
+                classroom_email = current_user.get("email", "")
+        except Exception:
+            pass
+        try:
+            set_user_connected_flags(
+                user_id,
+                gmail=gmail_connected or legacy_connected,
+                classroom=classroom_connected or legacy_connected,
+            )
+        except Exception:
+            logger.exception("Failed to reconcile Google connected flags")
+
+    email = gmail_email if normalized_integration == "gmail" else classroom_email if normalized_integration == "classroom" else (gmail_email or classroom_email)
     return {
         "status": "success",
         "configured": configured,
         "connected": connected,
         "email": email,
+        "gmail_connected": gmail_connected or legacy_connected,
+        "classroom_connected": classroom_connected or legacy_connected,
+        "gmail_email": gmail_email,
+        "classroom_email": classroom_email,
     }
 
 
 @app.delete("/google/disconnect")
-def disconnect_google(current_user: Dict[str, Any] = Depends(get_current_user)):
+def disconnect_google(
+    integration: Optional[str] = Query(default=None),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
     """Remove Google credentials for the current user."""
     user_id = str(current_user["id"])
-    delete_google_credentials(user_id)
+    normalized_integration = normalize_google_integration(integration)
+    delete_google_credentials(user_id, integration=normalized_integration)
+    if normalized_integration == "gmail":
+        set_user_connected_flags(user_id, gmail=False)
+    elif normalized_integration == "classroom":
+        set_user_connected_flags(user_id, classroom=False)
+    else:
+        set_user_connected_flags(user_id, gmail=False, classroom=False)
     return {"status": "success", "message": "Google account disconnected."}
 
 @app.get("/preview-notifications")
@@ -3431,7 +3732,7 @@ def get_classroom_courses(
 
     try:
         if sync and resolved_user_id:
-            creds = get_google_credentials_safe(user_id=resolved_user_id)
+            creds = get_google_credentials_safe(user_id=resolved_user_id, integration="classroom")
             service = build("classroom", "v1", credentials=creds)
             courses_result = execute_google_api_call(service.courses().list(courseStates=["ACTIVE"]))
             for course in courses_result.get("courses", []):
@@ -3814,7 +4115,7 @@ async def fetch_gmail_emails(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     resolved_uid = user_id or str(current_user.get("id", ""))
-    creds = get_google_credentials_safe(user_id=resolved_uid)
+    creds = get_google_credentials_safe(user_id=resolved_uid, integration="gmail")
     service = build("gmail", "v1", credentials=creds)
 
     results = execute_google_api_call(service.users().messages().list(userId="me", labelIds=["INBOX"], maxResults=max_results))
@@ -3851,7 +4152,7 @@ async def fetch_classroom_all(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     resolved_uid = user_id or str(current_user.get("id", ""))
-    creds = get_google_credentials_safe(user_id=resolved_uid)
+    creds = get_google_credentials_safe(user_id=resolved_uid, integration="classroom")
     service = build("classroom", "v1", credentials=creds)
 
     try:
@@ -4152,7 +4453,7 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "mark_item_done",
-            "description": "Mark a task or notification as completed/done.",
+            "description": "Mark one specific task or notification as completed/done. Use only for explicit completion actions, not for list or summary questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4166,7 +4467,7 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "add_manual_notification",
-            "description": "Add a new manual task or notification to the list.",
+            "description": "Add one new manual task or notification. Use only when the user clearly asks to create/add something new.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4183,7 +4484,7 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_deadline",
-            "description": "Update the deadline for an existing task.",
+            "description": "Update the deadline for one existing task. Use only when the exact notification ID is known or resolved unambiguously.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4213,7 +4514,7 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "map_course",
-            "description": "Map a WhatsApp group name to a course name.",
+            "description": "Map one WhatsApp group name to one course name.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4228,7 +4529,7 @@ CHAT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_notification_detail",
-            "description": "Get full details of a single notification/task by its ID.",
+            "description": "Get full details of one specific notification/task by its ID. Never use for list, count, summary, urgent overview, or all-deadlines questions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -4264,7 +4565,9 @@ def chat_with_bot(request: ChatRequest):
         if not user_id:
             raise HTTPException(status_code=400, detail="Invalid user account")
 
-        context_json = build_user_context(user_id)
+        refresh_urgency_for_user(str(user_id))
+        invalidate_chat_context(str(user_id))
+        context_json = build_user_context(user_id, force_refresh=True)
         db_context = json.loads(context_json)
 
         deterministic_response = handle_deterministic_chat_action(
@@ -4291,6 +4594,9 @@ def chat_with_bot(request: ChatRequest):
                     }
                 )
 
+        conversation_state = _build_recent_conversation_state(request.history, request.prompt)
+        tools_enabled = _should_enable_chat_tools(request.prompt, request.history, conversation_state)
+
         messages = [
             {
                 "role": "system",
@@ -4299,6 +4605,13 @@ def chat_with_bot(request: ChatRequest):
             {
                 "role": "system",
                 "content": f"academic_context JSON:\n{context_json}",
+            },
+            {
+                "role": "system",
+                "content": (
+                    "recent_conversation_state JSON:\n"
+                    f"{json.dumps(conversation_state, ensure_ascii=True)}"
+                ),
             },
             *sanitized_history,
             {
@@ -4314,7 +4627,7 @@ def chat_with_bot(request: ChatRequest):
         for _ in range(5):
             response_msg = create_groq_chat(
                 messages,
-                tools=CHAT_TOOLS,
+                tools=CHAT_TOOLS if tools_enabled else None,
             )
 
             # If no tool calls, we're done
@@ -4356,6 +4669,32 @@ def chat_with_bot(request: ChatRequest):
 
         # Get final response text
         final_text = response_msg.content or ""
+        inline_tool = _extract_inline_function_call(final_text)
+        if inline_tool:
+            fn_name, fn_args = inline_tool
+            recovered_result = execute_function_call(fn_name, fn_args, user_id)
+            action_taken = fn_name
+            action_result = {"message": recovered_result, "recovered_from_inline_tool": True}
+            natural_answer = _answer_from_notification_detail(recovered_result)
+            if natural_answer:
+                final_text = natural_answer
+            else:
+                recovery_messages = [
+                    *messages,
+                    {
+                        "role": "system",
+                        "content": "Do not expose function syntax. Answer naturally for the student using the tool result below.",
+                    },
+                    {
+                        "role": "tool",
+                        "name": fn_name,
+                        "content": recovered_result,
+                    },
+                ]
+                recovery_response = create_groq_chat(recovery_messages)
+                final_text = recovery_response.content or recovered_result
+
+        final_text = re.sub(r"<function=[^>]+>\s*\{.*?\}\s*</function>", "", final_text, flags=re.DOTALL).strip() or final_text
 
         return ChatResponse(
             response=final_text,

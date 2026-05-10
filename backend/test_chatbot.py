@@ -59,6 +59,18 @@ TEST_CASES: List[Dict[str, str]] = [
         "expected": "Should check context for overdue items.",
     },
     {
+        "query": "koi urgent task hai?",
+        "expected": "Should answer from urgent/overdue context directly without leaking raw function syntax.",
+    },
+    {
+        "query": "kitne urgent tasks hain?",
+        "expected": "Should return a deterministic urgent count from context.",
+    },
+    {
+        "query": "konsa urgent cheez hai?",
+        "expected": "Should list urgent items or the single urgent item naturally, without pseudo tool markup.",
+    },
+    {
         "query": "FAST NLP group ko NLP course se map karo",
         "expected": "Should call map_course for the FAST NLP group and NLP course if the course exists.",
     },

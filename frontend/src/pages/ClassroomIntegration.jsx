@@ -76,7 +76,7 @@ export default function ClassroomIntegration() {
     if (!authToken) return;
     setLoadingStatus(true);
     try {
-      const payload = await apiFetch('/google/status');
+      const payload = await apiFetch('/google/status?integration=classroom');
       setGoogleStatus({ connected: Boolean(payload?.connected) });
     } catch {
       setGoogleStatus({ connected: false });

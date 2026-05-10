@@ -1457,7 +1457,23 @@ def get_chatbot_context_data(user_id):
         )
         urgent_items = cur.fetchall()
 
-        # 5. Get pending items (low/medium, max 15)
+        # 5. Get overdue items (max 10)
+        cur.execute(
+            """
+            SELECT n.id, n.category, c.course_code as course, n.message_text as text,
+                   n.deadline, n.urgency_level as urgency, n.source_type as source
+            FROM notifications n
+            LEFT JOIN courses c ON n.course_id = c.id
+            WHERE n.user_id = %s AND n.is_completed = false
+              AND n.urgency_level = 'overdue'
+            ORDER BY n.deadline ASC NULLS LAST
+            LIMIT 10
+            """,
+            (user_id,)
+        )
+        overdue_items = cur.fetchall()
+
+        # 6. Get pending items (low/medium/none, max 15)
         cur.execute(
             """
             SELECT n.id, n.category, c.course_code as course, n.message_text as text, 
@@ -1473,7 +1489,7 @@ def get_chatbot_context_data(user_id):
         )
         pending_items = cur.fetchall()
 
-        # 6. Get today's announcements (max 5)
+        # 7. Get today's announcements (max 5)
         cur.execute(
             """
             SELECT n.id, c.course_code as course, n.message_text as text, n.received_at
@@ -1488,7 +1504,7 @@ def get_chatbot_context_data(user_id):
         )
         announcements = cur.fetchall()
 
-        # 7. Get today's timetable (max 8)
+        # 8. Get today's timetable (max 8)
         # PostgreSQL extract(dow from CURRENT_DATE) returns 0 for Sunday to 6 for Saturday
         # Schema uses 1-7, we'll assume 1 is Monday, 7 is Sunday
         cur.execute(
@@ -1512,6 +1528,7 @@ def get_chatbot_context_data(user_id):
             "courses": courses,
             "summary": summary,
             "urgent_items": urgent_items,
+            "overdue_items": overdue_items,
             "pending_items": pending_items,
             "announcements": announcements,
             "timetable": timetable

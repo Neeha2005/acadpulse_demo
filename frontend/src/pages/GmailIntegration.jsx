@@ -76,7 +76,7 @@ export default function GmailIntegration() {
     if (!authToken) return;
     setLoadingStatus(true);
     try {
-      const payload = await apiFetch('/google/status');
+      const payload = await apiFetch('/google/status?integration=gmail');
       setGoogleStatus({
         connected: Boolean(payload?.connected),
         email: payload?.email || localStorage.getItem('acadpulse_user_email') || '',

@@ -410,7 +410,18 @@ function getCourseLabel(course) {
   return [course.course_code, course.course_name].filter(Boolean).join(' - ') || course.short_name || ''
 }
 
-function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGroupIds, toggleDetectedGroup, saveDetectedGroups, groupSelectionSaving, connection }) {
+function WhatsAppGroupsStep({
+  data,
+  setData,
+  detectedGroups,
+  selectedDetectedGroupIds,
+  toggleDetectedGroup,
+  saveDetectedGroups,
+  groupSelectionSaving,
+  connection,
+  showDetectedGroupPicker,
+  setShowDetectedGroupPicker,
+}) {
   const savedGroups = data.whatsappGroups || []
   const courseGroups = savedGroups.filter((group) => group.kind !== 'society')
   const societyGroups = savedGroups.filter((group) => group.kind === 'society')
@@ -439,8 +450,26 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
           <div className="onb-setup-section">
             <h3><MessageCircle size={18} /> Group selection</h3>
             {hasSavedSelection ? (
-              <div className="onb-banner success">Selected WhatsApp groups saved. Only these groups will be monitored.</div>
-            ) : detectedGroups.length ? (
+              <>
+                <div className="onb-banner success">Selected WhatsApp groups saved. Only selected groups are kept and monitored.</div>
+                {!showDetectedGroupPicker && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                    <small style={{ color: 'var(--text-muted)' }}>
+                      {savedGroups.length} selected group{savedGroups.length === 1 ? '' : 's'}
+                    </small>
+                    <button
+                      className="onb-ghost-btn"
+                      type="button"
+                      onClick={() => setShowDetectedGroupPicker(true)}
+                    >
+                      <Users size={14} />
+                      Change selected groups
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : null}
+            {(!hasSavedSelection || showDetectedGroupPicker) && detectedGroups.length ? (
               <>
                 <div className="onb-group-picker">
                   <div className="onb-group-picker-head">
@@ -471,32 +500,42 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                     {groupSelectionSaving ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
                     Save selected groups
                   </button>
+                  {hasSavedSelection && (
+                    <button
+                      className="onb-ghost-btn"
+                      type="button"
+                      onClick={() => setShowDetectedGroupPicker(false)}
+                      disabled={groupSelectionSaving}
+                    >
+                      Hide full list
+                    </button>
+                  )}
                 </div>
-                {savedGroups.length > 0 && (
-                  <div className="onb-map-section">
-                    <h3><Users size={16} /> Subject vs society</h3>
-                    <div className="onb-map-list">
-                      {savedGroups.map((group) => (
-                        <div className="onb-map-row" key={group.group_id}>
-                          <input
-                            value={group.group_name || ''}
-                            onChange={(e) => updateGroup(group.group_id, 'group_name', e.target.value)}
-                            placeholder="Group name"
-                          />
-                          <span>-&gt;</span>
-                          <select value={group.kind || 'course'} onChange={(e) => updateGroup(group.group_id, 'kind', e.target.value)}>
-                            <option value="course">Subject / Course group</option>
-                            <option value="society">Society / Community group</option>
-                          </select>
-                          <small style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</small>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </>
             ) : (
-              <div className="onb-waiting"><Loader2 size={15} /> Loading WhatsApp groups...</div>
+              !hasSavedSelection && <div className="onb-waiting"><Loader2 size={15} /> Loading WhatsApp groups...</div>
+            )}
+            {savedGroups.length > 0 && (
+              <div className="onb-map-section">
+                <h3><Users size={16} /> Subject vs society</h3>
+                <div className="onb-map-list">
+                  {savedGroups.map((group) => (
+                    <div className="onb-map-row" key={group.group_id}>
+                      <input
+                        value={group.group_name || ''}
+                        onChange={(e) => updateGroup(group.group_id, 'group_name', e.target.value)}
+                        placeholder="Group name"
+                      />
+                      <span>-&gt;</span>
+                      <select value={group.kind || 'course'} onChange={(e) => updateGroup(group.group_id, 'kind', e.target.value)}>
+                        <option value="course">Subject / Course group</option>
+                        <option value="society">Society / Community group</option>
+                      </select>
+                      <small style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
           {savedGroups.length > 0 && (
@@ -823,6 +862,7 @@ export default function Onboarding() {
   const [detectedGroups, setDetectedGroups] = useState([])
   const [detectedGroupsLoaded, setDetectedGroupsLoaded] = useState(false)
   const [selectedDetectedGroupIds, setSelectedDetectedGroupIds] = useState(() => new Set())
+  const [showDetectedGroupPicker, setShowDetectedGroupPicker] = useState(false)
   const [groupSelectionSaving, setGroupSelectionSaving] = useState(false)
   const [qr, setQr] = useState('')
   const [qrMessage, setQrMessage] = useState('')
@@ -958,18 +998,27 @@ export default function Onboarding() {
       if (syncClassroom) classroomParams.set('sync', 'true')
       const classroomPath = `/classroom/courses${classroomParams.toString() ? `?${classroomParams.toString()}` : ''}`
       const whatsappPath = `/whatsapp/status${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`
-      const [google, whatsapp, classroom] = await Promise.allSettled([
-        apiFetch('/google/status'),
+      const [gmailStatus, classroomStatus, whatsapp, classroom] = await Promise.allSettled([
+        apiFetch('/google/status?integration=gmail'),
+        apiFetch('/google/status?integration=classroom'),
         apiFetch(whatsappPath, {}, false),
         apiFetch(classroomPath, {}, false),
       ])
       setConnection((current) => ({
         ...current,
-        google: google.status === 'fulfilled' ? Boolean(google.value?.connected) : current.google,
-        gmailEmail: google.status === 'fulfilled' ? (google.value?.email || current.gmailEmail) : current.gmailEmail,
+        google: (
+          (gmailStatus.status === 'fulfilled' && Boolean(gmailStatus.value?.connected))
+          || (classroomStatus.status === 'fulfilled' && Boolean(classroomStatus.value?.connected))
+          || current.google
+        ),
+        gmailEmail: gmailStatus.status === 'fulfilled' ? (gmailStatus.value?.email || current.gmailEmail) : current.gmailEmail,
         whatsapp: whatsapp.status === 'fulfilled' ? whatsapp.value?.whatsapp?.status === 'connected' : current.whatsapp,
-        gmail: current.gmail || localStorage.getItem('acadpulse_gmail_connected') === 'true',
-        classroom: current.classroom || localStorage.getItem('acadpulse_classroom_connected') === 'true',
+        gmail: gmailStatus.status === 'fulfilled'
+          ? Boolean(gmailStatus.value?.connected)
+          : (current.gmail || localStorage.getItem('acadpulse_gmail_connected') === 'true'),
+        classroom: classroomStatus.status === 'fulfilled'
+          ? Boolean(classroomStatus.value?.connected)
+          : (current.classroom || localStorage.getItem('acadpulse_classroom_connected') === 'true'),
         classroomCourses: classroom.status === 'fulfilled' && Array.isArray(classroom.value?.courses) ? classroom.value.courses : current.classroomCourses,
       }))
     } catch {
@@ -996,6 +1045,10 @@ export default function Onboarding() {
         const nextDetected = Array.isArray(payload?.groups) ? payload.groups : []
         setDetectedGroups(nextDetected)
         setSelectedDetectedGroupIds(new Set(nextDetected.filter((group) => group.is_selected).map((group) => group.group_id)))
+        setShowDetectedGroupPicker((current) => {
+          if (current) return true
+          return !nextDetected.some((group) => group.is_selected)
+        })
       } catch {
         setDetectedGroups([])
       } finally {
@@ -1024,6 +1077,7 @@ export default function Onboarding() {
         }),
       }, false)
       syncSelectedGroupsToData(payload?.groups || [])
+      setShowDetectedGroupPicker(false)
       await loadDetectedGroups()
       showToast('WhatsApp group selection saved')
     } catch {
@@ -1450,6 +1504,8 @@ export default function Onboarding() {
             toggleDetectedGroup={toggleDetectedGroup}
             saveDetectedGroups={saveDetectedGroups}
             groupSelectionSaving={groupSelectionSaving}
+            showDetectedGroupPicker={showDetectedGroupPicker}
+            setShowDetectedGroupPicker={setShowDetectedGroupPicker}
           />
         )}
         {step === 6 && <SubjectsAndMappingStep data={data} setData={setData} connection={connection} groups={groups.filter((group) => group.kind !== 'society')} />}
