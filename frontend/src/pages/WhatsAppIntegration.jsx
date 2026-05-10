@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AttachmentList from '../components/AttachmentList';
 import { useAppContext } from '../context/AppContext';
 
@@ -23,6 +23,8 @@ export default function WhatsAppIntegration() {
   const [detectedGroups, setDetectedGroups] = useState([]);
   const [selectedDetectedGroupIds, setSelectedDetectedGroupIds] = useState(() => new Set());
   const [savingGroupSelection, setSavingGroupSelection] = useState(false);
+  const lastQrRef = useRef('');
+  const lastQrUpdatedAtRef = useRef('');
 
   const whatsappNotifs = notifications.filter(n => n.source === 'whatsapp');
   const mappedGroupIds = useMemo(() => new Set(mappings.map(m => m.source_reference_id)), [mappings]);
@@ -92,22 +94,31 @@ export default function WhatsAppIntegration() {
   }, [apiFetch, userId, withUserQuery]);
 
   const loadQrCode = useCallback(async () => {
-    setQrState({ loading: true, value: '', error: '' });
-    try {
-      const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
-      const rawQr = payload?.qr || '';
-      const qrImage = rawQr
-        ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`
-        : '';
-      setQrState({
-        loading: false,
-        value: qrImage,
-        error: qrImage ? '' : (payload?.message || 'QR code not available yet. Start the WhatsApp bridge and wait a few seconds.'),
-      });
-    } catch {
-      setQrState({ loading: false, value: '', error: 'QR code not available. Start the WhatsApp bridge and wait a few seconds.' });
+  setQrState(prev => ({ ...prev, loading: !prev.value }));
+  try {
+    const payload = await apiFetch(withUserQuery('/whatsapp/qr'), {}, false);
+    const rawQr = payload?.qr || '';
+    if (rawQr && rawQr !== lastQrRef.current) {
+      lastQrRef.current = rawQr;
+      const qrImage = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(rawQr)}`;
+      setQrState({ loading: false, value: qrImage, error: '' });
+    } else if (!rawQr) {
+      if (payload?.status === 'connected') {
+        setQrState({ loading: false, value: '', error: '' });
+      } else {
+        setQrState(prev => ({
+          ...prev,
+          loading: false,
+          error: prev.value ? '' : (payload?.message || 'QR code not available yet. Start the WhatsApp bridge and wait a few seconds.'),
+        }));
+      }
+    } else {
+      setQrState(prev => ({ ...prev, loading: false }));
     }
-  }, [apiFetch, withUserQuery]);
+  } catch {
+    setQrState(prev => ({ ...prev, loading: false, error: 'QR code not available. Start the WhatsApp bridge and wait a few seconds.' }));
+  }
+}, [apiFetch, withUserQuery]);
 
   const isConnected = waStatus.status === 'connected' || waStatus.status === 'open';
 
@@ -128,19 +139,42 @@ export default function WhatsAppIntegration() {
   }, [loadWaStatus, loadMappingData, loadDetectedGroups]);
 
   useEffect(() => {
-    if (!showQrPanel || isConnected || !userId) return undefined;
-    loadQrCode();
-    const statusPoll = window.setInterval(loadWaStatus, 3000);
-    const qrPoll = window.setInterval(() => {
-      loadQrCode();
-    }, 5000);
+  if (!showQrPanel || isConnected || !userId) return undefined;
 
-    return () => {
-      window.clearInterval(statusPoll);
-      window.clearInterval(qrPoll);
-    };
-  }, [isConnected, loadQrCode, loadWaStatus, showQrPanel, userId]);
+  loadQrCode();
 
+  const statusPoll = window.setInterval(async () => {
+    try {
+      const payload = await apiFetch(withUserQuery('/whatsapp/status'), {}, false);
+      const waData = payload?.whatsapp || {};
+      setWaStatus(waData);
+
+      if (
+        waData.status === 'qr_required' &&
+        waData.qr_updated_at &&
+        waData.qr_updated_at !== lastQrUpdatedAtRef.current
+      ) {
+        lastQrUpdatedAtRef.current = waData.qr_updated_at;
+        loadQrCode();
+      }
+    } catch {
+      // silent
+    }
+  }, 3000);
+
+  return () => window.clearInterval(statusPoll);
+}, [showQrPanel, isConnected, userId, apiFetch, withUserQuery, loadQrCode]);
+
+useEffect(() => {
+  if (!showQrPanel || isConnected) return undefined;
+  if (!qrState.value) return undefined;
+
+  const expiryTimer = window.setTimeout(() => {
+    setQrState(prev => ({ ...prev, loading: true }));
+  }, 20_000);
+
+  return () => window.clearTimeout(expiryTimer);
+}, [qrState.value, showQrPanel, isConnected]);
   useEffect(() => {
     if (isConnected) {
       setShowQrPanel(false);

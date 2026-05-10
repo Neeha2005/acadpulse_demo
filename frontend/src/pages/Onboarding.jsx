@@ -25,19 +25,12 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppContext } from '../context/AppContext'
+import { TIMETABLE_DAYS } from '../constants/timetable'
 import '../onboarding.css'
 
 const TOTAL_STEPS = 8
 const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
-const DAYS = [
-  [1, 'Monday'],
-  [2, 'Tuesday'],
-  [3, 'Wednesday'],
-  [4, 'Thursday'],
-  [5, 'Friday'],
-  [6, 'Saturday'],
-  [7, 'Sunday'],
-]
+const DAYS = TIMETABLE_DAYS.map(({ dow, label }) => [dow, label])
 const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
 
 const DEFAULT_DATA = {

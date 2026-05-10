@@ -4,6 +4,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   downloadMediaMessage,
   initAuthCreds,
+  BufferJSON,
 } from "@whiskeysockets/baileys";
 import pg from "pg";
 import {
@@ -40,6 +41,8 @@ const connectionTimes = new Map();
 const presenceControllers = new Map();
 const reconnectAttempts = new Map();
 const reconnectTimers = new Map();
+const sessionQrIssuedAt = new Map();
+const QR_SESSION_COOLDOWN_MS = 60_000;
 
 async function syncGroups(sock, userId) {
   try {
@@ -124,21 +127,22 @@ async function useSupabaseAuthState(userId) {
   for (const row of loadResult.rows) {
     if (row.session_key === "creds") {
       try {
-        creds = typeof row.session_data === "object"
-          ? row.session_data
-          : JSON.parse(row.session_data);
+        const raw = typeof row.session_data === "object"
+          ? JSON.stringify(row.session_data)
+          : row.session_data;
+        creds = JSON.parse(raw, BufferJSON.reviver);
       } catch {
         logger.warn({ userId }, "Could not parse stored creds, starting fresh");
       }
     } else {
-      // All other rows are sync keys stored as "type-id"
       try {
         const [type, ...rest] = row.session_key.split("-");
         const id = rest.join("-");
         if (!keyCache[type]) keyCache[type] = {};
-        keyCache[type][id] = typeof row.session_data === "object"
-          ? row.session_data
-          : JSON.parse(row.session_data);
+        const raw = typeof row.session_data === "object"
+          ? JSON.stringify(row.session_data)
+          : row.session_data;
+        keyCache[type][id] = JSON.parse(raw, BufferJSON.reviver);
       } catch {
         logger.warn({ userId, key: row.session_key }, "Could not parse stored sync key");
       }
@@ -153,7 +157,7 @@ async function useSupabaseAuthState(userId) {
          VALUES ($1, 'creds', $2::jsonb)
          ON CONFLICT (user_id, session_key) DO UPDATE
          SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
-        [userId, JSON.stringify(creds)]
+        [userId, JSON.stringify(creds, BufferJSON.replacer)]
       );
     } catch (err) {
       logger.error({ userId, error: err.message }, "Failed to persist WhatsApp creds to DB");
@@ -167,37 +171,59 @@ async function useSupabaseAuthState(userId) {
       get: async (type, ids) => {
         const result = {};
         for (const id of ids) {
-          result[id] = keyCache[type]?.[id] ?? null;
+          const cached = keyCache[type]?.[id] ?? null;
+          if (cached === null) {
+            result[id] = null;
+            continue;
+          }
+          // Re-parse through BufferJSON to ensure Buffer fields are
+          // proper Buffer instances not plain objects.
+          try {
+            result[id] = JSON.parse(JSON.stringify(cached, BufferJSON.replacer), BufferJSON.reviver);
+          } catch {
+            result[id] = cached;
+          }
         }
         return result;
       },
-      // set: called by Baileys to persist new/updated sync keys
+     // set: called by Baileys to persist new/updated sync keys
       set: async (data) => {
+        const entries = [];
         for (const [type, typeData] of Object.entries(data || {})) {
           for (const [id, value] of Object.entries(typeData || {})) {
             const sessionKey = `${type}-${id}`;
             // Update in-memory cache first
             if (!keyCache[type]) keyCache[type] = {};
             keyCache[type][id] = value;
-            // Persist to DB
-            try {
-              await dbPool.query(
-                `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
-                 VALUES ($1, $2, $3::jsonb)
-                 ON CONFLICT (user_id, session_key) DO UPDATE
-                 SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
-                [userId, sessionKey, JSON.stringify(value)]
-              );
-            } catch (err) {
-              logger.error(
-                { userId, sessionKey, error: err.message },
-                "Failed to persist WhatsApp sync key to DB"
-              );
-            }
+            entries.push({ sessionKey, value });
           }
         }
-      },
-    },
+        if (entries.length === 0) return;
+        // Batch all key writes in a single transaction to reduce round-trip
+        // latency during the WhatsApp credential exchange handshake.
+        const client = await dbPool.connect();
+        try {
+          await client.query('BEGIN');
+          for (const { sessionKey, value } of entries) {
+            await client.query(
+              `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
+               VALUES ($1, $2, $3::jsonb)
+               ON CONFLICT (user_id, session_key) DO UPDATE
+               SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+              [userId, sessionKey, JSON.stringify(value, BufferJSON.replacer)]
+            );
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          logger.error(
+            { userId, error: err.message },
+            "Failed to batch persist WhatsApp sync keys to DB"
+          );
+        } finally {
+          client.release();
+        }
+      },    },
   };
 
   return { state, saveCreds };
@@ -225,14 +251,23 @@ async function startSession(userId) {
   });
 
   const sock = wrapSocket(rawSock, {
-    preset: "conservative",
+    preset: "moderate",
     logging: true,
   });
 
   connectionTimes.set(userId, Date.now());
   activeSessions.set(userId, sock);
 
-  sock.ev.on("creds.update", saveCreds);
+sock.ev.on("creds.update", async () => {
+    try {
+      await saveCreds();
+    } catch (err) {
+      logger.error(
+        { userId, error: err.message },
+        "Failed to save WhatsApp credentials after creds.update"
+      );
+    }
+  });
 
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
@@ -373,16 +408,27 @@ async function startSessionWithMonitor(userId) {
   }
   const existing = activeSessions.get(normalizedUserId);
   const readyState = existing?.ws?.readyState;
-  // Only reuse a fully open socket. A stuck CONNECTING socket can block QR
-  // generation indefinitely because the control endpoint thinks the session
-  // already exists and never asks Baileys for a fresh login attempt.
+  // Reuse a fully open socket immediately.
   if (existing && readyState === 1) {
     return existing;
+  }
+  // If socket is still CONNECTING (readyState 0), it is mid-QR handshake.
+  // Do not tear it down unless the cooldown has passed, which means it is stuck.
+  if (existing && readyState === 0) {
+    const issuedAt = sessionQrIssuedAt.get(normalizedUserId) || 0;
+    if (Date.now() - issuedAt < QR_SESSION_COOLDOWN_MS) {
+      logger.info(
+        { userId: normalizedUserId },
+        "WhatsApp session is mid-QR handshake, skipping duplicate start request"
+      );
+      return existing;
+    }
   }
   startingSessions.add(normalizedUserId);
   try {
     const sock = await startSession(normalizedUserId);
     activeSessions.set(normalizedUserId, sock);
+    sessionQrIssuedAt.set(normalizedUserId, Date.now());
     return sock;
   } finally {
     startingSessions.delete(normalizedUserId);

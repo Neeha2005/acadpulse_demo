@@ -1289,7 +1289,8 @@
 }
 
 .auth-select-wrap select option {
-  color: #111827;
+  background: #161922;
+  color: #f1f5f9;
 }
 
 .auth-phone-wrap {
@@ -1602,6 +1603,11 @@
 }
 
 [data-theme="light"] .auth-select-wrap select {
+  color: var(--text);
+}
+
+[data-theme="light"] .auth-select-wrap select option {
+  background: #ffffff;
   color: var(--text);
 }
 
