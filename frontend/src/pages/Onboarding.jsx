@@ -12,7 +12,6 @@ import {
   ExternalLink,
   GraduationCap,
   Hash,
-  Loader2,
   Mail,
   MapPin,
   MessageCircle,
@@ -20,7 +19,6 @@ import {
   RefreshCw,
   School,
   Sparkles,
-  Trash2,
   Users,
   Zap,
 } from 'lucide-react'
@@ -32,6 +30,7 @@ const TOTAL_STEPS = 8
 const SEMESTERS = Array.from({ length: 8 }, (_, i) => `${i + 1}${['st', 'nd', 'rd'][i] || 'th'} Semester`)
 const DAYS = TIMETABLE_DAYS.map(({ dow, label }) => [dow, label])
 const STORAGE_KEY = 'acadpulse_onboarding_draft_v2'
+const STEP_STORAGE_KEY = 'acadpulse_onboarding_step_v1'
 
 const DEFAULT_DATA = {
   profile: {
@@ -77,6 +76,12 @@ function readDraft() {
   } catch {
     return DEFAULT_DATA
   }
+}
+
+function readSavedStep() {
+  const raw = Number(localStorage.getItem(STEP_STORAGE_KEY) || 1)
+  if (!Number.isFinite(raw)) return 1
+  return Math.min(Math.max(Math.trunc(raw), 1), TOTAL_STEPS)
 }
 
 function Toast({ toast, onDismiss }) {
@@ -210,7 +215,7 @@ function WelcomeStep({ name }) {
   )
 }
 
-function ProfileStep({ data, setData, errors, clearError, onDeleteProfile, deletingProfile }) {
+function ProfileStep({ data, setData, errors, clearError }) {
   const profile = data.profile
   const update = (key, value) => {
     setData((current) => ({ ...current, profile: { ...current.profile, [key]: value } }))
@@ -245,19 +250,6 @@ function ProfileStep({ data, setData, errors, clearError, onDeleteProfile, delet
           <input value={profile.section} onChange={(e) => update('section', e.target.value)} placeholder="e.g. BCS-6A, BSCS-F22" />
         </Field>
       </div>
-      <div className="onb-banner danger" style={{ marginTop: 20 }}>
-        Delete profile will remove your AcadPulse account and saved onboarding data.
-      </div>
-      <button
-        type="button"
-        className="onb-ghost-btn"
-        onClick={onDeleteProfile}
-        disabled={deletingProfile}
-        style={{ marginTop: 12, borderColor: 'rgba(239, 68, 68, 0.35)', color: '#fca5a5' }}
-      >
-        {deletingProfile ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-        Delete profile
-      </button>
     </section>
   )
 }
@@ -855,8 +847,8 @@ function DoneStep({ name, data, connection, mappedCount }) {
 export default function Onboarding() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { API_BASE_URL, apiFetch, user, authUser, logout } = useAppContext()
-  const [step, setStep] = useState(1)
+  const { API_BASE_URL, apiFetch, user, authUser } = useAppContext()
+  const [step, setStep] = useState(readSavedStep)
   const [direction, setDirection] = useState('forward')
   const [data, setData] = useState(readDraft)
   const [errors, setErrors] = useState({})
@@ -864,7 +856,6 @@ export default function Onboarding() {
   const [resume, setResume] = useState(false)
   const [saving, setSaving] = useState(false)
   const [finishing, setFinishing] = useState(false)
-  const [deletingProfile, setDeletingProfile] = useState(false)
   const [platformError, setPlatformError] = useState('')
   const [setupUnlocked, setSetupUnlocked] = useState(false)
   const [groups, setGroups] = useState([])
@@ -884,6 +875,8 @@ export default function Onboarding() {
     gmailEmail: '',
     classroomCourses: [],
   })
+  const oauthHandledRef = useRef('')
+  const pendingPlatformsSaveRef = useRef(null)
 
   const userId = authUser?.id || user?.id || localStorage.getItem('acadpulse_user_id') || ''
   const displayName = (localStorage.getItem('acadpulse_user') || user?.fullName || 'Scholar').split(' ')[0]
@@ -946,7 +939,12 @@ export default function Onboarding() {
     societyGroups: (data.whatsappGroups || []).filter((group) => group.kind === 'society'),
   }), [connection, data])
 
-  const saveIntegrationSettings = useCallback(async (platforms) => {
+  const saveIntegrationSettings = useCallback(async (platforms, options = {}) => {
+    const { silent = false } = options
+    if (!userId) {
+      pendingPlatformsSaveRef.current = platforms
+      return
+    }
     try {
       await apiFetch('/onboarding/integrations', {
         method: 'POST',
@@ -955,32 +953,22 @@ export default function Onboarding() {
           platforms,
         }),
       }, false)
+      pendingPlatformsSaveRef.current = null
     } catch {
-      showToast('Integration settings save failed - continuing locally', 'error')
+      pendingPlatformsSaveRef.current = platforms
+      if (!silent) {
+        showToast('Integration settings save failed - continuing locally', 'error')
+      }
     }
   }, [apiFetch, showToast, userId])
-
-  const deleteProfile = useCallback(async () => {
-    if (deletingProfile) return
-    const confirmed = window.confirm('Delete your AcadPulse profile and all saved onboarding data? This cannot be undone.')
-    if (!confirmed) return
-    setDeletingProfile(true)
-    try {
-      await apiFetch('/auth/profile', { method: 'DELETE' })
-      localStorage.removeItem(STORAGE_KEY)
-      localStorage.removeItem('acadpulse_onboarding_complete')
-      logout()
-      navigate('/login', { replace: true })
-    } catch (error) {
-      showToast(error?.message || 'Could not delete profile', 'error')
-    } finally {
-      setDeletingProfile(false)
-    }
-  }, [apiFetch, deletingProfile, logout, navigate, showToast])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   }, [data])
+
+  useEffect(() => {
+    localStorage.setItem(STEP_STORAGE_KEY, String(step))
+  }, [step])
 
   useEffect(() => {
     if (!resume) return undefined
@@ -1160,8 +1148,9 @@ export default function Onboarding() {
         }
         if (status.status === 'fulfilled' && !status.value?.completed) {
           const nextStep = Math.min(Math.max(Number(status.value?.current_step || 1), 1), TOTAL_STEPS)
-          if (nextStep > 1) {
-            setStep(nextStep)
+          const restoredStep = Math.max(readSavedStep(), nextStep)
+          if (restoredStep > 1) {
+            setStep(restoredStep)
             setResume(true)
           }
           if (status.value?.data) {
@@ -1191,8 +1180,12 @@ export default function Onboarding() {
     const params = new URLSearchParams(location.search)
     if (params.get('google_connected') !== '1') return undefined
 
+    const integration = params.get('google_integration') || 'gmail'
+    const oauthKey = `${integration}:${params.toString()}`
+    if (oauthHandledRef.current === oauthKey) return undefined
+    oauthHandledRef.current = oauthKey
+
     const storedEmail = localStorage.getItem('acadpulse_user_email') || user?.email || authUser?.email || ''
-    const integration = params.get('google_integration')
     if (integration === 'gmail') localStorage.setItem('acadpulse_gmail_connected', 'true')
     if (integration === 'classroom') localStorage.setItem('acadpulse_classroom_connected', 'true')
     const nextPlatforms = {
@@ -1215,7 +1208,8 @@ export default function Onboarding() {
       classroom: current.classroom || integration === 'classroom',
       gmailEmail: current.gmailEmail || storedEmail,
     }))
-    saveIntegrationSettings(nextPlatforms)
+    setStep((current) => Math.max(current, readSavedStep(), 4))
+    saveIntegrationSettings(nextPlatforms, { silent: true })
     showToast(`${integration === 'classroom' ? 'Classroom' : 'Gmail'} connected successfully`, 'success')
     fetchConnectionState(integration === 'classroom')
     const retryOne = setTimeout(() => fetchConnectionState(integration === 'classroom'), 1000)
@@ -1227,6 +1221,11 @@ export default function Onboarding() {
       clearTimeout(retryTwo)
     }
   }, [authUser?.email, data.platforms, fetchConnectionState, location.search, saveIntegrationSettings, showToast, user?.email])
+
+  useEffect(() => {
+    if (!userId || !pendingPlatformsSaveRef.current) return
+    saveIntegrationSettings(pendingPlatformsSaveRef.current, { silent: true })
+  }, [saveIntegrationSettings, userId])
 
   useEffect(() => {
     if (step !== 4 || !data.platforms.whatsapp || connection.whatsapp) return undefined
@@ -1439,12 +1438,38 @@ export default function Onboarding() {
     setStep((current) => Math.max(1, current - 1))
   }
 
-  const skip = async () => {
-    const next = Math.min(step + 1, TOTAL_STEPS)
-    await saveProgress(next)
-    setDirection('forward')
-    setStep(next)
-  }
+  const skip = useCallback(async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      if (step === 5) {
+        setShowDetectedGroupPicker(false)
+      }
+
+      if (step === 6) {
+        setData((current) => ({
+          ...current,
+          courses: (current.courses || []).filter((course) => course.course_code?.trim() && course.course_name?.trim()),
+        }))
+      }
+
+      if (step === 7) {
+        setData((current) => ({
+          ...current,
+          timetable: (current.timetable || []).filter((slot) => (
+            slot.course_id && slot.day_of_week && slot.start_time && slot.end_time
+          )),
+        }))
+      }
+
+      const next = Math.min(step + 1, TOTAL_STEPS)
+      await saveProgress(next)
+      setDirection('forward')
+      setStep(next)
+    } finally {
+      setSaving(false)
+    }
+  }, [saveProgress, saving, step])
 
   const finish = async () => {
     setFinishing(true)
@@ -1459,6 +1484,7 @@ export default function Onboarding() {
         body: JSON.stringify({ ...(userId ? { user_id: userId } : {}), data: onboardingData }),
       }, false)
       localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(STEP_STORAGE_KEY)
     } catch {
       showToast('Could not save final state, opening dashboard anyway', 'error')
     } finally {
@@ -1501,7 +1527,7 @@ export default function Onboarding() {
       {resume && <div className="onb-resume">Welcome back {displayName} - picking up where you left off.</div>}
       <div className={`onb-content ${direction} ${step === 6 ? 'wide' : ''}`} key={step}>
         {step === 1 && <WelcomeStep name={displayName} />}
-        {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} onDeleteProfile={deleteProfile} deletingProfile={deletingProfile} />}
+        {step === 2 && <ProfileStep data={data} setData={setData} errors={errors} clearError={clearError} />}
         {step === 3 && <PlatformsStep data={data} setData={setData} platformError={platformError} />}
         {step === 4 && (
           <SetupStep

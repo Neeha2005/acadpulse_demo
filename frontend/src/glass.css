@@ -3586,6 +3586,44 @@ h4,
   justify-self: flex-start;
 }
 
+.account-danger-card {
+  display: grid;
+  gap: 12px;
+  border-color: rgba(239, 68, 68, 0.24);
+  background:
+    linear-gradient(180deg, rgba(127, 29, 29, 0.2), rgba(69, 10, 10, 0.16)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.account-danger-copy {
+  margin: 0;
+  color: rgba(254, 226, 226, 0.88);
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.account-danger-error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(252, 165, 165, 0.28);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+  font-size: 0.86rem;
+}
+
+.account-danger-action {
+  justify-self: flex-start;
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  background: linear-gradient(135deg, rgba(185, 28, 28, 0.88), rgba(239, 68, 68, 0.92));
+  color: #fff;
+  box-shadow: 0 14px 28px rgba(127, 29, 29, 0.28);
+}
+
+.account-danger-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 32px rgba(127, 29, 29, 0.34);
+}
+
 @media (max-width: 620px) {
   .account-form-grid,
   .account-modal-summary {

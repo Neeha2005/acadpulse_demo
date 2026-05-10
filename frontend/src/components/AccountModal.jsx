@@ -2,11 +2,25 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppContext } from '../context/AppContext';
 
+const ONBOARDING_STORAGE_KEYS = [
+  'acadpulse_onboarding_draft_v2',
+  'acadpulse_onboarding_step_v1',
+  'acadpulse_onboarding_complete',
+  'acadpulse_university',
+  'acadpulse_degree',
+  'acadpulse_semester',
+  'acadpulse_section',
+  'acadpulse_gmail_connected',
+  'acadpulse_classroom_connected',
+]
+
 export default function AccountModal({ onClose }) {
-  const { user, updateUser } = useAppContext();
+  const { user, updateUser, apiFetch, logout } = useAppContext();
   const navigate = useNavigate();
   const [formData, setFormData] = useState(user);
   const [status, setStatus] = useState('idle');
+  const [deleteStatus, setDeleteStatus] = useState('idle');
+  const [deleteError, setDeleteError] = useState('');
 
   const initials = useMemo(
     () => (formData.fullName ? formData.fullName.substring(0, 2).toUpperCase() : 'SC'),
@@ -29,6 +43,25 @@ export default function AccountModal({ onClose }) {
     onClose();
     navigate('/onboarding');
   };
+
+  const handleDeleteProfile = async () => {
+    if (deleteStatus === 'saving') return
+    const confirmed = window.confirm('Delete your AcadPulse profile and all saved onboarding data? This cannot be undone.')
+    if (!confirmed) return
+
+    setDeleteStatus('saving')
+    setDeleteError('')
+    try {
+      await apiFetch('/auth/profile', { method: 'DELETE' })
+      ONBOARDING_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
+      logout()
+      onClose()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      setDeleteError(error?.message || 'Could not delete profile')
+      setDeleteStatus('idle')
+    }
+  }
 
   return (
     <div className="modal-overlay">
@@ -117,6 +150,27 @@ export default function AccountModal({ onClose }) {
               </p>
               <button type="button" className="btn btn-outline account-setup-action" onClick={handleOpenSetup}>
                 <i className="fa-solid fa-compass"></i> Open Academic Setup
+              </button>
+            </section>
+
+            <section className="account-modal-card account-danger-card">
+              <div className="account-section-head">
+                <span className="account-section-kicker">Danger Zone</span>
+                <h3>Delete profile</h3>
+              </div>
+              <p className="account-danger-copy">
+                This removes your AcadPulse account and saved onboarding data. This action cannot be undone.
+              </p>
+              {deleteError && <div className="account-danger-error">{deleteError}</div>}
+              <button
+                type="button"
+                className="btn account-danger-action"
+                onClick={handleDeleteProfile}
+                disabled={deleteStatus === 'saving'}
+              >
+                {deleteStatus === 'saving'
+                  ? <><i className="fa-solid fa-circle-notch fa-spin"></i> Deleting...</>
+                  : <><i className="fa-solid fa-trash"></i> Delete Profile</>}
               </button>
             </section>
           </div>
