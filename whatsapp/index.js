@@ -40,6 +40,8 @@ const connectionTimes = new Map();
 const presenceControllers = new Map();
 const reconnectAttempts = new Map();
 const reconnectTimers = new Map();
+const sessionQrIssuedAt = new Map();
+const QR_SESSION_COOLDOWN_MS = 60_000;
 
 async function syncGroups(sock, userId) {
   try {
@@ -373,16 +375,27 @@ async function startSessionWithMonitor(userId) {
   }
   const existing = activeSessions.get(normalizedUserId);
   const readyState = existing?.ws?.readyState;
-  // Only reuse a fully open socket. A stuck CONNECTING socket can block QR
-  // generation indefinitely because the control endpoint thinks the session
-  // already exists and never asks Baileys for a fresh login attempt.
+  // Reuse a fully open socket immediately.
   if (existing && readyState === 1) {
     return existing;
+  }
+  // If socket is still CONNECTING (readyState 0), it is mid-QR handshake.
+  // Do not tear it down unless the cooldown has passed, which means it is stuck.
+  if (existing && readyState === 0) {
+    const issuedAt = sessionQrIssuedAt.get(normalizedUserId) || 0;
+    if (Date.now() - issuedAt < QR_SESSION_COOLDOWN_MS) {
+      logger.info(
+        { userId: normalizedUserId },
+        "WhatsApp session is mid-QR handshake, skipping duplicate start request"
+      );
+      return existing;
+    }
   }
   startingSessions.add(normalizedUserId);
   try {
     const sock = await startSession(normalizedUserId);
     activeSessions.set(normalizedUserId, sock);
+    sessionQrIssuedAt.set(normalizedUserId, Date.now());
     return sock;
   } finally {
     startingSessions.delete(normalizedUserId);
