@@ -1756,6 +1756,46 @@ def resolve_mapping_user_id(user_id: Optional[str] = None) -> Optional[str]:
         logger.warning("Invalid user_id format, ignoring: %s", user_id)
     return None
 
+
+def resolve_whatsapp_user_id(user_id: Optional[Any] = None) -> str:
+    """
+    Resolve the user associated with WhatsApp actions to a persisted UUID string.
+
+    Resolution order:
+    1. Explicit valid user_id from the request/payload.
+    2. A uniquely pending WhatsApp session user_id while QR/login is in flight.
+    3. A uniquely connected WhatsApp session user_id.
+    4. Dev-safe fallback to the shared Default Student account.
+    """
+    resolved_user_id = resolve_mapping_user_id(str(user_id or "").strip() or None)
+    if resolved_user_id:
+        return resolved_user_id
+
+    pending_user_id = resolve_mapping_user_id(get_unique_pending_whatsapp_user_id())
+    if pending_user_id:
+        return pending_user_id
+
+    sessions = whatsapp_status_state.setdefault("sessions", {})
+    connected_user_ids = sorted(
+        {
+            resolved
+            for candidate_user_id, session in sessions.items()
+            for resolved in [resolve_mapping_user_id(candidate_user_id)]
+            if resolved and str(session.get("status") or "").strip().lower() in {"connected", "open"}
+        }
+    )
+    if len(connected_user_ids) == 1:
+        return connected_user_ids[0]
+
+    fallback_user_id = resolve_default_student_user_id()
+    logger.warning(
+        "Falling back to Default Student for WhatsApp user resolution. provided_user_id=%s pending=%s connected_count=%s",
+        user_id,
+        get_unique_pending_whatsapp_user_id(),
+        len(connected_user_ids),
+    )
+    return fallback_user_id
+
 def ensure_timezone_aware(value):
     if value is None:
         return None
