@@ -173,33 +173,44 @@ async function useSupabaseAuthState(userId) {
         }
         return result;
       },
-      // set: called by Baileys to persist new/updated sync keys
+     // set: called by Baileys to persist new/updated sync keys
       set: async (data) => {
+        const entries = [];
         for (const [type, typeData] of Object.entries(data || {})) {
           for (const [id, value] of Object.entries(typeData || {})) {
             const sessionKey = `${type}-${id}`;
             // Update in-memory cache first
             if (!keyCache[type]) keyCache[type] = {};
             keyCache[type][id] = value;
-            // Persist to DB
-            try {
-              await dbPool.query(
-                `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
-                 VALUES ($1, $2, $3::jsonb)
-                 ON CONFLICT (user_id, session_key) DO UPDATE
-                 SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
-                [userId, sessionKey, JSON.stringify(value)]
-              );
-            } catch (err) {
-              logger.error(
-                { userId, sessionKey, error: err.message },
-                "Failed to persist WhatsApp sync key to DB"
-              );
-            }
+            entries.push({ sessionKey, value });
           }
         }
-      },
-    },
+        if (entries.length === 0) return;
+        // Batch all key writes in a single transaction to reduce round-trip
+        // latency during the WhatsApp credential exchange handshake.
+        const client = await dbPool.connect();
+        try {
+          await client.query('BEGIN');
+          for (const { sessionKey, value } of entries) {
+            await client.query(
+              `INSERT INTO whatsapp_sessions (user_id, session_key, session_data)
+               VALUES ($1, $2, $3::jsonb)
+               ON CONFLICT (user_id, session_key) DO UPDATE
+               SET session_data = EXCLUDED.session_data, updated_at = NOW()`,
+              [userId, sessionKey, JSON.stringify(value)]
+            );
+          }
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          logger.error(
+            { userId, error: err.message },
+            "Failed to batch persist WhatsApp sync keys to DB"
+          );
+        } finally {
+          client.release();
+        }
+      },    },
   };
 
   return { state, saveCreds };
@@ -227,14 +238,23 @@ async function startSession(userId) {
   });
 
   const sock = wrapSocket(rawSock, {
-    preset: "conservative",
+    preset: "moderate",
     logging: true,
   });
 
   connectionTimes.set(userId, Date.now());
   activeSessions.set(userId, sock);
 
-  sock.ev.on("creds.update", saveCreds);
+sock.ev.on("creds.update", async () => {
+    try {
+      await saveCreds();
+    } catch (err) {
+      logger.error(
+        { userId, error: err.message },
+        "Failed to save WhatsApp credentials after creds.update"
+      );
+    }
+  });
 
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
