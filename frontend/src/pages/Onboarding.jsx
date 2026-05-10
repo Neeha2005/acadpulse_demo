@@ -420,8 +420,7 @@ function getCourseLabel(course) {
 
 function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGroupIds, toggleDetectedGroup, saveDetectedGroups, groupSelectionSaving, connection }) {
   const savedGroups = data.whatsappGroups || []
-  const courseGroups = savedGroups.filter((group) => group.kind === 'course')
-  const generalGroups = savedGroups.filter((group) => group.kind === 'general')
+  const courseGroups = savedGroups.filter((group) => group.kind !== 'society')
   const societyGroups = savedGroups.filter((group) => group.kind === 'society')
 
   const updateGroup = (groupId, key, value) => {
@@ -438,7 +437,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
       <StepBadge>WhatsApp Groups</StepBadge>
       <div className="onb-heading">
         <h1>Choose the groups to monitor</h1>
-        <p>Select only the WhatsApp groups AcadPulse should watch, then classify them as subject, general, or society groups.</p>
+        <p>Select only the WhatsApp groups AcadPulse should watch, then split them into subject groups and society groups.</p>
       </div>
       {!data.platforms.whatsapp && <div className="onb-banner">WhatsApp was not selected. Continue to subject mapping.</div>}
       {data.platforms.whatsapp && !connection.whatsapp && <div className="onb-banner danger">Connect WhatsApp in the previous step first.</div>}
@@ -480,7 +479,7 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                 </div>
                 {savedGroups.length > 0 && (
                   <div className="onb-map-section">
-                    <h3><Users size={16} /> Group type</h3>
+                    <h3><Users size={16} /> Subject vs society</h3>
                     <div className="onb-map-list">
                       {savedGroups.map((group) => (
                         <div className="onb-map-row" key={group.group_id}>
@@ -492,7 +491,6 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                           <span>-&gt;</span>
                           <select value={group.kind || 'course'} onChange={(e) => updateGroup(group.group_id, 'kind', e.target.value)}>
                             <option value="course">Subject / Course group</option>
-                            <option value="general">General class group</option>
                             <option value="society">Society / Community group</option>
                           </select>
                           <small style={{ color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{group.group_id}</small>
@@ -513,11 +511,6 @@ function WhatsAppGroupsStep({ data, setData, detectedGroups, selectedDetectedGro
                 {courseGroups.length ? courseGroups.map((group) => (
                   <span key={`course-${group.group_id}`}>{group.group_name || group.group_id}</span>
                 )) : <em>No course groups selected yet.</em>}
-              </div>
-              <div className="onb-course-pills" style={{ marginTop: 12 }}>
-                {generalGroups.length ? generalGroups.map((group) => (
-                  <span key={`general-${group.group_id}`}>{group.group_name || group.group_id}</span>
-                )) : <em>No general groups marked yet.</em>}
               </div>
               <div className="onb-course-pills" style={{ marginTop: 12 }}>
                 {societyGroups.length ? societyGroups.map((group) => (
@@ -729,7 +722,7 @@ function MappingStep({ data, setData, connection, groups }) {
         <h1>Map groups and classrooms to subjects</h1>
         <p>Link each selected WhatsApp group and Classroom course to the right subject name.</p>
       </div>
-      <div className="onb-explain">Course groups and general class groups appear here. Society and community groups stay out of subject mapping.</div>
+      <div className="onb-explain">Only course groups appear here. Society and community groups stay out of subject mapping.</div>
       {!courseOptions.length && <div className="onb-banner danger">Add at least one course above before saving mappings.</div>}
       {data.platforms.whatsapp && (
         <div className="onb-map-section">
@@ -868,7 +861,7 @@ export default function Onboarding() {
     const normalized = (items || []).map((item) => ({
       group_id: item.group_id || item.group_name || item.name || '',
       group_name: item.group_name || item.group_id || item.name || '',
-      kind: item.is_general ? 'general' : 'course',
+      kind: item.is_general ? 'society' : 'course',
     })).filter((item) => item.group_id)
 
     setGroups(normalized)

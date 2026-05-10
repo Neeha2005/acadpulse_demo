@@ -154,23 +154,6 @@
   filter: invert(0.1) sepia(0.1) hue-rotate(350deg);
 }
 
-[data-theme="light"] select,
-[data-theme="light"] option,
-[data-theme="light"] optgroup {
-  color-scheme: light;
-}
-
-[data-theme="light"] select {
-  background-color: rgba(255, 255, 255, 0.88);
-  color: var(--text);
-}
-
-[data-theme="light"] option,
-[data-theme="light"] optgroup {
-  background: #ffffff;
-  color: var(--text);
-}
-
 [data-theme="light"] .semester-reset-link {
   color: rgba(26, 24, 38, 0.42);
 }
@@ -204,22 +187,6 @@ body {
 h1, h2, h3, h4, h5, h6 { font-family: var(--font-heading); font-weight: 600; }
 a { color: inherit; }
 button, [role="button"] { cursor: pointer; }
-select,
-option,
-optgroup {
-  color-scheme: dark;
-}
-
-select {
-  background-color: rgba(255, 255, 255, 0.045);
-  color: var(--text);
-}
-
-option,
-optgroup {
-  background: #161922;
-  color: var(--text);
-}
 
 /* Utilities */
 .text-urgent { color: var(--urgent) !important; text-shadow: 0 0 10px rgba(249, 65, 68, 0.3); }

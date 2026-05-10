@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAppContext } from './context/AppContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
@@ -20,11 +20,9 @@ import SignupGoogle from './pages/SignupGoogle'
 import SignupWhatsApp from './pages/SignupWhatsApp'
 
 const PREVIEW_BYPASS_AUTH = false
-const POST_AUTH_RETURN_TO_STORAGE_KEY = 'acadpulse_post_auth_return_to'
 
 function RequireAuth({ children }) {
   const { authReady, isAuthenticated } = useAppContext()
-  const location = useLocation()
 
   if (PREVIEW_BYPASS_AUTH) {
     return children
@@ -35,14 +33,7 @@ function RequireAuth({ children }) {
   }
 
   if (!isAuthenticated) {
-    const returnTo = `${location.pathname}${location.search}${location.hash}`
-    if (typeof window !== 'undefined' && location.pathname !== '/login') {
-      window.sessionStorage.setItem(POST_AUTH_RETURN_TO_STORAGE_KEY, returnTo)
-    }
-    const query = returnTo && returnTo !== '/login'
-      ? `?return_to=${encodeURIComponent(returnTo)}`
-      : ''
-    return <Navigate to={`/login${query}`} replace />
+    return <Navigate to="/login" replace />
   }
 
   return children

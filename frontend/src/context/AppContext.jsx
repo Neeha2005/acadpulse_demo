@@ -18,22 +18,6 @@ const BACKGROUND_DATA_REFRESH_MS = 60 * 1000
 
 const TASK_CATEGORIES = new Set(['assignment', 'quiz', 'event', 'exam_schedule'])
 
-function decodeJwtPayload(token) {
-  if (!token) return null
-
-  try {
-    const [, payload = ''] = String(token).split('.')
-    if (!payload) return null
-
-    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
-    const decoded = atob(padded)
-    return JSON.parse(decoded)
-  } catch {
-    return null
-  }
-}
-
 function getStoredUser() {
   const storedName = localStorage.getItem('acadpulse_user')
   const storedEmail = localStorage.getItem('acadpulse_user_email')
@@ -303,10 +287,9 @@ export function AppProvider({ children }) {
   const completeLoginSession = useCallback((token, nextUser) => {
     localStorage.setItem('acadpulse_token', token)
     setAuthToken(token)
-    const tokenPayload = decodeJwtPayload(token)
     const cur = userRef.current
     persistUser({
-      id: nextUser.id || tokenPayload?.sub || '',
+      id: nextUser.id || '',
       fullName: nextUser.name || nextUser.fullName || 'Scholar',
       email: nextUser.email || '',
       phone: nextUser.phone || cur.phone,
@@ -332,7 +315,6 @@ export function AppProvider({ children }) {
         headers,
       })
 
-      const contentType = response.headers.get('content-type') || ''
       const rawText = await response.text()
       let payload = null
 
@@ -342,20 +324,6 @@ export function AppProvider({ children }) {
         } catch {
           payload = { detail: rawText }
         }
-      }
-
-      const looksLikeHtml = contentType.includes('text/html')
-        || (typeof payload?.detail === 'string' && /<!doctype html|<html/i.test(payload.detail))
-
-      if (looksLikeHtml) {
-        const error = new Error(
-          API_BASE_URL
-            ? `Unexpected HTML response for ${path}. Check that VITE_API_BASE_URL points to the backend.`
-            : `Unexpected HTML response for ${path}. VITE_API_BASE_URL is missing, so the frontend is calling itself instead of the backend.`,
-        )
-        error.status = response.status
-        error.payload = payload
-        throw error
       }
 
       if (!response.ok) {
