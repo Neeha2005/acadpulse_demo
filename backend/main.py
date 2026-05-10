@@ -72,6 +72,7 @@ from db import (
     list_detected_whatsapp_groups,
     save_user_whatsapp_group_selection,
     is_user_whatsapp_group_selected,
+    clear_user_whatsapp_groups,
     record_classroom_course,
     list_classroom_courses,
     get_course_mapping_course_id,
@@ -3554,6 +3555,7 @@ def update_whatsapp_status(status_update: WhatsAppStatusUpdate):
                 set_user_connected_flags(normalized_user_id, whatsapp=True)
             elif status_update.status == "logged_out":
                 set_user_connected_flags(normalized_user_id, whatsapp=False)
+                clear_user_whatsapp_groups(normalized_user_id)
     except Exception:
         logger.exception("Failed to update WhatsApp connected flag")
     persist_whatsapp_status_state()
@@ -4716,4 +4718,3 @@ def get_unknown_abbrs(
         "unknown_abbreviations": unknown,
         "count": len(unknown),
     }
-
