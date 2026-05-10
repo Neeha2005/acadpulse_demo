@@ -2320,10 +2320,19 @@ h4,
 }
 
 .nav-status-pill {
-  padding: 3px 10px;
-  font-size: 0.65rem;
+  min-width: 28px;
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-status-pill i {
+  line-height: 1;
 }
 
 .nav-status-connected {

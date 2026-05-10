@@ -3302,11 +3302,12 @@ def get_google_status(
     gmail_connected = google_connected_for_user(user_id, integration="gmail") if configured else False
     classroom_connected = google_connected_for_user(user_id, integration="classroom") if configured else False
     legacy_connected = bool(load_google_credentials(user_id)) if configured else False
-    connected = (
-        google_connected_for_user(user_id, integration=normalized_integration)
-        if configured and normalized_integration
-        else (gmail_connected or classroom_connected or legacy_connected)
-    )
+    if configured and normalized_integration == "gmail":
+        connected = gmail_connected or legacy_connected
+    elif configured and normalized_integration == "classroom":
+        connected = classroom_connected or legacy_connected
+    else:
+        connected = gmail_connected or classroom_connected or legacy_connected
     gmail_email = None
     classroom_email = None
     if configured:
@@ -4194,7 +4195,11 @@ async def fetch_gmail_emails(
         fetched_count += 1
         full_msg = execute_google_api_call(service.users().messages().get(userId="me", id=msg["id"], format="full"))
 
-        notif_id = await gmail_pipeline.process_gmail_message(user_id_val, full_msg)
+        notif_id = await gmail_pipeline.process_gmail_message(
+            user_id_val,
+            full_msg,
+            priority_only=priority_only,
+        )
         if notif_id:
             new_count += 1
             processed_notifications.append(str(notif_id))

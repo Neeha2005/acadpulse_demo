@@ -153,7 +153,11 @@ def extract_gmail_attachment_metadata(parts: List[Dict[str, Any]]) -> List[Dict[
     return attachments
 
 
-async def process_gmail_message(user_id: uuid.UUID, gmail_message: dict) -> Optional[uuid.UUID]:
+async def process_gmail_message(
+    user_id: uuid.UUID,
+    gmail_message: dict,
+    priority_only: bool = True,
+) -> Optional[uuid.UUID]:
     """Process a Gmail message into a notification row.
 
     Purpose:
@@ -241,6 +245,9 @@ async def process_gmail_message(user_id: uuid.UUID, gmail_message: dict) -> Opti
             category = await classify_with_fallback(classification_text)
             if category == "noise":
                 return None
+
+        if priority_only and category not in {"assignment", "announcement"}:
+            return None
 
         try:
             course_info = classify_course_for_message(

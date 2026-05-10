@@ -43,15 +43,15 @@ function AppLogo({ app }) {
 
 function IntegrationStatusPill({ status }) {
   if (status === 'connected') {
-    return <span className="nav-status-pill nav-status-connected nav-label">Connected</span>;
+    return <span className="nav-status-pill nav-status-connected nav-label" aria-label="Connected" title="Connected"><i className="fa-solid fa-check"></i></span>;
   }
   if (status === 'qr_required') {
-    return <span className="nav-status-pill nav-status-qr nav-label">Scan QR</span>;
+    return <span className="nav-status-pill nav-status-qr nav-label" aria-label="Scan QR" title="Scan QR"><i className="fa-solid fa-qrcode"></i></span>;
   }
   if (status === 'disconnected') {
-    return <span className="nav-status-pill nav-status-off nav-label">Off</span>;
+    return <span className="nav-status-pill nav-status-off nav-label" aria-label="Off" title="Off"><i className="fa-solid fa-xmark"></i></span>;
   }
-  return <span className="nav-status-pill status-pill-muted nav-label">-</span>;
+  return <span className="nav-status-pill status-pill-muted nav-label" aria-label="Unknown" title="Unknown"><i className="fa-solid fa-minus"></i></span>;
 }
 
 function MainNavIcon({ item }) {
